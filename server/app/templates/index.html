@@ -1,0 +1,123 @@
+{% extends "shell.html" %}
+
+{% block title %}Home | {{ app_name }}{% endblock %}
+
+{% block shell_page_css %}
+  <link rel="stylesheet" href="{{ url_for('static', path='css/home.css') }}" />
+{% endblock %}
+
+{% block shell_main %}
+  <header class="dashboard-hero" id="overview">
+    <p class="eyebrow">Research command center</p>
+    <h1>{{ app_name }}</h1>
+    <p class="subtitle">{{ subtitle }}</p>
+  </header>
+
+  <section class="dashboard-section" id="summary">
+    <div class="section-heading">
+      <h2>Snapshot</h2>
+      <p>Quick metrics across experiments, archive assets, and publication flow.</p>
+    </div>
+    <div class="metric-grid">
+      <article class="metric-card">
+        <p class="metric-label">Active experiments</p>
+        <p class="metric-value">12</p>
+        <p class="metric-trend">+2 from last week</p>
+      </article>
+      <article class="metric-card">
+        <p class="metric-label">Tracked trajectories</p>
+        <p class="metric-value">48,290</p>
+        <p class="metric-trend">95.2% clean sequences</p>
+      </article>
+      <article class="metric-card">
+        <p class="metric-label">Paper drafts</p>
+        <p class="metric-value">3</p>
+        <p class="metric-trend">1 ready for review</p>
+      </article>
+      <article class="metric-card">
+        <p class="metric-label">Demo builds</p>
+        <p class="metric-value">7</p>
+        <p class="metric-trend">2 awaiting validation</p>
+      </article>
+    </div>
+  </section>
+
+  <section class="dashboard-section" id="recent">
+    <div class="section-heading">
+      <h2>Recent research activity</h2>
+      <p>Latest experiment notes and archival updates.</p>
+    </div>
+    <div class="table-wrap">
+      <table class="activity-table">
+        <thead>
+          <tr>
+            <th>Item</th>
+            <th>Type</th>
+            <th>Owner</th>
+            <th>Status</th>
+            <th>Updated</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>transformer-long-horizon-v5</td>
+            <td>Experiment</td>
+            <td>Core team</td>
+            <td><span class="status-tag">Running</span></td>
+            <td>2h ago</td>
+          </tr>
+          <tr>
+            <td>nuScenes alignment pass</td>
+            <td>Data QA</td>
+            <td>Data ops</td>
+            <td><span class="status-tag complete">Completed</span></td>
+            <td>5h ago</td>
+          </tr>
+          <tr>
+            <td>conference-submission-outline</td>
+            <td>Paper</td>
+            <td>Research lead</td>
+            <td><span class="status-tag review">In review</span></td>
+            <td>Yesterday</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="dashboard-section" id="actions">
+    <div class="section-heading">
+      <h2>Quick actions</h2>
+      <p>Jump into the most common workflows.</p>
+    </div>
+    <div class="action-list">
+      <a href="#" class="action-card">
+        <h3>Start an experiment log</h3>
+        <p>Create a new run entry with metadata, checkpoints, and hypothesis notes.</p>
+      </a>
+      <a href="#" class="action-card">
+        <h3>Draft a research blog post</h3>
+        <p>Generate a reproducible outline from the latest archived findings.</p>
+      </a>
+      <a href="#" class="action-card">
+        <h3>Prepare publication package</h3>
+        <p>Collect plots, references, and appendix assets for manuscript export.</p>
+      </a>
+    </div>
+  </section>
+{% endblock %}
+
+{% block shell_right_sidebar %}
+  <div class="panel-title">On this page</div>
+  <ul class="toc-list">
+    <li><a href="#overview" data-toc-link>Overview</a></li>
+    <li><a href="#summary" data-toc-link>Snapshot</a></li>
+    <li><a href="#recent" data-toc-link>Recent activity</a></li>
+    <li><a href="#actions" data-toc-link>Quick actions</a></li>
+  </ul>
+
+  <div class="panel-title panel-title-spaced">Session</div>
+  <p class="panel-copy">
+    Authenticated access is active. Your session keeps docs and app routes protected.
+  </p>
+{% endblock %}

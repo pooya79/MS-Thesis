@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+
+{% block page_css %}
+  {{ super() }}
+  <link rel="stylesheet" href="{{ url_for('static', path='css/shell.css') }}" />
+  {% block shell_page_css %}{% endblock %}
+{% endblock %}
+
+{% block body_class %}app-shell-page{% endblock %}
+
+{% block body %}
+  <nav class="top-nav">
+    <button
+      class="mobile-toggle"
+      type="button"
+      data-sidebar-toggle
+      aria-label="Toggle sidebar navigation"
+      aria-expanded="false"
+      aria-controls="left-sidebar"
+    >
+      ☰
+    </button>
+    <a class="nav-brand" href="/">{{ app_name }}</a>
+    <div class="nav-sections">
+      <a href="/" class="nav-item{% if active_nav == 'home' %} active{% endif %}">Home</a>
+      <a href="#" class="nav-item">Findings</a>
+      <a href="#" class="nav-item">Experiments</a>
+      <a href="#" class="nav-item">Publications</a>
+      <a href="#" class="nav-item">Settings</a>
+    </div>
+    <div class="nav-actions">
+      <form method="post" action="/logout" class="logout-form">
+        <button type="submit" class="logout-button">Log out</button>
+      </form>
+    </div>
+  </nav>
+
+  <div class="layout-container">
+    <aside class="left-sidebar" id="left-sidebar">
+      <div class="sidebar-section">
+        <div class="sidebar-header">Workspace</div>
+        <a href="/" class="sidebar-link active">Research Home</a>
+        <a href="#" class="sidebar-link sub-item">Pinned findings</a>
+        <a href="#" class="sidebar-link sub-item">Latest runs</a>
+      </div>
+
+      <div class="sidebar-section">
+        <div class="sidebar-header">Tracking</div>
+        <a href="#" class="sidebar-link">Trajectory experiments</a>
+        <a href="#" class="sidebar-link">Model comparisons</a>
+        <a href="#" class="sidebar-link">Data snapshots</a>
+      </div>
+
+      <div class="sidebar-section">
+        <div class="sidebar-header">Publishing</div>
+        <a href="#" class="sidebar-link">Paper drafts</a>
+        <a href="#" class="sidebar-link">Technical blogs</a>
+        <a href="#" class="sidebar-link">Demo assets</a>
+      </div>
+    </aside>
+
+    <main class="main-content">
+      {% block shell_main %}{% endblock %}
+    </main>
+
+    <aside class="right-sidebar">
+      {% block shell_right_sidebar %}
+        <div class="panel-title">Context</div>
+        <p class="panel-copy">Add page-specific context in the <code>shell_right_sidebar</code> block.</p>
+      {% endblock %}
+    </aside>
+  </div>
+{% endblock %}
+
+{% block scripts %}
+  <script src="{{ url_for('static', path='js/shell.js') }}" defer></script>
+  {% block shell_scripts %}{% endblock %}
+{% endblock %}

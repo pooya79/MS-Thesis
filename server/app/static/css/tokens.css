@@ -1,0 +1,50 @@
+:root {
+  --font-sans: "Space Grotesk", "Avenir Next", "Trebuchet MS", sans-serif;
+  --font-mono: "JetBrains Mono", "IBM Plex Mono", "SFMono-Regular", monospace;
+
+  --color-bg-primary: #0a1215;
+  --color-bg-secondary: #101d22;
+  --color-bg-tertiary: #152730;
+  --color-bg-elevated: #1b323d;
+  --color-border: #28434f;
+  --color-border-strong: #356273;
+  --color-text-primary: #deecef;
+  --color-text-secondary: #9cb6be;
+  --color-text-muted: #7e989f;
+  --color-accent: #28d8ad;
+  --color-accent-strong: #1ee2b3;
+  --color-danger: #ff7a8a;
+  --color-overlay: rgba(5, 10, 13, 0.72);
+
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-7: 2rem;
+  --space-8: 2.5rem;
+  --space-9: 3rem;
+  --space-10: 3.5rem;
+  --space-11: 4rem;
+  --space-12: 5rem;
+
+  --radius-sm: 0.4rem;
+  --radius-md: 0.65rem;
+  --radius-lg: 0.9rem;
+  --radius-xl: 1.25rem;
+
+  --shadow-soft: 0 12px 30px rgba(2, 9, 12, 0.25);
+  --shadow-panel: 0 18px 34px rgba(1, 7, 10, 0.34);
+
+  --shell-top-nav-height: 64px;
+  --shell-left-sidebar-width: 260px;
+  --shell-right-sidebar-width: 240px;
+  --shell-content-max-width: 1120px;
+
+  --transition-fast: 0.18s ease;
+  --transition-normal: 0.28s ease;
+
+  --z-nav: 1000;
+  --z-sidebar: 950;
+}
