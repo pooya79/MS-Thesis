@@ -1,0 +1,81 @@
+seed: 1337
+model_sample_rate: 16000
+working_sample_rate: 16000
+variants_per_clip: 2
+output_dir: data/speech_enhancement
+
+manifests:
+  train: data/speech_enhancement/manifests/clean_train.jsonl
+  valid: data/speech_enhancement/manifests/clean_valid.jsonl
+
+rir_index: data/speech_enhancement/manifests/rir_index.jsonl
+noise_index: data/speech_enhancement/manifests/demand_noise_index.jsonl
+
+reverb:
+  severe:
+    probability: 0.10
+    wet_mix: [0.6, 0.8]
+    dr_db: [6, 10]
+  mild:
+    probability: 0.25
+    wet_mix: [0.3, 0.5]
+    dr_db: [12, 18]
+
+noise:
+  probability: 0.90
+  second_scene_probability: 0.10
+  snr_buckets:
+    - [10, 15]
+    - [5, 10]
+    - [0, 5]
+    - [-5, 0]
+
+level:
+  gain_db: [-6, 6]
+  clipping:
+    enabled: false
+    probability: 0.10
+    mode: hard
+    threshold: [0.8, 0.98]
+  agc:
+    enabled: false
+
+channel:
+  narrowband:
+    bandpass_hz: [300, 3400]
+  wideband:
+    bandpass_hz: [50, 7000]
+    filter_target: false
+  pass_through_path_distribution:
+    - path: narrowband
+      weight: 0.5
+    - path: wideband
+      weight: 0.5
+
+codec_distribution:
+  - codec: g711_alaw
+    weight: 0.30
+  - codec: amr_wb_12k65
+    weight: 0.30
+  - codec: amr_nb_12k2
+    weight: 0.20
+  - codec: opus_wb
+    weight: 0.05
+  - codec: opus_nb
+    weight: 0.05
+  - codec: pass_through
+    weight: 0.10
+
+network_impairment:
+  enabled: true
+  probability: 0.60
+  loss_rate_buckets:
+    - [0.003, 0.02]
+    - [0.02, 0.05]
+    - [0.05, 0.10]
+  burst_length: [1, 5]
+  frame_ms: 20
+
+normalization:
+  mode: peak_safety
+  peak: 0.99
