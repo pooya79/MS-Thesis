@@ -1,0 +1,202 @@
+{% extends "shell.html" %}
+
+{% block title %}Speech Degradation | {{ app_name }}{% endblock %}
+
+{% block shell_page_css %}
+  <link rel="stylesheet" href="{{ url_for('static', path='css/speech_degradation.css') }}" />
+{% endblock %}
+
+{% block shell_main %}
+  <header class="degradation-header" id="overview">
+    <p class="eyebrow">Operational experiment</p>
+    <h1>Speech degradation pipeline</h1>
+    <p class="subtitle">
+      Upload a clean speech clip, choose channel and impairment parameters, and generate a paired clean target and degraded input for speech-enhancement experiments.
+    </p>
+  </header>
+
+  {% if error %}
+    <div class="alert-panel" role="alert">
+      <strong>Generation failed.</strong>
+      <span>{{ error }}</span>
+    </div>
+  {% endif %}
+
+  <div class="tab-shell" data-tabs>
+    <div class="tab-list" role="tablist" aria-label="Speech degradation showcase sections">
+      <button type="button" class="tab-button active" role="tab" aria-selected="true" aria-controls="tab-generate" id="tab-generate-button" data-tab-button="generate">Generate</button>
+      <button type="button" class="tab-button" role="tab" aria-selected="false" aria-controls="tab-results" id="tab-results-button" data-tab-button="results">Results</button>
+      <button type="button" class="tab-button" role="tab" aria-selected="false" aria-controls="tab-pipeline" id="tab-pipeline-button" data-tab-button="pipeline">Pipeline</button>
+      <button type="button" class="tab-button" role="tab" aria-selected="false" aria-controls="tab-parameters" id="tab-parameters-button" data-tab-button="parameters">Parameters</button>
+      <button type="button" class="tab-button" role="tab" aria-selected="false" aria-controls="tab-metadata" id="tab-metadata-button" data-tab-button="metadata">Metadata</button>
+    </div>
+
+    <section class="tab-panel active" id="tab-generate" role="tabpanel" aria-labelledby="tab-generate-button" data-tab-panel="generate">
+      <form class="generation-form" method="post" action="/experiments/speech-degradation/generate" enctype="multipart/form-data">
+        <div class="form-grid">
+          <div class="form-section">
+            <h2>Input</h2>
+            <label class="field-label" for="audio_file">Clean audio file</label>
+            <input id="audio_file" name="audio_file" type="file" accept=".wav,.flac,.ogg,.mp3,.m4a,.webm,audio/*" required />
+            <p class="field-hint">Maximum 25 MB and 60 seconds after decoding. The server converts uploads to mono 16 kHz WAV.</p>
+          </div>
+
+          <div class="form-section">
+            <h2>Acoustic scene</h2>
+            <label class="field-label" for="reverb_mode">RIR convolution</label>
+            <select id="reverb_mode" name="reverb_mode">
+              <option value="disabled" {% if form_values.reverb_mode == "disabled" %}selected{% endif %}>Disabled</option>
+              <option value="mild" {% if form_values.reverb_mode == "mild" %}selected{% endif %}>Mild room</option>
+              <option value="severe" {% if form_values.reverb_mode == "severe" %}selected{% endif %}>Severe room</option>
+            </select>
+
+            <label class="check-row">
+              <input type="checkbox" name="noise_enabled" value="1" {% if form_values.noise_enabled %}checked{% endif %} />
+              <span>Mix environmental noise from configured noise index</span>
+            </label>
+
+            <label class="field-label" for="snr_bucket">Noise SNR bucket</label>
+            <select id="snr_bucket" name="snr_bucket">
+              <option value="10:15" {% if form_values.snr_bucket == "10:15" %}selected{% endif %}>+10 to +15 dB</option>
+              <option value="5:10" {% if form_values.snr_bucket == "5:10" %}selected{% endif %}>+5 to +10 dB</option>
+              <option value="0:5" {% if form_values.snr_bucket == "0:5" %}selected{% endif %}>0 to +5 dB</option>
+              <option value="-5:0" {% if form_values.snr_bucket == "-5:0" %}selected{% endif %}>-5 to 0 dB</option>
+            </select>
+          </div>
+
+          <div class="form-section">
+            <h2>Device and level</h2>
+            <label class="field-label" for="gain_db">Gain shift: <span data-gain-value>{{ form_values.gain_db }}</span> dB</label>
+            <input id="gain_db" name="gain_db" type="range" min="-6" max="6" step="0.5" value="{{ form_values.gain_db }}" data-gain-input />
+            <label class="check-row">
+              <input type="checkbox" name="clipping_enabled" value="1" {% if form_values.clipping_enabled %}checked{% endif %} />
+              <span>Apply hard clipping at 0.9 peak before channel simulation</span>
+            </label>
+          </div>
+
+          <div class="form-section">
+            <h2>Telephony channel</h2>
+            <label class="field-label" for="channel_path">Channel path</label>
+            <select id="channel_path" name="channel_path" data-channel-select>
+              <option value="narrowband" {% if form_values.channel_path == "narrowband" %}selected{% endif %}>Narrowband: 8 kHz, 300-3400 Hz</option>
+              <option value="wideband" {% if form_values.channel_path == "wideband" %}selected{% endif %}>Wideband: 16 kHz, 50-7000 Hz</option>
+            </select>
+
+            <label class="field-label" for="codec">Codec round-trip</label>
+            <select id="codec" name="codec" data-codec-select>
+              <option value="pass_through" data-channel="both" {% if form_values.codec == "pass_through" %}selected{% endif %}>Pass-through</option>
+              <option value="g711_alaw" data-channel="narrowband" {% if form_values.codec == "g711_alaw" %}selected{% endif %}>G.711 A-law</option>
+              <option value="g711_mulaw" data-channel="narrowband" {% if form_values.codec == "g711_mulaw" %}selected{% endif %}>G.711 mu-law</option>
+              <option value="gsm" data-channel="narrowband" {% if form_values.codec == "gsm" %}selected{% endif %}>GSM</option>
+              <option value="amr_nb_12k2" data-channel="narrowband" {% if form_values.codec == "amr_nb_12k2" %}selected{% endif %}>AMR-NB 12.2 kb/s</option>
+              <option value="opus_nb" data-channel="narrowband" {% if form_values.codec == "opus_nb" %}selected{% endif %}>Opus narrowband</option>
+              <option value="amr_wb_12k65" data-channel="wideband" {% if form_values.codec == "amr_wb_12k65" %}selected{% endif %}>AMR-WB 12.65 kb/s</option>
+              <option value="opus_wb" data-channel="wideband" {% if form_values.codec == "opus_wb" %}selected{% endif %}>Opus wideband</option>
+            </select>
+
+            <label class="check-row">
+              <input type="checkbox" name="network_enabled" value="1" {% if form_values.network_enabled %}checked{% endif %} />
+              <span>Apply waveform dropout as packet-loss approximation</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button type="submit" class="primary-action">Generate degraded pair</button>
+          <p class="field-hint">RIR and noise require configured asset indexes; disable them if assets are not installed.</p>
+        </div>
+      </form>
+    </section>
+
+    <section class="tab-panel" id="tab-results" role="tabpanel" aria-labelledby="tab-results-button" data-tab-panel="results">
+      {% if result %}
+        <div class="result-grid">
+          <article class="audio-result">
+            <h2>Uploaded input</h2>
+            <audio controls src="{{ result.input_url }}"></audio>
+            <a href="{{ result.input_url }}">Download input WAV</a>
+          </article>
+          <article class="audio-result">
+            <h2>Clean target</h2>
+            <audio controls src="{{ result.clean_target_url }}"></audio>
+            <a href="{{ result.clean_target_url }}">Download clean target</a>
+          </article>
+          <article class="audio-result">
+            <h2>Degraded input</h2>
+            <audio controls src="{{ result.degraded_url }}"></audio>
+            <a href="{{ result.degraded_url }}">Download degraded WAV</a>
+          </article>
+        </div>
+
+        <div class="summary-strip">
+          <span>Channel: {{ result.metadata.channel_path }}</span>
+          <span>Codec: {{ result.metadata.codec }}</span>
+          <span>Target: {{ result.metadata.target_bandwidth }}</span>
+          <span>Duration: {{ "%.2f"|format(result.metadata.duration_sec) }}s</span>
+        </div>
+      {% else %}
+        <div class="empty-state">
+          <h2>No generated audio yet</h2>
+          <p>Upload a clean clip in the Generate tab and run the pipeline to see audio players and download links here.</p>
+        </div>
+      {% endif %}
+    </section>
+
+    <section class="tab-panel" id="tab-pipeline" role="tabpanel" aria-labelledby="tab-pipeline-button" data-tab-panel="pipeline">
+      <ol class="pipeline-list">
+        <li><strong>Decode upload:</strong> convert the clean file to mono 16 kHz WAV.</li>
+        <li><strong>RIR convolution:</strong> optionally apply mild or severe room response from the configured RIR index.</li>
+        <li><strong>DEMAND noise:</strong> optionally mix environmental noise at the selected SNR bucket.</li>
+        <li><strong>Level effects:</strong> apply gain shift and optional clipping before channel simulation.</li>
+        <li><strong>Telephone channel:</strong> resample and band-limit to narrowband or wideband, then run an ffmpeg codec round-trip.</li>
+        <li><strong>Network impairment:</strong> optionally apply waveform dropout as a packet-loss approximation.</li>
+        <li><strong>Model rate:</strong> resample degraded audio back to 16 kHz and apply peak safety normalization.</li>
+        <li><strong>Target rule:</strong> narrowband outputs get a bandwidth-aligned clean target; wideband outputs keep the 16 kHz clean target.</li>
+      </ol>
+    </section>
+
+    <section class="tab-panel" id="tab-parameters" role="tabpanel" aria-labelledby="tab-parameters-button" data-tab-panel="parameters">
+      <div class="definition-grid">
+        <article><h2>RIR</h2><p>Room impulse response convolution simulates reverberation before the channel.</p></article>
+        <article><h2>Noise</h2><p>Background noise is mixed to a target SNR from the configured noise index.</p></article>
+        <article><h2>Narrowband</h2><p>Uses 8 kHz channel audio and a 300-3400 Hz band limit.</p></article>
+        <article><h2>Wideband</h2><p>Uses 16 kHz channel audio and a 50-7000 Hz band limit.</p></article>
+        <article><h2>Codec</h2><p>ffmpeg performs a real encode/decode round-trip for G.711, GSM, AMR, or Opus.</p></article>
+        <article><h2>Dropout</h2><p>Short waveform spans are zeroed to approximate bursty packet loss.</p></article>
+      </div>
+    </section>
+
+    <section class="tab-panel" id="tab-metadata" role="tabpanel" aria-labelledby="tab-metadata-button" data-tab-panel="metadata">
+      <p class="field-hint">JSONL-style metadata records the parameters, seed, file paths, channel, codec, and normalization used for the generated pair.</p>
+      {% if metadata_json %}
+        <pre class="metadata-block">{{ metadata_json }}</pre>
+      {% else %}
+        <pre class="metadata-block">{
+  "pair_id": "demo_upload_v0",
+  "channel_path": "narrowband",
+  "codec": "g711_alaw",
+  "normalization": "peak_safety",
+  "network_impairment": {
+    "mode": "waveform_dropout"
+  }
+}</pre>
+      {% endif %}
+    </section>
+  </div>
+{% endblock %}
+
+{% block shell_right_sidebar %}
+  <div class="panel-title">On this page</div>
+  <ul class="toc-list">
+    <li><a href="#overview" data-toc-link>Overview</a></li>
+    <li><a href="#tab-generate" data-toc-link>Generate</a></li>
+    <li><a href="#tab-results" data-toc-link>Results</a></li>
+    <li><a href="#tab-pipeline" data-toc-link>Pipeline</a></li>
+  </ul>
+  <div class="panel-title panel-title-spaced">Limits</div>
+  <p class="panel-copy">One uploaded clip per run. Maximum 25 MB and 60 seconds. Generated files remain tied to this authenticated session.</p>
+{% endblock %}
+
+{% block shell_scripts %}
+  <script src="{{ url_for('static', path='js/speech_degradation.js') }}" defer></script>
+{% endblock %}

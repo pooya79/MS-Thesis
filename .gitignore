@@ -194,6 +194,7 @@ cython_debug/
 # Generated thesis ML artifacts
 /data/
 /artifacts/
+/server/data/degradation_demos/
 
 # PyPI configuration file
 .pypirc

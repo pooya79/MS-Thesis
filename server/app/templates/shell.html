@@ -24,7 +24,7 @@
     <div class="nav-sections">
       <a href="/" class="nav-item{% if active_nav == 'home' %} active{% endif %}">Home</a>
       <a href="#" class="nav-item">Findings</a>
-      <a href="#" class="nav-item">Experiments</a>
+      <a href="/experiments/speech-degradation" class="nav-item{% if active_nav == 'experiments' %} active{% endif %}">Experiments</a>
       <a href="#" class="nav-item">Publications</a>
       <a href="#" class="nav-item">Settings</a>
     </div>
@@ -39,13 +39,14 @@
     <aside class="left-sidebar" id="left-sidebar">
       <div class="sidebar-section">
         <div class="sidebar-header">Workspace</div>
-        <a href="/" class="sidebar-link active">Research Home</a>
+        <a href="/" class="sidebar-link{% if active_sidebar == 'home' or active_nav == 'home' %} active{% endif %}">Research Home</a>
         <a href="#" class="sidebar-link sub-item">Pinned findings</a>
         <a href="#" class="sidebar-link sub-item">Latest runs</a>
       </div>
 
       <div class="sidebar-section">
         <div class="sidebar-header">Tracking</div>
+        <a href="/experiments/speech-degradation" class="sidebar-link{% if active_sidebar == 'speech_degradation' %} active{% endif %}">Speech degradation</a>
         <a href="#" class="sidebar-link">Trajectory experiments</a>
         <a href="#" class="sidebar-link">Model comparisons</a>
         <a href="#" class="sidebar-link">Data snapshots</a>
