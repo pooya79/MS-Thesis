@@ -8,6 +8,7 @@ This repository is my research archive for my MS thesis.
 - `server/app/`: application package (`core`, `db`, `models`, `routers`, `templates`).
 - `server/app/static/`: frontend assets (`css/`, `js/`) served at `/static`.
 - `server/tests/`: automated tests for API and page behavior.
+- `Thesis`: thesis document and related research notes are there, unless explicitly mentioned, you don't need to worry about it for development or testing.
 
 ## Commands
 - Run server: `make run`
