@@ -1,10 +1,11 @@
 # Speech Enhancement and Fusion Implementation Plan
 
-This document translates the thesis method chapter into an implementation plan for this repository. It intentionally excludes Whisper ASR fine-tuning because the Persian Whisper checkpoint already exists. The remaining work is:
+This document translates the thesis method chapter into an implementation plan for this repository. The ASR backbone is a fine-tuned Whisper-small checkpoint. The work is:
 
-1. Build the paired clean/degraded speech-enhancement dataset.
-2. Train or domain-adapt PrimeK-Net for Persian telecommunication-style degradation.
-3. Train the log-Mel fusion network that combines noisy and enhanced features before the frozen Whisper model.
+1. Fine-tune Whisper-small on the general Persian ASR corpus.
+2. Build the paired clean/degraded speech-enhancement dataset.
+3. Train or domain-adapt PrimeK-Net for Persian telecommunication-style degradation.
+4. Train the log-Mel fusion network that combines noisy and enhanced features before the frozen Whisper-small model.
 
 ## Goals
 
@@ -13,7 +14,7 @@ The implementation should produce a reproducible pipeline that starts from clean
 The target behavior is not to make enhancement universally better for every dataset. The expected finding from the thesis is more specific:
 
 - Enhancement should help real or simulated telecommunication audio.
-- Direct Whisper should remain strong on clean general-purpose speech.
+- Direct Whisper-small should remain strong on clean general-purpose speech.
 - Fusion should reduce the failure mode where a pure enhancement cascade damages clean or out-of-domain speech, even if it does not always beat the best conditional choice.
 
 ## Proposed Repository Layout
@@ -37,6 +38,9 @@ ml/
     train_fusion.py
     eval_fusion.py
   asr/
+    prepare_asr_manifest.py
+    train_whisper_small.py
+    eval_whisper.py
     whisper_features.py
     whisper_scoring.py
   utils/
@@ -47,6 +51,7 @@ ml/
 configs/
   speech_enhancement/
     data.yaml
+    whisper_small_train.yaml
     primek_train.yaml
     fusion_train.yaml
 artifacts/
@@ -61,10 +66,12 @@ data/
 
 Required input assets:
 
+- General Persian ASR audio-text corpus from the thesis data table, excluding the dedicated telephone data and excluding held-out test/evaluation splits.
 - Clean Persian speech: Common Voice Persian v21 train and validation splits.
 - Room impulse responses: BUT ReverbDB.
 - Background noise: DEMAND 16 kHz release.
-- Frozen ASR checkpoint: the already-trained Persian Whisper checkpoint.
+- Base ASR checkpoint: OpenAI Whisper-small.
+- Fine-tuned ASR checkpoint: the Persian-adapted Whisper-small checkpoint produced by Phase 1.
 - Optional baseline enhancement checkpoint: official or compatible PrimeK-Net checkpoint.
 
 The exact local paths should live in `configs/speech_enhancement/data.yaml`, not hard-coded in scripts.
@@ -73,6 +80,10 @@ Example configuration fields:
 
 ```yaml
 common_voice_root: /path/to/common_voice/fa
+general_persian_asr_manifest: /path/to/general_persian_asr_train.jsonl
+asr_validation_manifest: /path/to/general_persian_asr_valid.jsonl
+exclude_datasets:
+  - telephone
 but_reverbdb_root: /path/to/BUT_ReverbDB
 demand_root: /path/to/DEMAND
 work_dir: data/speech_enhancement
@@ -82,7 +93,71 @@ degraded_variants_per_clip: 2
 seed: 1337
 ```
 
-## Phase 1: Dataset Preparation
+## Phase 1: Whisper-Small Fine-Tuning
+
+Fine-tune Whisper-small before training enhancement or fusion components. This stage produces the frozen ASR backbone used everywhere downstream.
+
+### 1. Prepare General Persian ASR Manifests
+
+Implement `ml/asr/prepare_asr_manifest.py`.
+
+Responsibilities:
+
+- Read the thesis general Persian ASR sources and their audio-text metadata.
+- Include public and private general Persian training data.
+- Exclude the dedicated telephone data from ASR fine-tuning.
+- Exclude held-out test/evaluation splits from training.
+- Normalize all audio references to mono 16 kHz input expectations.
+- Normalize transcripts with the same Persian text rules used for ASR scoring.
+- Record dataset name, split, source path, duration, transcript, and stable utterance ID.
+
+Output:
+
+```text
+data/asr/manifests/
+  whisper_small_train.jsonl
+  whisper_small_valid.jsonl
+```
+
+### 2. Fine-Tune Whisper-Small
+
+Implement `ml/asr/train_whisper_small.py`.
+
+Training should start from OpenAI Whisper-small and optimize the standard autoregressive sequence-to-sequence cross-entropy objective on the general Persian ASR training manifest. The dedicated telephone set remains evaluation-only and must not be included in training.
+
+Suggested configuration:
+
+```yaml
+base_model: openai/whisper-small
+train_manifest: data/asr/manifests/whisper_small_train.jsonl
+valid_manifest: data/asr/manifests/whisper_small_valid.jsonl
+artifact_dir: artifacts/asr/whisper_small
+sample_rate: 16000
+seed: 1337
+mixed_precision: true
+```
+
+### Outputs
+
+Write outputs to:
+
+```text
+artifacts/asr/whisper_small/
+  checkpoints/
+    best/
+  logs/
+    train_metrics.jsonl
+    valid_metrics.json
+  config/
+    text_normalization.json
+    tokenizer_config.json
+    training_config.yaml
+    manifest_hashes.json
+```
+
+The saved checkpoint is the single ASR backbone for later phases. It should be identified as the fine-tuned Persian Whisper-small checkpoint in configs, logs, and thesis artifacts.
+
+## Phase 2: Speech-Enhancement Dataset Preparation
 
 ### 1. Normalize Common Voice Input
 
@@ -141,7 +216,7 @@ data/speech_enhancement/manifests/
   demand_noise_index.jsonl
 ```
 
-## Phase 2: Degraded Pair Generation
+## Phase 3: Degraded Pair Generation
 
 Implement `ml/speech_data/generate_degraded_pairs.py`.
 
@@ -332,7 +407,7 @@ Add a lightweight inspection command in `ml/speech_data/inspect_manifest.py` tha
 
 This must run before training.
 
-## Phase 3: PrimeK-Net Training
+## Phase 4: PrimeK-Net Training
 
 Implement `ml/enhancement/train_primek.py`.
 
@@ -423,14 +498,14 @@ artifacts/speech_enhancement/primek/samples/
 
 This makes auditory inspection reproducible.
 
-## Phase 4: Fusion Network Training
+## Phase 5: Fusion Network Training
 
 Implement the fusion model after the enhancement checkpoint is usable.
 
 The fusion stage has three frozen components:
 
-- Frozen Persian Whisper checkpoint.
-- Frozen Whisper feature extractor.
+- Frozen fine-tuned Persian Whisper-small checkpoint.
+- Frozen Whisper-small feature extractor.
 - Frozen trained PrimeK-Net enhancement checkpoint.
 
 Only the fusion network parameters are trained.
@@ -512,19 +587,19 @@ Implementation constraints:
 
 Implement `ml/fusion/train_fusion.py`.
 
-Use Whisper's autoregressive cross-entropy loss:
+Use Whisper-small's autoregressive cross-entropy loss:
 
 ```text
 L_ASR = -sum_t log p(y_t | y_<t, M_f)
 ```
 
-Whisper remains frozen. The optimizer updates only fusion network parameters.
+Whisper-small remains frozen. The optimizer updates only fusion network parameters.
 
 Training loop responsibilities:
 
 - Load cached noisy/enhanced log-Mel features.
 - Run fusion network.
-- Feed fused features to frozen Whisper.
+- Feed fused features to frozen Whisper-small.
 - Compute token-level cross-entropy against transcript labels.
 - Backpropagate only through fusion.
 - Save checkpoints and validation metrics.
@@ -535,9 +610,9 @@ Implement `ml/fusion/eval_fusion.py`.
 
 Compare three inference modes on the same evaluation manifests:
 
-1. Baseline: noisy audio directly to frozen Persian Whisper.
-2. Cascade: PrimeK-Net enhanced audio to frozen Persian Whisper.
-3. Fusion: noisy and enhanced log-Mels through fusion network, then frozen Persian Whisper.
+1. Baseline: noisy audio directly to frozen fine-tuned Persian Whisper-small.
+2. Cascade: PrimeK-Net enhanced audio to frozen fine-tuned Persian Whisper-small.
+3. Fusion: noisy and enhanced log-Mels through fusion network, then frozen fine-tuned Persian Whisper-small.
 
 Report:
 
@@ -556,18 +631,20 @@ Expected evaluation sets:
 - PersianSpeech test.
 - Real telephone test set.
 
-## Phase 5: Reproducibility and Tests
+## Phase 6: Reproducibility and Tests
 
 Add tests for the code paths that can be tested without full GPU training.
 
 Recommended tests:
 
+- ASR manifest excludes dedicated telephone data and held-out test splits.
+- Whisper-small checkpoint metadata records base model, config snapshot, and manifest hashes.
 - Manifest schema validation.
 - Stable deterministic seed generation.
 - Audio pair length alignment.
 - Degradation metadata completeness.
 - Fusion model forward pass shape.
-- Frozen-parameter check for Whisper and PrimeK-Net during fusion training.
+- Frozen-parameter check for Whisper-small and PrimeK-Net during fusion training.
 - Text normalization consistency between training and scoring.
 
 For long-running GPU jobs, add smoke-test commands that run on a tiny manifest with 2 to 4 clips.
@@ -575,6 +652,12 @@ For long-running GPU jobs, add smoke-test commands that run on a tiny manifest w
 Example commands to add later:
 
 ```make
+prepare-asr-data:
+	uv run python -m ml.asr.prepare_asr_manifest --config configs/speech_enhancement/data.yaml
+
+train-whisper-small:
+	uv run python -m ml.asr.train_whisper_small --config configs/speech_enhancement/whisper_small_train.yaml
+
 prepare-se-data:
 	uv run python -m ml.speech_data.prepare_common_voice --config configs/speech_enhancement/data.yaml
 
@@ -590,7 +673,22 @@ train-fusion:
 
 ## Milestones
 
-### Milestone 1: Data Pipeline
+### Milestone 1: Whisper-Small ASR Backbone
+
+Deliverables:
+
+- General Persian ASR train/validation manifests.
+- Fine-tuned Persian Whisper-small checkpoint.
+- Text normalization and tokenizer config snapshots.
+- Training config, validation metrics, and manifest hashes.
+
+Exit criteria:
+
+- Dedicated telephone data is absent from ASR training manifests.
+- Held-out evaluation splits are absent from ASR training manifests.
+- The checkpoint can transcribe a small validation subset through the shared scoring path.
+
+### Milestone 2: Data Pipeline
 
 Deliverables:
 
@@ -606,7 +704,7 @@ Exit criteria:
 - Clean and degraded lengths match.
 - Codec, SNR, RIR, and packet-loss distributions match the configured probabilities within reasonable sampling variance.
 
-### Milestone 2: PrimeK-Net Domain Adaptation
+### Milestone 3: PrimeK-Net Domain Adaptation
 
 Deliverables:
 
@@ -620,13 +718,13 @@ Exit criteria:
 - Validation metrics improve over degraded input.
 - No obvious speech deletion or severe artifacting on the fixed sample subset.
 
-### Milestone 3: Fusion Model
+### Milestone 4: Fusion Model
 
 Deliverables:
 
 - Cached noisy/enhanced log-Mel generation.
 - Fusion model implementation.
-- Fusion training loop with frozen Whisper and PrimeK-Net.
+- Fusion training loop with frozen Whisper-small and PrimeK-Net.
 - WER/CER comparison against baseline and cascade.
 
 Exit criteria:
@@ -635,7 +733,7 @@ Exit criteria:
 - Frozen models remain unchanged.
 - Evaluation script produces comparable WER/CER tables for all three inference modes.
 
-### Milestone 4: Thesis-Ready Result Reproduction
+### Milestone 5: Thesis-Ready Result Reproduction
 
 Deliverables:
 
@@ -654,7 +752,8 @@ Exit criteria:
 
 These should be resolved before implementation starts:
 
-- Exact path and format of the trained Persian Whisper checkpoint.
+- Exact path and format of the fine-tuned Persian Whisper-small checkpoint.
+- Exact location and source metadata for each non-telephone general Persian ASR training source.
 - Whether PrimeK-Net will be vendored, installed as a dependency, or used as a Git submodule.
 - Whether codec simulation will rely on `ffmpeg`/external binaries or a pure Python implementation where possible.
 - Whether enhanced audio/log-Mel features should be cached before fusion training. The recommended default is yes.
