@@ -50,3 +50,7 @@ This repository is my research archive for my MS thesis.
 - Keep coverage for static asset public accessibility.
 - Keep coverage for protected non-HTML endpoint behavior (e.g. `/health` returns `401` when unauthenticated).
 - For speech degradation changes, keep coverage for deterministic seeds, audio shape/range safety, codec round-trips, generated manifest fields, and clean/degraded length alignment.
+
+
+## Important Notes
+- When writing a script make sure to add a --help description and argument types for clarity and reproducibility.
