@@ -1,11 +1,37 @@
 (() => {
   const toggleButton = document.querySelector("[data-sidebar-toggle]");
   const sidebar = document.getElementById("left-sidebar");
+  const backdrop = document.querySelector("[data-sidebar-backdrop]");
 
   if (toggleButton && sidebar) {
-    toggleButton.addEventListener("click", () => {
-      const isOpen = sidebar.classList.toggle("open");
+    const setSidebarOpen = (isOpen) => {
+      sidebar.classList.toggle("open", isOpen);
       toggleButton.setAttribute("aria-expanded", isOpen ? "true" : "false");
+      if (backdrop) {
+        backdrop.hidden = !isOpen;
+      }
+    };
+
+    toggleButton.addEventListener("click", () => {
+      setSidebarOpen(!sidebar.classList.contains("open"));
+    });
+
+    sidebar.addEventListener("click", (event) => {
+      const target = event.target instanceof Element ? event.target : null;
+      const link = target?.closest("a");
+      if (link && window.matchMedia("(max-width: 768px)").matches) {
+        setSidebarOpen(false);
+      }
+    });
+
+    if (backdrop) {
+      backdrop.addEventListener("click", () => setSidebarOpen(false));
+    }
+
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        setSidebarOpen(false);
+      }
     });
   }
 

@@ -105,6 +105,10 @@ body.app-shell-page {
   min-height: calc(100vh - var(--shell-top-nav-height));
 }
 
+.sidebar-backdrop {
+  display: none;
+}
+
 .left-sidebar {
   position: fixed;
   top: var(--shell-top-nav-height);
@@ -265,6 +269,18 @@ body.app-shell-page {
 
   .left-sidebar.open {
     transform: translateX(0);
+  }
+
+  .sidebar-backdrop {
+    position: fixed;
+    inset: var(--shell-top-nav-height) 0 0 0;
+    display: block;
+    background: var(--color-overlay);
+    z-index: calc(var(--z-sidebar) - 1);
+  }
+
+  .sidebar-backdrop[hidden] {
+    display: none;
   }
 
   .main-content {

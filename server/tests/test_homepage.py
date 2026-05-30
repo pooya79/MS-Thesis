@@ -49,6 +49,7 @@ def test_login_allows_access_with_valid_password() -> None:
     assert "Research command center" in home_response.text
     assert "/static/css/shell.css" in home_response.text
     assert "Log out" in home_response.text
+    assert 'data-sidebar-backdrop hidden' in home_response.text
     assert health_response.status_code == 200
     assert health_response.json() == {"status": "ok"}
 
@@ -60,6 +61,18 @@ def test_static_assets_are_publicly_readable() -> None:
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/css")
     assert "--color-bg-primary" in response.text
+
+
+def test_shell_assets_include_sidebar_toggle_behavior() -> None:
+    with TestClient(app) as client:
+        css = client.get("/static/css/shell.css")
+        js = client.get("/static/js/shell.js")
+
+    assert css.status_code == 200
+    assert js.status_code == 200
+    assert "sidebar-backdrop" in css.text
+    assert "setSidebarOpen" in js.text
+    assert "aria-expanded" in js.text
 
 
 def test_logout_clears_authenticated_session() -> None:
