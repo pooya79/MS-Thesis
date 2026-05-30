@@ -60,6 +60,8 @@ Run only the speech degradation tests:
 uv run pytest server/tests/test_degradation_pipeline.py -q
 ```
 
+For data, training, and inspection script usage, see [docs/script-guide.md](docs/script-guide.md).
+
 ## Speech Degradation Pipeline
 
 The degradation pipeline reads clean-audio JSONL manifests and writes paired clean/degraded audio for speech-enhancement training.

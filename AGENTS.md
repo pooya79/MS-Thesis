@@ -53,4 +53,4 @@ This repository is my research archive for my MS thesis.
 
 
 ## Important Notes
-- When writing a script make sure to add a --help description and argument types for clarity and reproducibility.
+- When writing or changing a script, expose clear `--help` text with argument types/defaults, add or update its command in `docs/script-guide.md`, and keep CLI help covered by tests.
