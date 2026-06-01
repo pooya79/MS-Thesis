@@ -1,0 +1,15 @@
+dataset:
+  source_dir: data/cv-corpus-25.0
+  output_dir: data/cv-corpus-25.0-degraded
+  splits:
+    - train.tsv
+    - dev.tsv
+  variations_per_sample: 2
+  mapping_filename: degraded_to_clean.jsonl
+  metadata_filename: degradation_metadata.jsonl
+  report_filename: generation_report.json
+
+degradation_config: configs/speech_enhancement/degradation.yaml
+
+# Override any value from degradation_config here when needed.
+degradation: {}

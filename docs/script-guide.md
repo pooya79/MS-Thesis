@@ -10,6 +10,7 @@ uv run python -m ml.speech_data.scripts.prepare_common_voice_25 --help
 uv run python -m ml.speech_data.scripts.prepare_degradation_assets --help
 uv run python -m ml.speech_data.scripts.prepare_fleurs_persian --help
 uv run python -m ml.speech_data.scripts.generate_random_degraded_clip --help
+uv run python -m ml.speech_data.generate_degraded_dataset --help
 uv run python -m ml.speech_data.generate_degraded_pairs --help
 uv run python -m ml.speech_data.inspect_manifest --help
 uv run python -m ml.asr.train_whisper_small --help
@@ -101,6 +102,22 @@ uv run python -m ml.speech_data.generate_degraded_pairs \
 
 See `docs/speech-degradation-pipeline.md` for the full degradation chain, profile
 semantics, metadata fields, and known limitations.
+
+## Degraded-only ASR Dataset Generation
+
+Generate a dataset-shaped directory with degraded-only clips and TSVs from an existing
+TSV-based ASR dataset such as Common Voice 25:
+
+```bash
+uv run python -m ml.speech_data.generate_degraded_dataset \
+  --config configs/speech_enhancement/cv25_degraded_dataset.yaml
+```
+
+The config selects the source dataset directory, output dataset directory, included
+split TSVs, and variations per sample. The output keeps `train.tsv`, `dev.tsv`,
+`test.tsv`, or any selected TSV names, writes degraded WAV files under `clips/`, and
+records clean-to-degraded traceability in `degraded_to_clean.jsonl`. Full per-variant
+degradation metadata is also written to `degradation_metadata.jsonl`.
 
 ## Random Degraded Clip Demo
 

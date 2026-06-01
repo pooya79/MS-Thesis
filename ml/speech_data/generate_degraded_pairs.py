@@ -319,6 +319,23 @@ def process_item(
     rir_assets: list[dict[str, Any]],
     noise_assets: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    metadata, clean_target, degraded_model, model_rate = degrade_item(item, variant_index, config, rir_assets, noise_assets)
+    pair_dir = Path(config["output_dir"]) / "pairs" / item.split
+    clean_out = pair_dir / "clean" / f"{metadata['pair_id']}.wav"
+    degraded_out = pair_dir / "degraded" / f"{metadata['pair_id']}.wav"
+    save_audio(clean_out, clean_target, model_rate)
+    save_audio(degraded_out, degraded_model, model_rate)
+    metadata.update({"clean_path": str(clean_out), "degraded_path": str(degraded_out)})
+    return metadata
+
+
+def degrade_item(
+    item: ManifestItem,
+    variant_index: int,
+    config: dict[str, Any],
+    rir_assets: list[dict[str, Any]],
+    noise_assets: list[dict[str, Any]],
+) -> tuple[dict[str, Any], np.ndarray, np.ndarray, int]:
     seed = stable_seed(int(config["seed"]), item.split, item.id, variant_index)
     rng = np.random.default_rng(seed)
     model_rate = int(config["model_sample_rate"])
@@ -464,16 +481,8 @@ def process_item(
         target_bandwidth = "wideband"
     clean_target = peak_safety_normalize(match_length(clean_target, len(degraded_model)), peak=float(degradation_config["normalization"]["peak"]))
 
-    pair_dir = Path(config["output_dir"]) / "pairs" / item.split
-    clean_out = pair_dir / "clean" / f"{metadata['pair_id']}.wav"
-    degraded_out = pair_dir / "degraded" / f"{metadata['pair_id']}.wav"
-    save_audio(clean_out, clean_target, model_rate)
-    save_audio(degraded_out, degraded_model, model_rate)
-
     metadata.update(
         {
-            "clean_path": str(clean_out),
-            "degraded_path": str(degraded_out),
             "target_bandwidth": target_bandwidth,
             "duration_sec": len(degraded_model) / model_rate,
             "channel_path": channel_path,
@@ -486,7 +495,7 @@ def process_item(
             "normalization": degradation_config["normalization"]["mode"],
         }
     )
-    return metadata
+    return metadata, clean_target, degraded_model, model_rate
 
 
 def default_config(config: dict[str, Any]) -> dict[str, Any]:

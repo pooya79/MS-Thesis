@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 import subprocess
 import sys
@@ -9,6 +10,7 @@ import numpy as np
 import pytest
 import soundfile as sf
 
+from ml.speech_data.generate_degraded_dataset import generate_degraded_dataset
 from ml.speech_data.generate_degraded_pairs import apply_decoded_waveform_dropout, codec_roundtrip, generate_from_config
 from ml.speech_data.scripts.generate_random_degraded_clip import generate_random_degraded_clip
 from ml.speech_data.inspect_manifest import inspect_manifest
@@ -155,6 +157,86 @@ def test_generate_degraded_pairs_records_selected_profile(tmp_path: Path) -> Non
 
     inspection = inspect_manifest(train_manifest)
     assert inspection["distributions"]["profile"] == {"unit_profile": 1}
+
+
+def test_generate_degraded_dataset_writes_tsvs_and_mapping(tmp_path: Path) -> None:
+    dataset_dir = tmp_path / "data" / "cv-corpus-25.0"
+    clips_dir = dataset_dir / "clips"
+    clips_dir.mkdir(parents=True)
+    sample_rate = 16000
+    t = np.linspace(0, 0.25, sample_rate // 4, endpoint=False, dtype=np.float32)
+    audio = (0.2 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
+    sf.write(clips_dir / "sample.wav", audio, sample_rate)
+    for split in ("train", "eval"):
+        with (dataset_dir / f"{split}.tsv").open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=["path", "sentence"], delimiter="\t", lineterminator="\n")
+            writer.writeheader()
+            writer.writerow({"path": "sample.wav", "sentence": "سلام"})
+
+    config = {
+        "dataset": {
+            "source_dir": str(dataset_dir),
+            "output_dir": str(tmp_path / "data" / "cv-corpus-25.0-degraded"),
+            "splits": ["train.tsv", "eval.tsv"],
+            "variations_per_sample": 2,
+            "mapping_filename": "degraded_to_clean.jsonl",
+            "metadata_filename": "degradation_metadata.jsonl",
+            "report_filename": "generation_report.json",
+        },
+        "degradation": {
+            "seed": 3,
+            "model_sample_rate": 16000,
+            "working_sample_rate": 16000,
+            "rir_index": None,
+            "noise_index": None,
+            "reverb": {
+                "severe": {"probability": 0.0, "wet_mix": [0.6, 0.8], "dr_db": [6, 10]},
+                "mild": {"probability": 0.0, "wet_mix": [0.3, 0.5], "dr_db": [12, 18]},
+            },
+            "noise": {"probability": 0.0, "second_scene_probability": 0.0, "snr_buckets": [[0, 1]]},
+            "level": {"gain_db": [0, 0], "clipping": {"enabled": False}, "agc": {"enabled": False}},
+            "codec_distribution": [{"codec": "pass_through", "weight": 1.0}],
+            "channel": {
+                "narrowband": {"bandpass_hz": [300, 3400]},
+                "wideband": {"bandpass_hz": [50, 7000], "filter_target": False},
+                "pass_through_path_distribution": [{"path": "wideband", "weight": 1.0}],
+            },
+            "network_impairment": {
+                "enabled": False,
+                "probability": 0.0,
+                "loss_rate_buckets": [[0.0, 0.0]],
+                "burst_length": [1, 1],
+                "frame_ms": 20,
+            },
+        },
+    }
+
+    report = generate_degraded_dataset(config)
+
+    output_dir = tmp_path / "data" / "cv-corpus-25.0-degraded"
+    assert report["splits"]["train"]["degraded_rows"] == 2
+    assert report["splits"]["eval"]["degraded_rows"] == 2
+    assert not (output_dir / "pairs").exists()
+
+    train_rows = list(csv.DictReader((output_dir / "train.tsv").open(encoding="utf-8"), delimiter="\t"))
+    assert len(train_rows) == 2
+    assert train_rows[0]["sentence"] == "سلام"
+    assert train_rows[0]["path"].startswith("train/")
+
+    mapping_rows = [json.loads(line) for line in (output_dir / "degraded_to_clean.jsonl").read_text(encoding="utf-8").splitlines()]
+    metadata_rows = [json.loads(line) for line in (output_dir / "degradation_metadata.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert len(mapping_rows) == 4
+    assert len(metadata_rows) == 4
+    assert {row["split"] for row in mapping_rows} == {"train", "eval"}
+    assert {row["pair_id"] for row in metadata_rows} == {row["degraded_id"] for row in mapping_rows}
+    assert {row["variant_index"] for row in mapping_rows if row["split"] == "train"} == {0, 1}
+    for row in mapping_rows:
+        assert Path(row["degraded_path"]).is_file()
+        assert row["clean_path"] == str((clips_dir / "sample.wav").resolve())
+        degraded, degraded_sr = load_audio(row["degraded_path"])
+        assert degraded_sr == 16000
+        assert len(degraded) == len(audio)
+        assert row["degradation"]["codec"] == "pass_through"
 
 
 def test_generate_random_degraded_clip_writes_demo_variants(tmp_path: Path) -> None:
