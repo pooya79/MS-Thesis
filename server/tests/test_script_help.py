@@ -7,8 +7,10 @@ import pytest
 
 SCRIPT_MODULES = [
     "ml.speech_data.scripts.download_common_voice_fa",
+    "ml.speech_data.scripts.download_degradation_assets",
     "ml.speech_data.scripts.download_fleurs_persian",
     "ml.speech_data.scripts.prepare_common_voice_25",
+    "ml.speech_data.scripts.prepare_degradation_assets",
     "ml.speech_data.scripts.prepare_fleurs_persian",
     "ml.speech_data.scripts.generate_random_degraded_clip",
     "ml.speech_data.generate_degraded_pairs",

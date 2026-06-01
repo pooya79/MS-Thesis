@@ -19,6 +19,24 @@ Inputs:
 - Optional noise index JSONL for environmental noise recordings.
 - A YAML degradation config.
 
+Download the optional DEMAND noise archives with:
+
+```bash
+uv run python -m ml.speech_data.scripts.download_degradation_assets \
+  --noise-root data/speech_enhancement/assets/noise/DEMAND
+```
+
+Prepare the optional DEMAND noise index from downloaded DEMAND assets with:
+
+```bash
+uv run python -m ml.speech_data.scripts.prepare_degradation_assets \
+  --noise-root data/speech_enhancement/assets/noise/DEMAND \
+  --manifest-dir data/speech_enhancement/manifests
+```
+
+The script extracts local `.zip` archives by default, validates readable audio, and
+writes `demand_noise_index.jsonl`.
+
 Each clean manifest row must include:
 
 ```json

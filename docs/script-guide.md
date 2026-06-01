@@ -4,8 +4,10 @@ Every maintained Python script exposes `--help`. Use the help output before runn
 
 ```bash
 uv run python -m ml.speech_data.scripts.download_common_voice_fa --help
+uv run python -m ml.speech_data.scripts.download_degradation_assets --help
 uv run python -m ml.speech_data.scripts.download_fleurs_persian --help
 uv run python -m ml.speech_data.scripts.prepare_common_voice_25 --help
+uv run python -m ml.speech_data.scripts.prepare_degradation_assets --help
 uv run python -m ml.speech_data.scripts.prepare_fleurs_persian --help
 uv run python -m ml.speech_data.scripts.generate_random_degraded_clip --help
 uv run python -m ml.speech_data.generate_degraded_pairs --help
@@ -51,6 +53,41 @@ uv run python -m ml.speech_data.scripts.prepare_fleurs_persian \
   --source-root data/fleurs/fa_ir/source \
   --output-root data/fleurs/fa_ir/normalized \
   --workers 4
+```
+
+## Degradation Asset Download
+
+Download all DEMAND `*_16k.zip` noise archives:
+
+```bash
+uv run python -m ml.speech_data.scripts.download_degradation_assets \
+  --noise-root data/speech_enhancement/assets/noise/DEMAND
+```
+
+To download, extract, validate, and write indexes in one step:
+
+```bash
+uv run python -m ml.speech_data.scripts.download_degradation_assets \
+  --noise-root data/speech_enhancement/assets/noise/DEMAND \
+  --manifest-dir data/speech_enhancement/manifests \
+  --prepare-indexes
+```
+
+## Degradation Asset Preparation
+
+Prepare DEMAND 16 kHz noise assets after downloading the archives. Place the DEMAND
+`*_16k.zip` files under `data/speech_enhancement/assets/noise/DEMAND/`, then run:
+
+```bash
+uv run python -m ml.speech_data.scripts.prepare_degradation_assets \
+  --noise-root data/speech_enhancement/assets/noise/DEMAND \
+  --manifest-dir data/speech_enhancement/manifests
+```
+
+The script extracts local archives by default, validates readable audio, and writes:
+
+```text
+data/speech_enhancement/manifests/demand_noise_index.jsonl
 ```
 
 ## Speech Degradation Generation
