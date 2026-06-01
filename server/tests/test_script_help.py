@@ -32,3 +32,14 @@ def test_script_entrypoint_prints_help(module_name: str, capsys: pytest.CaptureF
     assert exc_info.value.code == 0
     assert "usage:" in captured.out
     assert "--help" in captured.out
+
+
+def test_generate_degraded_dataset_help_documents_workers(capsys: pytest.CaptureFixture[str]) -> None:
+    module = importlib.import_module("ml.speech_data.generate_degraded_dataset")
+
+    with pytest.raises(SystemExit) as exc_info:
+        module.main(["--help"])
+
+    captured = capsys.readouterr()
+    assert exc_info.value.code == 0
+    assert "--workers" in captured.out

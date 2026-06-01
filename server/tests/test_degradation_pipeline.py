@@ -178,6 +178,7 @@ def test_generate_degraded_dataset_writes_tsvs_and_mapping(tmp_path: Path) -> No
             "output_dir": str(tmp_path / "data" / "cv-corpus-25.0-degraded"),
             "splits": ["train.tsv", "eval.tsv"],
             "variations_per_sample": 2,
+            "workers": 2,
             "mapping_filename": "degraded_to_clean.jsonl",
             "metadata_filename": "degradation_metadata.jsonl",
             "report_filename": "generation_report.json",
@@ -231,6 +232,41 @@ def test_generate_degraded_dataset_writes_tsvs_and_mapping(tmp_path: Path) -> No
         assert degraded_sr == 16000
         assert len(degraded) == len(audio)
         assert row["degradation"]["codec"] == "pass_through"
+
+
+def test_generate_degraded_dataset_rejects_invalid_worker_count(tmp_path: Path) -> None:
+    dataset_dir = tmp_path / "data" / "cv-corpus-25.0"
+    clips_dir = dataset_dir / "clips"
+    clips_dir.mkdir(parents=True)
+    sf.write(clips_dir / "sample.wav", np.zeros(1600, dtype=np.float32), 16000)
+    with (dataset_dir / "train.tsv").open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["path", "sentence"], delimiter="\t", lineterminator="\n")
+        writer.writeheader()
+        writer.writerow({"path": "sample.wav", "sentence": "سلام"})
+
+    config = {
+        "dataset": {
+            "source_dir": str(dataset_dir),
+            "output_dir": str(tmp_path / "out"),
+            "splits": ["train.tsv"],
+            "variations_per_sample": 1,
+            "workers": 0,
+        },
+        "degradation": {
+            "noise_index": None,
+            "noise": {"probability": 0.0, "second_scene_probability": 0.0, "snr_buckets": [[0, 1]]},
+            "codec_distribution": [{"codec": "pass_through", "weight": 1.0}],
+            "channel": {
+                "narrowband": {"bandpass_hz": [300, 3400]},
+                "wideband": {"bandpass_hz": [50, 7000], "filter_target": False},
+                "pass_through_path_distribution": [{"path": "wideband", "weight": 1.0}],
+            },
+            "network_impairment": {"enabled": False, "probability": 0.0, "loss_rate_buckets": [[0.0, 0.0]], "burst_length": [1, 1], "frame_ms": 20},
+        },
+    }
+
+    with pytest.raises(ValueError, match="dataset.workers must be >= 1"):
+        generate_degraded_dataset(config)
 
 
 def test_generate_random_degraded_clip_writes_demo_variants(tmp_path: Path) -> None:

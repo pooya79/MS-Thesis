@@ -5,6 +5,7 @@ dataset:
     - train.tsv
     - dev.tsv
   variations_per_sample: 2
+  workers: 1
   mapping_filename: degraded_to_clean.jsonl
   metadata_filename: degradation_metadata.jsonl
   report_filename: generation_report.json

@@ -111,11 +111,13 @@ TSV-based ASR dataset such as Common Voice 25:
 
 ```bash
 uv run python -m ml.speech_data.generate_degraded_dataset \
-  --config configs/speech_enhancement/cv25_degraded_dataset.yaml
+  --config configs/speech_enhancement/cv25_degraded_dataset.yaml \
+  --workers 4
 ```
 
 The config selects the source dataset directory, output dataset directory, included
-split TSVs, and variations per sample. The output keeps `train.tsv`, `dev.tsv`,
+split TSVs, variations per sample, and worker count. `--workers` overrides
+`dataset.workers` for the current run. The output keeps `train.tsv`, `dev.tsv`,
 `test.tsv`, or any selected TSV names, writes degraded WAV files under `clips/`, and
 records clean-to-degraded traceability in `degraded_to_clean.jsonl`. Full per-variant
 degradation metadata is also written to `degradation_metadata.jsonl`.
