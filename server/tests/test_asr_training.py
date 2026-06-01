@@ -16,6 +16,7 @@ from ml.asr.train_whisper_small import (
     latest_checkpoint,
     load_split_examples,
     load_training_config,
+    resolve_pretrained_model,
     resolve_resume_checkpoint,
     resolve_run_dir,
     resolve_dataset_dirs,
@@ -95,6 +96,8 @@ def test_load_training_config_merges_yaml_with_defaults(tmp_path: Path) -> None:
     config = load_training_config(config_path)
 
     assert config["model"]["name"] == "openai/whisper-small"
+    assert config["model"]["pretrained_model"] is None
+    assert resolve_pretrained_model(config, config_path) == "openai/whisper-small"
     assert config["data"]["sample_rate"] == 16000
     assert config["data"]["datasets"] == ["cv-corpus-25.0"]
     assert config["training"]["num_train_epochs"] == 1
@@ -103,6 +106,45 @@ def test_load_training_config_merges_yaml_with_defaults(tmp_path: Path) -> None:
     assert config["training"]["load_best_model_at_end"] is False
     assert resolve_run_dir(config) == tmp_path / "runs" / "smoke"
     assert resolve_dataset_dirs(config) == [tmp_path / "data" / "cv-corpus-25.0"]
+
+
+def test_resolve_pretrained_model_uses_existing_local_path(tmp_path: Path) -> None:
+    local_model = tmp_path / "models" / "asr" / "whisper-small" / "runs" / "run-1" / "final"
+    local_model.mkdir(parents=True)
+    config_path = tmp_path / "configs" / "train.yaml"
+    config_path.parent.mkdir()
+    write_yaml(
+        config_path,
+        {
+            "model": {
+                "pretrained_model": "../models/asr/whisper-small/runs/run-1/final",
+            },
+            "data": {
+                "datasets": ["cv-corpus-25.0"],
+            },
+        },
+    )
+    config = load_training_config(config_path)
+
+    assert resolve_pretrained_model(config, config_path) == str(local_model.resolve())
+
+
+def test_load_training_config_rejects_empty_pretrained_model(tmp_path: Path) -> None:
+    config_path = tmp_path / "train.yaml"
+    write_yaml(
+        config_path,
+        {
+            "model": {
+                "pretrained_model": "",
+            },
+            "data": {
+                "datasets": ["cv-corpus-25.0"],
+            },
+        },
+    )
+
+    with pytest.raises(ValueError, match="model.pretrained_model"):
+        load_training_config(config_path)
 
 
 def test_load_training_config_validates_minimum_values(tmp_path: Path) -> None:

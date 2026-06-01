@@ -1,5 +1,6 @@
 model:
   name: openai/whisper-small
+  pretrained_model:
   language: Persian
   task: transcribe
 

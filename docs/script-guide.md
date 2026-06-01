@@ -151,3 +151,5 @@ uv run python -m ml.asr.train_whisper_small \
   --config configs/whisper_small_train.yaml \
   --resume auto
 ```
+
+Set `model.pretrained_model` to start from an existing local model directory, such as a previous run's `final` or `best` directory. Leave it empty to start from `model.name`, which defaults to `openai/whisper-small`.

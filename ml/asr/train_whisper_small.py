@@ -22,6 +22,7 @@ from transformers import TrainerCallback
 DEFAULT_CONFIG: dict[str, Any] = {
     "model": {
         "name": "openai/whisper-small",
+        "pretrained_model": None,
         "language": "Persian",
         "task": "transcribe",
     },
@@ -93,8 +94,14 @@ def load_training_config(config_path: Path) -> dict[str, Any]:
 
 
 def validate_config(config: dict[str, Any]) -> None:
+    model = config["model"]
     data = config["data"]
     training = config["training"]
+    if not str(model["name"]).strip():
+        raise ValueError("model.name must be a non-empty model id")
+    pretrained_model = model.get("pretrained_model")
+    if pretrained_model is not None and not str(pretrained_model).strip():
+        raise ValueError("model.pretrained_model must be a non-empty model id or local path when set")
     datasets = data.get("datasets")
     if not isinstance(datasets, list) or not datasets:
         raise ValueError("data.datasets must be a non-empty list of dataset directory names")
@@ -297,6 +304,25 @@ def resolve_resume_checkpoint(run_dir: Path, resume: str | Path | bool | None) -
     return checkpoint
 
 
+def resolve_pretrained_model(config: dict[str, Any], config_path: Path | None = None) -> str:
+    model = config["model"]
+    raw_source = model.get("pretrained_model") or model["name"]
+    source = str(raw_source).strip()
+    source_path = Path(source).expanduser()
+    candidates: list[Path] = []
+    if source_path.is_absolute():
+        candidates.append(source_path)
+    else:
+        candidates.append(source_path)
+        if config_path is not None:
+            candidates.append(config_path.parent / source_path)
+
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate.resolve())
+    return source
+
+
 class JsonMetricsCallback(TrainerCallback):
     def __init__(self, run_dir: Path, metrics_path: Path) -> None:
         self.run_dir = run_dir
@@ -458,14 +484,16 @@ def run_training(config_path: Path, run_dir_override: Path | None = None, resume
     try:
         model_config = config["model"]
         data_config = config["data"]
+        pretrained_model = resolve_pretrained_model(config, config_path)
         logging.info(
-            "loading processor model=%s language=%s task=%s",
+            "loading processor model=%s pretrained_model=%s language=%s task=%s",
             model_config["name"],
+            pretrained_model,
             model_config.get("language", "Persian"),
             model_config.get("task", "transcribe"),
         )
         processor = WhisperProcessor.from_pretrained(
-            str(model_config["name"]),
+            pretrained_model,
             language=str(model_config.get("language", "Persian")),
             task=str(model_config.get("task", "transcribe")),
         )
@@ -491,8 +519,9 @@ def run_training(config_path: Path, run_dir_override: Path | None = None, resume
         logging.info("building datasets with on-demand feature computation")
         train_dataset = WhisperDataset(train_examples, processor, int(data_config["sample_rate"]))
         eval_dataset = WhisperDataset(eval_examples, processor, int(data_config["sample_rate"]))
-        logging.info("loading model=%s", model_config["name"])
-        model = WhisperForConditionalGeneration.from_pretrained(str(model_config["name"]))
+        update_status(run_dir, pretrained_model=pretrained_model)
+        logging.info("loading model=%s", pretrained_model)
+        model = WhisperForConditionalGeneration.from_pretrained(pretrained_model)
         model.config.forced_decoder_ids = None
         model.config.suppress_tokens = []
         logging.info("building training arguments")
