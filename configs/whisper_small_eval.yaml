@@ -1,0 +1,22 @@
+model:
+  checkpoint: models/asr/whisper-small/runs/whisper-small-fa/final
+  processor:
+  language: Persian
+  task: transcribe
+
+data:
+  root_dir: data
+  datasets:
+    - cv-corpus-25.0
+    - data/FarsSpon_train_dev
+    - data/fleurs-normalized
+  sample_rate: 16000
+  split: test
+
+eval:
+  output_dir: models/asr/whisper-small/evals
+  name: whisper-small-fa-test
+  batch_size: 1
+  num_workers: 4
+  device: auto
+  generation_max_length: 225

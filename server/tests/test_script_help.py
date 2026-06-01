@@ -17,6 +17,7 @@ SCRIPT_MODULES = [
     "ml.speech_data.generate_degraded_pairs",
     "ml.speech_data.inspect_manifest",
     "ml.asr.train_whisper_small",
+    "ml.asr.eval_whisper_small",
 ]
 
 

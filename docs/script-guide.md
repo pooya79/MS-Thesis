@@ -14,6 +14,7 @@ uv run python -m ml.speech_data.generate_degraded_dataset --help
 uv run python -m ml.speech_data.generate_degraded_pairs --help
 uv run python -m ml.speech_data.inspect_manifest --help
 uv run python -m ml.asr.train_whisper_small --help
+uv run python -m ml.asr.eval_whisper_small --help
 ```
 
 ## Common Voice Persian Download
@@ -153,3 +154,14 @@ uv run python -m ml.asr.train_whisper_small \
 ```
 
 Set `model.pretrained_model` to start from an existing local model directory, such as a previous run's `final` or `best` directory. Leave it empty to start from `model.name`, which defaults to `openai/whisper-small`.
+
+## Whisper-small Evaluation
+
+Run a saved Whisper-small checkpoint on the configured dataset `test.tsv` files. Outputs include `metrics.json`, `predictions.jsonl`, the effective config, logs, and a source manifest:
+
+```bash
+uv run python -m ml.asr.eval_whisper_small \
+  --config configs/whisper_small_eval.yaml
+```
+
+Set `model.checkpoint` to the local model/checkpoint path to evaluate. If that directory does not include processor/tokenizer files, set `model.processor` to the matching saved model directory or base model id. Set `data.datasets` to the dataset directories whose `test.tsv` files should be evaluated.

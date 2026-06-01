@@ -188,13 +188,13 @@ def resolve_dataset_dir(root_dir: Path, dataset_name: str) -> Path:
     return root_dir / dataset_path
 
 
-def validate_dataset_dir(dataset_dir: Path) -> None:
+def validate_dataset_dir(dataset_dir: Path, required_splits: tuple[str, ...] = ("train", "dev")) -> None:
     if not dataset_dir.is_dir():
         raise FileNotFoundError(f"dataset directory does not exist: {dataset_dir}")
-    if not (dataset_dir / "train.tsv").is_file():
-        raise FileNotFoundError(f"dataset is missing train.tsv: {dataset_dir}")
-    if not (dataset_dir / "dev.tsv").is_file():
-        raise FileNotFoundError(f"dataset is missing dev.tsv: {dataset_dir}")
+    for split in required_splits:
+        split_name = split if split.endswith(".tsv") else f"{split}.tsv"
+        if not (dataset_dir / split_name).is_file():
+            raise FileNotFoundError(f"dataset is missing {split_name}: {dataset_dir}")
     if not (dataset_dir / "clips").is_dir():
         raise FileNotFoundError(f"dataset is missing clips/: {dataset_dir}")
 
@@ -225,7 +225,7 @@ def load_split_examples(dataset_dirs: list[Path], split: str) -> list[WhisperExa
     examples: list[WhisperExample] = []
     for dataset_dir in dataset_dirs:
         logging.info("validating dataset=%s split=%s", dataset_dir, split)
-        validate_dataset_dir(dataset_dir)
+        validate_dataset_dir(dataset_dir, (split,))
         split_path = dataset_dir / f"{split}.tsv"
         rows = iter_tsv_rows(split_path)
         logging.info("loading %s rows from %s", len(rows), split_path)

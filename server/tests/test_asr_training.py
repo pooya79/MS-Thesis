@@ -22,6 +22,11 @@ from ml.asr.train_whisper_small import (
     resolve_dataset_dirs,
     word_error_rate,
 )
+from ml.asr.eval_whisper_small import (
+    load_eval_config,
+    resolve_output_dir,
+    resolve_processor_source,
+)
 
 
 def write_yaml(path: Path, payload: dict) -> None:
@@ -53,6 +58,18 @@ def write_audio_dataset(root: Path, name: str) -> Path:
             writer = csv.DictWriter(handle, fieldnames=["path", "sentence"], delimiter="\t", lineterminator="\n")
             writer.writeheader()
             writer.writerow({"path": f"{split}.wav", "sentence": f"{split} text"})
+    return dataset_dir
+
+
+def write_test_only_dataset(root: Path, name: str) -> Path:
+    dataset_dir = root / name
+    clips_dir = dataset_dir / "clips"
+    clips_dir.mkdir(parents=True)
+    (clips_dir / "test.wav").write_bytes(b"audio")
+    with (dataset_dir / "test.tsv").open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["path", "sentence"], delimiter="\t", lineterminator="\n")
+        writer.writeheader()
+        writer.writerow({"path": "test.wav", "sentence": "test text"})
     return dataset_dir
 
 
@@ -217,6 +234,58 @@ def test_load_split_examples_reads_train_and_dev_tsv_from_dataset_dirs(tmp_path:
     assert train_examples[0].transcript == "train text"
     assert dev_examples[0].audio_path == (dataset_dir / "clips" / "dev.wav").resolve()
     assert dev_examples[0].transcript == "dev text"
+
+
+def test_load_split_examples_reads_test_tsv_without_train_or_dev(tmp_path: Path) -> None:
+    dataset_dir = write_test_only_dataset(tmp_path / "data", "cv-test")
+
+    test_examples = load_split_examples([dataset_dir], "test")
+
+    assert test_examples[0].audio_path == (dataset_dir / "clips" / "test.wav").resolve()
+    assert test_examples[0].transcript == "test text"
+
+
+def test_load_eval_config_merges_yaml_with_defaults_and_resolves_processor(tmp_path: Path) -> None:
+    checkpoint = tmp_path / "runs" / "run-1" / "final"
+    processor = tmp_path / "runs" / "run-1" / "processor"
+    checkpoint.mkdir(parents=True)
+    processor.mkdir(parents=True)
+    config_path = tmp_path / "configs" / "eval.yaml"
+    config_path.parent.mkdir()
+    write_yaml(
+        config_path,
+        {
+            "model": {
+                "checkpoint": "../runs/run-1/final",
+                "processor": "../runs/run-1/processor",
+            },
+            "data": {
+                "root_dir": str(tmp_path / "data"),
+                "datasets": ["cv-test"],
+            },
+            "eval": {
+                "output_dir": str(tmp_path / "evals"),
+                "name": "smoke",
+                "batch_size": 2,
+            },
+        },
+    )
+
+    config = load_eval_config(config_path)
+
+    assert config["data"]["split"] == "test"
+    assert config["eval"]["generation_max_length"] == 225
+    assert resolve_output_dir(config) == tmp_path / "evals" / "smoke"
+    assert resolve_processor_source(config["model"]["processor"], config_path) == str(processor.resolve())
+    assert resolve_processor_source("openai/whisper-small", config_path) == "openai/whisper-small"
+
+
+def test_load_eval_config_requires_checkpoint(tmp_path: Path) -> None:
+    config_path = tmp_path / "eval.yaml"
+    write_yaml(config_path, {"data": {"datasets": ["cv-test"]}})
+
+    with pytest.raises(ValueError, match="model.checkpoint"):
+        load_eval_config(config_path)
 
 
 def test_whisper_dataset_computes_features_in_getitem(tmp_path: Path) -> None:
