@@ -10,6 +10,7 @@ import pytest
 import soundfile as sf
 
 from ml.speech_data.generate_degraded_pairs import apply_decoded_waveform_dropout, codec_roundtrip, generate_from_config
+from ml.speech_data.scripts.generate_random_degraded_clip import generate_random_degraded_clip
 from ml.speech_data.inspect_manifest import inspect_manifest
 from ml.utils.audio import bandpass_filter, load_audio, peak_safety_normalize, resample_audio
 from ml.utils.seed import stable_seed
@@ -154,6 +155,89 @@ def test_generate_degraded_pairs_records_selected_profile(tmp_path: Path) -> Non
 
     inspection = inspect_manifest(train_manifest)
     assert inspection["distributions"]["profile"] == {"unit_profile": 1}
+
+
+def test_generate_random_degraded_clip_writes_demo_variants(tmp_path: Path) -> None:
+    input_root = tmp_path / "data"
+    clips_dir = input_root / "clips"
+    clips_dir.mkdir(parents=True)
+    sample_rate = 16000
+    t = np.linspace(0, 0.25, sample_rate // 4, endpoint=False, dtype=np.float32)
+    audio = (0.2 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
+    sf.write(clips_dir / "source.wav", audio, sample_rate)
+
+    config_path = tmp_path / "degradation.yaml"
+    config_path.write_text(
+        """
+seed: 1
+model_sample_rate: 16000
+working_sample_rate: 16000
+rir_index: null
+noise_index: null
+reverb:
+  severe:
+    probability: 0.0
+    wet_mix: [0.6, 0.8]
+    dr_db: [6, 10]
+  mild:
+    probability: 0.0
+    wet_mix: [0.3, 0.5]
+    dr_db: [12, 18]
+noise:
+  probability: 0.0
+  second_scene_probability: 0.0
+  snr_buckets:
+    - [0, 1]
+level:
+  gain_db: [0, 0]
+  clipping:
+    enabled: false
+  agc:
+    enabled: false
+channel:
+  narrowband:
+    bandpass_hz: [300, 3400]
+  wideband:
+    bandpass_hz: [50, 7000]
+    filter_target: false
+  pass_through_path_distribution:
+    - path: wideband
+      weight: 1.0
+codec_distribution:
+  - codec: pass_through
+    weight: 1.0
+network_impairment:
+  enabled: false
+  probability: 0.0
+  loss_rate_buckets:
+    - [0.0, 0.0]
+  burst_length: [1, 1]
+  frame_ms: 20
+""",
+        encoding="utf-8",
+    )
+
+    report = generate_random_degraded_clip(
+        config_path=config_path,
+        input_root=input_root,
+        output_dir=tmp_path / "demo_out",
+        variants=3,
+        seed=42,
+    )
+
+    assert report["selected_audio"] == str(clips_dir / "source.wav")
+    manifest_path = Path(str(report["manifest"]))
+    rows = [json.loads(line) for line in manifest_path.read_text(encoding="utf-8").splitlines()]
+    assert len(rows) == 3
+    assert len(report["degraded_paths"]) == 3
+    assert {row["split"] for row in rows} == {"demo"}
+    assert {row["codec"] for row in rows} == {"pass_through"}
+
+    for row in rows:
+        clean, clean_sr = load_audio(row["clean_path"])
+        degraded, degraded_sr = load_audio(row["degraded_path"])
+        assert clean_sr == degraded_sr == 16000
+        assert len(clean) == len(degraded)
 
 
 def test_decoded_waveform_dropout_reports_observed_loss() -> None:

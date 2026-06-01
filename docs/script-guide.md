@@ -7,6 +7,7 @@ uv run python -m ml.speech_data.scripts.download_common_voice_fa --help
 uv run python -m ml.speech_data.scripts.download_fleurs_persian --help
 uv run python -m ml.speech_data.scripts.prepare_common_voice_25 --help
 uv run python -m ml.speech_data.scripts.prepare_fleurs_persian --help
+uv run python -m ml.speech_data.scripts.generate_random_degraded_clip --help
 uv run python -m ml.speech_data.generate_degraded_pairs --help
 uv run python -m ml.speech_data.inspect_manifest --help
 uv run python -m ml.asr.train_whisper_small --help
@@ -63,6 +64,20 @@ uv run python -m ml.speech_data.generate_degraded_pairs \
 
 See `docs/speech-degradation-pipeline.md` for the full degradation chain, profile
 semantics, metadata fields, and known limitations.
+
+## Random Degraded Clip Demo
+
+Generate several degraded variants of one random readable audio clip found under `data/`.
+The output folder contains the selected clean target, degraded WAV files, a JSONL manifest,
+and a JSON report:
+
+```bash
+uv run python -m ml.speech_data.scripts.generate_random_degraded_clip \
+  --input-root data \
+  --output-dir data/speech_enhancement/random_clip_degradations \
+  --variants 8 \
+  --seed 1337
+```
 
 ## Manifest Inspection
 

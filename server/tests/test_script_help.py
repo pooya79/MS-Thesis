@@ -10,6 +10,7 @@ SCRIPT_MODULES = [
     "ml.speech_data.scripts.download_fleurs_persian",
     "ml.speech_data.scripts.prepare_common_voice_25",
     "ml.speech_data.scripts.prepare_fleurs_persian",
+    "ml.speech_data.scripts.generate_random_degraded_clip",
     "ml.speech_data.generate_degraded_pairs",
     "ml.speech_data.inspect_manifest",
     "ml.asr.train_whisper_small",
