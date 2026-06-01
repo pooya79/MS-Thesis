@@ -1,6 +1,6 @@
 model:
   checkpoint: models/asr/whisper-small/runs/whisper-small-fa/final
-  processor:
+  processor: openai/whisper-small
   language: Persian
   task: transcribe
 

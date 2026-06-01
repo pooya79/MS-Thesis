@@ -24,7 +24,7 @@ from ml.asr.train_whisper_small import (
 DEFAULT_EVAL_CONFIG: dict[str, Any] = {
     "model": {
         "checkpoint": None,
-        "processor": None,
+        "processor": "openai/whisper-small",
         "language": "Persian",
         "task": "transcribe",
     },
@@ -187,14 +187,25 @@ def run_evaluation(config_path: Path, output_dir_override: Path | None = None) -
     data_config = config["data"]
     checkpoint = resolve_existing_path(str(model_config["checkpoint"]), config_path)
     processor_source = model_config.get("processor")
-    processor_name = resolve_processor_source(str(processor_source), config_path) if processor_source else str(checkpoint)
+    processor_name = resolve_processor_source(
+        str(processor_source or DEFAULT_EVAL_CONFIG["model"]["processor"]),
+        config_path,
+    )
 
     logging.info("loading processor=%s checkpoint=%s", processor_name, checkpoint)
-    processor = WhisperProcessor.from_pretrained(
-        processor_name,
-        language=str(model_config.get("language", "Persian")),
-        task=str(model_config.get("task", "transcribe")),
-    )
+    try:
+        processor = WhisperProcessor.from_pretrained(
+            processor_name,
+            language=str(model_config.get("language", "Persian")),
+            task=str(model_config.get("task", "transcribe")),
+        )
+    except (OSError, TypeError, ValueError) as exc:
+        raise RuntimeError(
+            "Could not load the Whisper processor. If model.checkpoint points to a "
+            "Trainer checkpoint such as checkpoints/checkpoint-20000, set "
+            "model.processor to openai/whisper-small or to a saved final/best model "
+            "directory that includes tokenizer and processor files."
+        ) from exc
     model = WhisperForConditionalGeneration.from_pretrained(str(checkpoint))
     model.config.forced_decoder_ids = None
     model.config.suppress_tokens = []

@@ -164,4 +164,4 @@ uv run python -m ml.asr.eval_whisper_small \
   --config configs/whisper_small_eval.yaml
 ```
 
-Set `model.checkpoint` to the local model/checkpoint path to evaluate. If that directory does not include processor/tokenizer files, set `model.processor` to the matching saved model directory or base model id. Set `data.datasets` to the dataset directories whose `test.tsv` files should be evaluated.
+Set `model.checkpoint` to the local model/checkpoint path to evaluate. `model.processor` defaults to `openai/whisper-small`; point it at a saved `final`/`best` model directory only if you intentionally changed processor/tokenizer files. Set `data.datasets` to the dataset directories whose `test.tsv` files should be evaluated.
