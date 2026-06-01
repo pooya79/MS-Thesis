@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -11,7 +12,13 @@ import pytest
 import soundfile as sf
 
 from ml.speech_data.generate_degraded_dataset import generate_degraded_dataset
-from ml.speech_data.generate_degraded_pairs import apply_decoded_waveform_dropout, codec_roundtrip, generate_from_config
+from ml.speech_data.generate_degraded_pairs import (
+    apply_decoded_waveform_dropout,
+    codec_roundtrip,
+    ffmpeg_encoder_candidates,
+    generate_from_config,
+    resolve_ffmpeg_encoder,
+)
 from ml.speech_data.scripts.generate_random_degraded_clip import generate_random_degraded_clip
 from ml.speech_data.inspect_manifest import inspect_manifest
 from ml.utils.audio import bandpass_filter, load_audio, peak_safety_normalize, resample_audio
@@ -342,11 +349,27 @@ def test_decoded_waveform_dropout_reports_observed_loss() -> None:
 
 
 def test_ffmpeg_available_for_configured_codecs() -> None:
-    ffmpeg = subprocess.run(["ffmpeg", "-hide_banner", "-codecs"], text=True, capture_output=True, check=True)
+    ffmpeg = subprocess.run(["ffmpeg", "-hide_banner", "-encoders"], text=True, capture_output=True, check=True)
     output = ffmpeg.stdout + ffmpeg.stderr
-    for codec in ("libopencore_amrnb", "libvo_amrwbenc", "libgsm", "libopus", "pcm_alaw"):
-        if codec not in output:
-            pytest.skip(f"ffmpeg codec {codec} is not available in this environment")
+    expected_encoders = {
+        "amr_nb_12k2": ["libopencore_amrnb"],
+        "amr_wb_12k65": ["libvo_amrwbenc"],
+        "gsm": ffmpeg_encoder_candidates("gsm"),
+        "opus": ["libopus"],
+        "g711_alaw": ["pcm_alaw"],
+    }
+    available_names = set(re.findall(r"[A-Za-z0-9_]+", output))
+    for codec, encoders in expected_encoders.items():
+        if not any(encoder in available_names for encoder in encoders):
+            pytest.skip(f"ffmpeg codec {codec} ({' or '.join(encoders)}) is not available in this environment")
+
+
+def test_gsm_accepts_libgsm_or_native_encoder_name() -> None:
+    assert ffmpeg_encoder_candidates("gsm") == ["libgsm", "gsm"]
+    assert resolve_ffmpeg_encoder("gsm", "encoders: gsm") == "gsm"
+    assert resolve_ffmpeg_encoder("gsm", "encoders: libgsm gsm") == "libgsm"
+    assert resolve_ffmpeg_encoder("gsm", "encoders: libgsm_ms") is None
+    assert resolve_ffmpeg_encoder("gsm", "encoders: pcm_alaw") is None
 
 
 @pytest.mark.parametrize(

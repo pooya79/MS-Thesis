@@ -19,7 +19,7 @@ The degradation pipeline checks encoder availability before generation. The curr
 
 - `pcm_alaw`
 - `pcm_mulaw`
-- `libgsm`
+- `libgsm` for GSM 06.10 encoding (`gsm` is also accepted if exposed by your ffmpeg build)
 - `libopencore_amrnb`
 - `libvo_amrwbenc`
 - `libopus`

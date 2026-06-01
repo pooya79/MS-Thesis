@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import re
 import shutil
@@ -33,7 +34,7 @@ CODECS: dict[str, dict[str, Any]] = {
     "pass_through": {"ffmpeg": None, "extension": None},
     "g711_alaw": {"ffmpeg": "pcm_alaw", "extension": ".wav"},
     "g711_mulaw": {"ffmpeg": "pcm_mulaw", "extension": ".wav"},
-    "gsm": {"ffmpeg": "libgsm", "extension": ".gsm"},
+    "gsm": {"ffmpeg": ["libgsm", "gsm"], "extension": ".gsm"},
     "amr_nb_12k2": {"ffmpeg": "libopencore_amrnb", "extension": ".amr", "bitrate": "12.2k"},
     "amr_wb_12k65": {"ffmpeg": "libvo_amrwbenc", "extension": ".amr", "bitrate": "12.65k"},
     "opus_nb": {"ffmpeg": "libopus", "extension": ".ogg", "bitrate": "16k"},
@@ -156,6 +157,31 @@ def configured_codec_entries(config: dict[str, Any]) -> list[dict[str, Any]]:
     return entries
 
 
+def ffmpeg_encoder_candidates(codec: str) -> list[str]:
+    encoder = CODECS[codec]["ffmpeg"]
+    if encoder is None:
+        return []
+    if isinstance(encoder, list):
+        return [str(candidate) for candidate in encoder]
+    return [str(encoder)]
+
+
+@functools.cache
+def ffmpeg_encoder_listing() -> str:
+    encoder_output = subprocess.run(["ffmpeg", "-hide_banner", "-encoders"], text=True, capture_output=True, check=True)
+    return encoder_output.stdout + encoder_output.stderr
+
+
+def resolve_ffmpeg_encoder(codec: str, available_encoders: str | None = None) -> str | None:
+    candidates = ffmpeg_encoder_candidates(codec)
+    if not candidates:
+        return None
+    if available_encoders is None:
+        available_encoders = ffmpeg_encoder_listing()
+    available_names = set(re.findall(r"[A-Za-z0-9_]+", available_encoders))
+    return next((candidate for candidate in candidates if candidate in available_names), None)
+
+
 def require_ffmpeg_codecs(config: dict[str, Any]) -> None:
     selected_codecs = {entry["codec"] for entry in configured_codec_entries(config) if entry["codec"] != "pass_through"}
     if not selected_codecs:
@@ -165,12 +191,11 @@ def require_ffmpeg_codecs(config: dict[str, Any]) -> None:
     missing = sorted(codec for codec in selected_codecs if codec not in CODECS)
     if missing:
         raise ValueError(f"unsupported codec names in config: {missing}")
-    codec_output = subprocess.run(["ffmpeg", "-hide_banner", "-codecs"], text=True, capture_output=True, check=True)
-    available = codec_output.stdout + codec_output.stderr
+    available = ffmpeg_encoder_listing()
     missing_encoders = sorted(
-        f"{codec} ({CODECS[codec]['ffmpeg']})"
+        f"{codec} ({' or '.join(ffmpeg_encoder_candidates(codec))})"
         for codec in selected_codecs
-        if str(CODECS[codec]["ffmpeg"]) not in available
+        if resolve_ffmpeg_encoder(codec, available) is None
     )
     if missing_encoders:
         raise RuntimeError(f"ffmpeg is missing required encoders: {missing_encoders}")
@@ -191,7 +216,8 @@ def codec_roundtrip(
     frame_duration_ms: int | None = None,
 ) -> np.ndarray:
     spec = CODECS[codec]
-    if spec["ffmpeg"] is None:
+    encoder = resolve_ffmpeg_encoder(codec)
+    if encoder is None:
         return np.asarray(audio, dtype=np.float32)
     with tempfile.TemporaryDirectory(prefix="degrade_codec_") as tmp:
         tmp_path = Path(tmp)
@@ -212,12 +238,12 @@ def codec_roundtrip(
             "-ac",
             "1",
             "-c:a",
-            str(spec["ffmpeg"]),
+            encoder,
         ]
         selected_bitrate = bitrate or spec.get("bitrate")
         if selected_bitrate:
             encode_cmd.extend(["-b:a", str(selected_bitrate)])
-        if spec["ffmpeg"] == "libopus" and frame_duration_ms is not None:
+        if encoder == "libopus" and frame_duration_ms is not None:
             encode_cmd.extend(["-frame_duration", str(frame_duration_ms)])
         encode_cmd.append(str(encoded_path))
         decode_cmd = [
