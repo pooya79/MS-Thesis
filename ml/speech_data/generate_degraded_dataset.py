@@ -182,7 +182,6 @@ def generate_degraded_dataset(config: dict[str, Any]) -> dict[str, Any]:
     degradation_config["manifests"].setdefault("valid", "__unused_valid__.jsonl")
 
     config_base = Path.cwd()
-    rir_assets = load_asset_index(resolve_path(degradation_config.get("rir_index"), config_base))
     noise_assets = load_asset_index(resolve_path(degradation_config.get("noise_index"), config_base))
 
     mapping_rows: list[dict[str, Any]] = []
@@ -205,7 +204,6 @@ def generate_degraded_dataset(config: dict[str, Any]) -> dict[str, Any]:
                         item,
                         variant_index,
                         degradation_config,
-                        rir_assets,
                         noise_assets,
                     )
                 except sf.LibsndfileError as exc:

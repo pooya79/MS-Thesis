@@ -45,7 +45,6 @@ def test_speech_degradation_page_renders_for_authenticated_user() -> None:
     assert "/static/css/speech_degradation.css" in response.text
     assert "/static/js/speech_degradation.js" in response.text
     assert "Generate degraded pair" in response.text
-    assert "RIR convolution" in response.text
     assert "DEMAND noise" in response.text
     assert "narrowband" in response.text
     assert "wideband" in response.text
@@ -73,7 +72,6 @@ def test_speech_degradation_generation_creates_session_files(tmp_path: Path, mon
         response = client.post(
             "/experiments/speech-degradation/generate",
             data={
-                "reverb_mode": "disabled",
                 "snr_bucket": "5:10",
                 "gain_db": "0",
                 "channel_path": "wideband",
@@ -108,31 +106,6 @@ def test_speech_degradation_generation_creates_session_files(tmp_path: Path, mon
     assert file_response.status_code == 200
     assert file_response.headers["content-type"].startswith("audio/wav")
 
-
-def test_rir_enabled_without_assets_returns_helpful_error(tmp_path: Path, monkeypatch) -> None:
-    from server.app.services import speech_degradation_demo as demo_service
-
-    monkeypatch.setattr(demo_service, "DEMO_ROOT", tmp_path / "demos")
-
-    with TestClient(app) as client:
-        login(client)
-        response = client.post(
-            "/experiments/speech-degradation/generate",
-            data={
-                "reverb_mode": "mild",
-                "snr_bucket": "5:10",
-                "gain_db": "0",
-                "channel_path": "wideband",
-                "codec": "pass_through",
-            },
-            files={"audio_file": ("clean.wav", wav_bytes(), "audio/wav")},
-        )
-
-    assert response.status_code == 400
-    assert "RIR is enabled" in response.text
-    assert "Disable" in response.text
-
-
 def test_noise_enabled_without_assets_returns_helpful_error(tmp_path: Path, monkeypatch) -> None:
     from server.app.services import speech_degradation_demo as demo_service
 
@@ -143,7 +116,6 @@ def test_noise_enabled_without_assets_returns_helpful_error(tmp_path: Path, monk
         response = client.post(
             "/experiments/speech-degradation/generate",
             data={
-                "reverb_mode": "disabled",
                 "noise_enabled": "1",
                 "snr_bucket": "5:10",
                 "gain_db": "0",
@@ -155,7 +127,7 @@ def test_noise_enabled_without_assets_returns_helpful_error(tmp_path: Path, monk
 
     assert response.status_code == 400
     assert "Noise is enabled" in response.text
-    assert "Disable" in response.text
+    assert "asset index" in response.text
 
 
 def test_unsupported_upload_extension_returns_error(tmp_path: Path, monkeypatch) -> None:
@@ -168,7 +140,6 @@ def test_unsupported_upload_extension_returns_error(tmp_path: Path, monkeypatch)
         response = client.post(
             "/experiments/speech-degradation/generate",
             data={
-                "reverb_mode": "disabled",
                 "snr_bucket": "5:10",
                 "gain_db": "0",
                 "channel_path": "wideband",
@@ -191,7 +162,6 @@ def test_too_long_upload_returns_error(tmp_path: Path, monkeypatch) -> None:
         response = client.post(
             "/experiments/speech-degradation/generate",
             data={
-                "reverb_mode": "disabled",
                 "snr_bucket": "5:10",
                 "gain_db": "0",
                 "channel_path": "wideband",

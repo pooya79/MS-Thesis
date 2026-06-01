@@ -96,11 +96,10 @@ def generate_random_degraded_clip(
 
     require_ffmpeg_codecs(config)
     config_base = Path.cwd()
-    rir_assets = load_optional_assets(config, "rir_index", config_base)
     noise_assets = load_optional_assets(config, "noise_index", config_base)
 
     item = ManifestItem(id=selected_audio.stem, split="demo", clean_path=selected_audio)
-    rows = [process_item(item, variant_index, config, rir_assets, noise_assets) for variant_index in range(variants)]
+    rows = [process_item(item, variant_index, config, noise_assets) for variant_index in range(variants)]
 
     manifest_dir = run_dir / "manifests"
     manifest_path = manifest_dir / "random_demo_pairs.jsonl"

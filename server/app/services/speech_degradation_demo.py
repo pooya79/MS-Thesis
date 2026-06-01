@@ -116,25 +116,6 @@ def load_base_config() -> dict[str, Any]:
     return default_config({})
 
 
-def fixed_reverb_config(mode: str) -> dict[str, Any]:
-    if mode == "disabled":
-        return {
-            "severe": {"probability": 0.0, "wet_mix": [0.6, 0.8], "dr_db": [6, 10]},
-            "mild": {"probability": 0.0, "wet_mix": [0.3, 0.5], "dr_db": [12, 18]},
-        }
-    if mode == "mild":
-        return {
-            "severe": {"probability": 0.0, "wet_mix": [0.6, 0.8], "dr_db": [6, 10]},
-            "mild": {"probability": 1.0, "wet_mix": [0.4, 0.4], "dr_db": [15, 15]},
-        }
-    if mode == "severe":
-        return {
-            "severe": {"probability": 1.0, "wet_mix": [0.7, 0.7], "dr_db": [8, 8]},
-            "mild": {"probability": 0.0, "wet_mix": [0.3, 0.5], "dr_db": [12, 18]},
-        }
-    raise DemoValidationError("Choose a valid RIR mode.")
-
-
 def validate_channel_codec(channel_path: str, codec: str) -> None:
     if channel_path == "narrowband" and codec not in NARROWBAND_CODECS:
         raise DemoValidationError("The selected codec is not valid for a narrowband channel.")
@@ -162,7 +143,7 @@ def require_assets(config: dict[str, Any], key: str, effect_name: str) -> list[d
     return assets
 
 
-def build_demo_config(form: dict[str, Any], output_dir: Path) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
+def build_demo_config(form: dict[str, Any], output_dir: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     base_config = load_base_config()
     channel_path = str(form["channel_path"])
     codec = str(form["codec"])
@@ -171,7 +152,6 @@ def build_demo_config(form: dict[str, Any], output_dir: Path) -> tuple[dict[str,
     noise_enabled = bool(form.get("noise_enabled"))
     network_enabled = bool(form.get("network_enabled"))
     clipping_enabled = bool(form.get("clipping_enabled"))
-    reverb_mode = str(form["reverb_mode"])
     gain_db = float(form["gain_db"])
     snr_bounds = [float(value) for value in str(form["snr_bucket"]).split(":")]
     if len(snr_bounds) != 2:
@@ -182,7 +162,6 @@ def build_demo_config(form: dict[str, Any], output_dir: Path) -> tuple[dict[str,
             "seed": int(form.get("seed", 1337)),
             "variants_per_clip": 1,
             "output_dir": str(output_dir),
-            "reverb": fixed_reverb_config(reverb_mode),
             "noise": {
                 "probability": 1.0 if noise_enabled else 0.0,
                 "second_scene_probability": 0.0,
@@ -212,14 +191,12 @@ def build_demo_config(form: dict[str, Any], output_dir: Path) -> tuple[dict[str,
                 "frame_ms": 20,
             },
             "normalization": {"mode": "peak_safety", "peak": 0.99},
-            "rir_index": base_config.get("rir_index"),
             "noise_index": base_config.get("noise_index"),
         }
     )
     require_ffmpeg_codecs(config)
-    rir_assets = require_assets(base_config, "rir_index", "RIR") if reverb_mode != "disabled" else []
     noise_assets = require_assets(base_config, "noise_index", "Noise") if noise_enabled else []
-    return config, rir_assets, noise_assets
+    return config, noise_assets
 
 
 def generate_demo(content: bytes, filename: str, form: dict[str, Any], session_demo_ids: list[str]) -> DemoResult:
@@ -232,9 +209,9 @@ def generate_demo(content: bytes, filename: str, form: dict[str, Any], session_d
         convert_upload_to_wav(content, extension, input_path)
         assert_duration_limit(input_path)
 
-        config, rir_assets, noise_assets = build_demo_config(form, root / "generated")
+        config, noise_assets = build_demo_config(form, root / "generated")
         item = ManifestItem(id="upload", split="demo", clean_path=input_path, transcript=None)
-        metadata = process_item(item, 0, config, rir_assets, noise_assets)
+        metadata = process_item(item, 0, config, noise_assets)
 
         clean_target = root / "clean_target.wav"
         degraded = root / "degraded.wav"
@@ -252,7 +229,6 @@ def generate_demo(content: bytes, filename: str, form: dict[str, Any], session_d
                 "clean_path": str(clean_target),
                 "degraded_path": str(degraded),
                 "ui_parameters": {
-                    "reverb_mode": form["reverb_mode"],
                     "noise_enabled": bool(form.get("noise_enabled")),
                     "gain_db": float(form["gain_db"]),
                     "clipping_enabled": bool(form.get("clipping_enabled")),

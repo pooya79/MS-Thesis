@@ -67,12 +67,7 @@ def test_generate_degraded_pairs_smoke(tmp_path: Path) -> None:
         "variants_per_clip": 2,
         "output_dir": str(tmp_path / "out"),
         "manifests": {"train": str(manifest_dir / "train.jsonl"), "valid": str(manifest_dir / "valid.jsonl")},
-        "rir_index": None,
         "noise_index": None,
-        "reverb": {
-            "severe": {"probability": 0.0, "wet_mix": [0.6, 0.8], "dr_db": [6, 10]},
-            "mild": {"probability": 0.0, "wet_mix": [0.3, 0.5], "dr_db": [12, 18]},
-        },
         "noise": {"probability": 0.0, "second_scene_probability": 0.0, "snr_buckets": [[0, 1]]},
         "level": {"gain_db": [0, 0], "clipping": {"enabled": False}, "agc": {"enabled": False}},
         "codec_distribution": [{"codec": "pass_through", "weight": 1.0}],
@@ -100,6 +95,8 @@ def test_generate_degraded_pairs_smoke(tmp_path: Path) -> None:
         assert len(clean) == len(degraded)
         assert row["channel_path"] == "wideband"
         assert row["codec"] == "pass_through"
+        assert "rir_id" not in row
+        assert "reverb_mode" not in row
 
     inspection = inspect_manifest(train_manifest)
     assert inspection["pairs"] == 2
@@ -128,12 +125,7 @@ def test_generate_degraded_pairs_records_selected_profile(tmp_path: Path) -> Non
         "variants_per_clip": 1,
         "output_dir": str(tmp_path / "out"),
         "manifests": {"train": str(manifest_dir / "train.jsonl"), "valid": str(manifest_dir / "valid.jsonl")},
-        "rir_index": None,
         "noise_index": None,
-        "reverb": {
-            "severe": {"probability": 0.0, "wet_mix": [0.6, 0.8], "dr_db": [6, 10]},
-            "mild": {"probability": 0.0, "wet_mix": [0.3, 0.5], "dr_db": [12, 18]},
-        },
         "noise": {"probability": 0.0, "second_scene_probability": 0.0, "snr_buckets": [[0, 1]]},
         "level": {"gain_db": [0, 0], "clipping": {"enabled": False}, "agc": {"enabled": False}},
         "codec_distribution": [{"codec": "pass_through", "weight": 1.0}],
@@ -194,12 +186,7 @@ def test_generate_degraded_dataset_writes_tsvs_and_mapping(tmp_path: Path) -> No
             "seed": 3,
             "model_sample_rate": 16000,
             "working_sample_rate": 16000,
-            "rir_index": None,
             "noise_index": None,
-            "reverb": {
-                "severe": {"probability": 0.0, "wet_mix": [0.6, 0.8], "dr_db": [6, 10]},
-                "mild": {"probability": 0.0, "wet_mix": [0.3, 0.5], "dr_db": [12, 18]},
-            },
             "noise": {"probability": 0.0, "second_scene_probability": 0.0, "snr_buckets": [[0, 1]]},
             "level": {"gain_db": [0, 0], "clipping": {"enabled": False}, "agc": {"enabled": False}},
             "codec_distribution": [{"codec": "pass_through", "weight": 1.0}],
@@ -261,17 +248,7 @@ def test_generate_random_degraded_clip_writes_demo_variants(tmp_path: Path) -> N
 seed: 1
 model_sample_rate: 16000
 working_sample_rate: 16000
-rir_index: null
 noise_index: null
-reverb:
-  severe:
-    probability: 0.0
-    wet_mix: [0.6, 0.8]
-    dr_db: [6, 10]
-  mild:
-    probability: 0.0
-    wet_mix: [0.3, 0.5]
-    dr_db: [12, 18]
 noise:
   probability: 0.0
   second_scene_probability: 0.0

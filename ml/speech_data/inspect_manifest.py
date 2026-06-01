@@ -25,7 +25,6 @@ def inspect_manifest(path: Path) -> dict[str, Any]:
         "channel_path": Counter(),
         "codec": Counter(),
         "codec_bitrate": Counter(),
-        "reverb_mode": Counter(),
         "network_impairment": Counter(),
         "target_bandwidth": Counter(),
     }

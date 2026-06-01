@@ -37,7 +37,6 @@ def speech_degradation_context(
         "metadata_json": metadata_json,
         "form_values": form_values
         or {
-            "reverb_mode": "disabled",
             "noise_enabled": False,
             "snr_bucket": "5:10",
             "gain_db": "0",
@@ -121,7 +120,6 @@ def speech_degradation_page(request: Request) -> HTMLResponse:
 async def generate_speech_degradation_demo(
     request: Request,
     audio_file: UploadFile = File(...),
-    reverb_mode: str = Form("disabled"),
     noise_enabled: str | None = Form(None),
     snr_bucket: str = Form("5:10"),
     gain_db: str = Form("0"),
@@ -131,7 +129,6 @@ async def generate_speech_degradation_demo(
     network_enabled: str | None = Form(None),
 ) -> HTMLResponse:
     form_values = {
-        "reverb_mode": reverb_mode,
         "noise_enabled": noise_enabled is not None,
         "snr_bucket": snr_bucket,
         "gain_db": gain_db,

@@ -7,15 +7,14 @@ This document explains the paired clean/degraded speech generation pipeline impl
 The pipeline is designed for thesis experiments on Persian speech enhancement and ASR
 robustness under telephone and VoIP-style degradation. It does not claim to be a perfect
 telephony network simulator. It creates reproducible, metadata-rich synthetic pairs that
-separate channel bandwidth, codec artifacts, environmental noise, room coloration, and
-approximate network loss well enough for controlled training and ablation.
+separate channel bandwidth, codec artifacts, environmental noise, and approximate network
+loss well enough for controlled training and ablation.
 
 ## Inputs And Outputs
 
 Inputs:
 
 - Clean train and validation manifests in JSONL format.
-- Optional RIR index JSONL for room impulse responses.
 - Optional noise index JSONL for environmental noise recordings.
 - A YAML degradation config.
 
@@ -75,16 +74,14 @@ audited later.
 ## Profile-Based Generation
 
 The generator first samples a named `profile` from the config. A profile is a weighted set
-of overrides for codec distribution, noise probability, RIR probability, and network
-impairment. This prevents all degradation types from being blended into one opaque global
-distribution.
+of overrides for codec distribution, noise probability, and network impairment. This
+prevents all degradation types from being blended into one opaque global distribution.
 
 Current profiles:
 
 - `telephone_clean`: narrowband telephone codec/channel degradation without additive
-  noise or RIR.
-- `telephone_noisy`: narrowband telephone-style speech with environmental noise and rare
-  room coloration.
+  noise.
+- `telephone_noisy`: narrowband telephone-style speech with environmental noise.
 - `voip_lossy`: Opus/AMR/G.711-style VoIP degradation with frequent bursty decoded
   waveform loss approximation.
 - `mobile_wideband`: wideband mobile or app-call speech with moderate acoustic
@@ -99,7 +96,7 @@ Every manifest row records the selected profile:
 ```
 
 Profiles make the dataset easier to inspect and support thesis ablations such as
-`codec_only`, `codec_noise`, `codec_rir`, and `voip_lossy`.
+`codec_only`, `codec_noise`, and `voip_lossy`.
 
 If a config does not define `profiles`, the generator uses a single `legacy` profile and
 keeps the older global behavior.
@@ -111,31 +108,16 @@ For each clean clip and variant, the generator applies these stages:
 1. Load clean audio as mono.
 2. Resample to the working sample rate.
 3. Sample a profile and merge its overrides into the base config.
-4. Optionally convolve with an RIR.
-5. Optionally mix environmental noise at a sampled SNR.
-6. Apply level variation and optional clipping.
-7. Select channel path and codec.
-8. Resample and band-limit for narrowband or wideband channel simulation.
-9. Apply an ffmpeg codec round-trip.
-10. Optionally apply decoded waveform dropout as a network-loss approximation.
-11. Resample degraded input to the model sample rate.
-12. Normalize peaks for safety.
-13. Create the clean target, with bandwidth alignment for narrowband samples.
-14. Write WAV files and JSONL metadata.
-
-## RIR Stage
-
-RIR convolution models room coloration before the signal reaches the microphone.
-
-The pipeline samples:
-
-- `reverb_mode`: `none`, `mild`, or `severe`.
-- `reverb_wet_mix`.
-- `reverb_dr_db`, recorded for experiment traceability.
-- `rir_id`, when an RIR asset is selected.
-
-The current defaults keep RIR relatively rare because telephone/VoIP simulation should not
-be dominated by dereverberation. Profiles can override the global probabilities.
+4. Optionally mix environmental noise at a sampled SNR.
+5. Apply level variation and optional clipping.
+6. Select channel path and codec.
+7. Resample and band-limit for narrowband or wideband channel simulation.
+8. Apply an ffmpeg codec round-trip.
+9. Optionally apply decoded waveform dropout as a network-loss approximation.
+10. Resample degraded input to the model sample rate.
+11. Normalize peaks for safety.
+12. Create the clean target, with bandwidth alignment for narrowband samples.
+13. Write WAV files and JSONL metadata.
 
 ## Noise Stage
 
@@ -163,8 +145,8 @@ The level stage currently supports:
 - Optional hard clipping.
 - AGC metadata placeholder.
 
-These effects run after RIR/noise and before channel simulation. That order treats them as
-part of the talker/device front end rather than the network channel.
+These effects run after optional noise and before channel simulation. That order treats
+them as part of the talker/device front end rather than the network channel.
 
 Future device-front-end improvements can be added here:
 
@@ -259,8 +241,6 @@ Each output row records the important choices:
   "clean_path": "data/speech_enhancement/pairs/train/clean/train_cv-fa-train-000001_v0.wav",
   "degraded_path": "data/speech_enhancement/pairs/train/degraded/train_cv-fa-train-000001_v0.wav",
   "target_bandwidth": "narrowband",
-  "rir_id": null,
-  "reverb_mode": "none",
   "noise_scenes": ["cafeteria"],
   "noise_ids": ["demand-cafeteria-001"],
   "snr_db": 7.4,
@@ -299,7 +279,6 @@ The inspector reports:
 - Profile distribution.
 - Channel and codec distribution.
 - Codec bitrate distribution.
-- Reverb mode distribution.
 - Network impairment mode distribution.
 - SNR summary.
 - Observed decoded-dropout loss summary.
@@ -316,7 +295,7 @@ Known limitations:
 - There is no jitter buffer, variable delay, duplicate packet, or late-packet model.
 - There is no DTX, comfort noise, sidetone, echo, or acoustic echo cancellation model.
 - AGC is currently metadata-only unless implemented in a future level stage.
-- Noise and RIR assets only reflect the quality and diversity of the indexed corpora.
+- Noise assets only reflect the quality and diversity of the indexed corpora.
 
 The thesis should describe the generated data as telephone/VoIP-inspired synthetic
 degradation, not as real network capture.
@@ -329,9 +308,8 @@ When reporting results, break metrics down by:
 - Codec.
 - Narrowband vs wideband.
 - Noise present vs absent.
-- RIR mode.
 - Network impairment enabled vs disabled.
 - Target bandwidth.
 
 This makes it possible to explain whether a model improves because it handles codec
-coloration, bandwidth limitation, noise, reverberation, or bursty loss.
+coloration, bandwidth limitation, noise, or bursty loss.

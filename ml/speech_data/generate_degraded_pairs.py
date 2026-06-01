@@ -18,7 +18,6 @@ from tqdm import tqdm
 
 from ml.utils.audio import (
     bandpass_filter,
-    convolve_rir,
     load_audio,
     match_length,
     mix_at_snr,
@@ -317,20 +316,6 @@ def sample_codec_parameter(rng: np.random.Generator, value: Any) -> Any:
     return value
 
 
-def choose_reverb(config: dict[str, Any], rng: np.random.Generator) -> tuple[str, float, float | None]:
-    reverb_cfg = config["reverb"]
-    roll = rng.random()
-    severe_probability = float(reverb_cfg["severe"]["probability"])
-    mild_probability = float(reverb_cfg["mild"]["probability"])
-    if roll < severe_probability:
-        wet_mix = sample_uniform(rng, reverb_cfg["severe"]["wet_mix"])
-        return "severe", wet_mix, sample_uniform(rng, reverb_cfg["severe"]["dr_db"])
-    if roll < severe_probability + mild_probability:
-        wet_mix = sample_uniform(rng, reverb_cfg["mild"]["wet_mix"])
-        return "mild", wet_mix, sample_uniform(rng, reverb_cfg["mild"]["dr_db"])
-    return "none", 0.0, None
-
-
 def choose_noise_segment(noise: np.ndarray, length: int, rng: np.random.Generator) -> np.ndarray:
     if len(noise) <= length:
         return repeat_or_crop(noise, length)
@@ -342,10 +327,9 @@ def process_item(
     item: ManifestItem,
     variant_index: int,
     config: dict[str, Any],
-    rir_assets: list[dict[str, Any]],
     noise_assets: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    metadata, clean_target, degraded_model, model_rate = degrade_item(item, variant_index, config, rir_assets, noise_assets)
+    metadata, clean_target, degraded_model, model_rate = degrade_item(item, variant_index, config, noise_assets)
     pair_dir = Path(config["output_dir"]) / "pairs" / item.split
     clean_out = pair_dir / "clean" / f"{metadata['pair_id']}.wav"
     degraded_out = pair_dir / "degraded" / f"{metadata['pair_id']}.wav"
@@ -359,7 +343,6 @@ def degrade_item(
     item: ManifestItem,
     variant_index: int,
     config: dict[str, Any],
-    rir_assets: list[dict[str, Any]],
     noise_assets: list[dict[str, Any]],
 ) -> tuple[dict[str, Any], np.ndarray, np.ndarray, int]:
     seed = stable_seed(int(config["seed"]), item.split, item.id, variant_index)
@@ -380,15 +363,6 @@ def degrade_item(
         "seed": seed,
         "transcript": item.transcript,
     }
-
-    reverb_mode, wet_mix, dr_db = choose_reverb(degradation_config, rng)
-    metadata.update({"rir_id": None, "reverb_mode": reverb_mode, "reverb_wet_mix": wet_mix, "reverb_dr_db": dr_db})
-    if reverb_mode != "none" and rir_assets:
-        rir_asset = rir_assets[int(rng.integers(0, len(rir_assets)))]
-        rir_audio, rir_rate = load_audio(rir_asset["path"])
-        rir_audio = resample_audio(rir_audio, rir_rate, working_rate)
-        degraded = convolve_rir(degraded, rir_audio, wet_mix=wet_mix)
-        metadata["rir_id"] = rir_asset.get("id")
 
     noise_cfg = degradation_config["noise"]
     metadata.update({"noise_scenes": [], "noise_ids": [], "snr_db": None})
@@ -532,12 +506,7 @@ def default_config(config: dict[str, Any]) -> dict[str, Any]:
         "variants_per_clip": 2,
         "output_dir": "data/speech_enhancement",
         "manifests": {},
-        "rir_index": None,
         "noise_index": None,
-        "reverb": {
-            "severe": {"probability": 0.03, "wet_mix": [0.6, 0.8], "dr_db": [6, 10]},
-            "mild": {"probability": 0.15, "wet_mix": [0.3, 0.5], "dr_db": [12, 18]},
-        },
         "noise": {"probability": 0.60, "second_scene_probability": 0.10, "snr_buckets": [[10, 15], [5, 10], [0, 5], [-5, 0]]},
         "level": {"gain_db": [-6, 6], "clipping": {"enabled": False, "probability": 0.1, "mode": "hard", "threshold": [0.8, 0.98]}, "agc": {"enabled": False}},
         "channel": {
@@ -592,10 +561,6 @@ def validate_config(config: dict[str, Any]) -> None:
                 f"profile {profile['name']} pass_through_path",
                 profile["channel"]["pass_through_path_distribution"],
             )
-    severe = float(config["reverb"]["severe"]["probability"])
-    mild = float(config["reverb"]["mild"]["probability"])
-    if severe + mild > 1:
-        raise ValueError("reverb severe + mild probabilities must be <= 1")
     require_ffmpeg_codecs(config)
 
 
@@ -603,7 +568,6 @@ def generate_from_config(config: dict[str, Any]) -> dict[str, Any]:
     config = default_config(config)
     validate_config(config)
     config_base = Path.cwd()
-    rir_assets = load_asset_index(resolve_path(config.get("rir_index"), config_base))
     noise_assets = load_asset_index(resolve_path(config.get("noise_index"), config_base))
     report: dict[str, Any] = {"splits": {}, "skipped": []}
     output_dir = Path(config["output_dir"])
@@ -619,7 +583,7 @@ def generate_from_config(config: dict[str, Any]) -> dict[str, Any]:
         for item in iterator:
             for variant_index in range(int(config["variants_per_clip"])):
                 try:
-                    rows.append(process_item(item, variant_index, config, rir_assets, noise_assets))
+                    rows.append(process_item(item, variant_index, config, noise_assets))
                 except sf.LibsndfileError as exc:
                     report["skipped"].append({"id": item.id, "split": split, "variant_index": variant_index, "error": str(exc)})
         out_manifest = manifest_dir / f"se_{split}_pairs.jsonl"

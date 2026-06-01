@@ -68,7 +68,6 @@ Required input assets:
 
 - General Persian ASR audio-text corpus from the thesis data table, excluding the dedicated telephone data and excluding held-out test/evaluation splits.
 - Clean Persian speech: Common Voice Persian v21 train and validation splits.
-- Room impulse responses: BUT ReverbDB.
 - Background noise: DEMAND 16 kHz release.
 - Base ASR checkpoint: OpenAI Whisper-small.
 - Fine-tuned ASR checkpoint: the Persian-adapted Whisper-small checkpoint produced by Phase 1.
@@ -84,7 +83,6 @@ general_persian_asr_manifest: /path/to/general_persian_asr_train.jsonl
 asr_validation_manifest: /path/to/general_persian_asr_valid.jsonl
 exclude_datasets:
   - telephone
-but_reverbdb_root: /path/to/BUT_ReverbDB
 demand_root: /path/to/DEMAND
 work_dir: data/speech_enhancement
 artifact_dir: artifacts/speech_enhancement
@@ -198,13 +196,12 @@ Manifest row schema:
 }
 ```
 
-### 2. Index Noise and RIR Assets
+### 2. Index Noise Assets
 
 Implement `ml/speech_data/download_noise_assets.py` only if automated download is desired. Otherwise implement an indexing mode that assumes the archives were downloaded manually.
 
 Responsibilities:
 
-- Scan BUT ReverbDB and build a manifest of RIR files.
 - Scan DEMAND and build a manifest of noise files with scene labels.
 - Validate that assets are readable and can be resampled to 16 kHz.
 
@@ -212,7 +209,6 @@ Output:
 
 ```text
 data/speech_enhancement/manifests/
-  rir_index.jsonl
   demand_noise_index.jsonl
 ```
 
@@ -228,27 +224,17 @@ Apply degradations in this order:
 
 1. Load clean audio.
 2. Convert to mono and choose the working source sample rate, usually 16 kHz or higher.
-3. Optional RIR convolution.
-4. Optional environmental/background noise mixing.
-5. Optional talker/device level variation: gain shift, clipping, AGC, or other level effects.
-6. Telephone channel simulation:
+3. Optional environmental/background noise mixing.
+4. Optional talker/device level variation: gain shift, clipping, AGC, or other level effects.
+5. Telephone channel simulation:
    - Narrowband path: resample to 8 kHz, band-limit around 300 to 3400 Hz, then encode/decode with G.711, GSM, AMR-NB, or a similar narrowband codec.
    - Wideband path: keep or resample to 16 kHz, band-limit roughly 50 to 7000 Hz, then encode/decode with AMR-WB, Opus wideband, or a similar wideband codec.
-7. Optional network impairment:
+6. Optional network impairment:
    - Packet loss or burst loss before decoding when the selected codec path supports proper packet-level simulation.
    - Waveform dropout as a simpler approximation when packet-level simulation is unavailable.
-8. Resample the final degraded input to the model input rate, normally 16 kHz.
-9. Apply loudness or peak safety normalization.
-10. Write the degraded input and clean target.
-
-### RIR Simulation
-
-Use total RIR probability `0.18`.
-
-- Severe reverb: probability `0.03`, wet mix `0.6` to `0.8`, D/R `6` to `10` dB.
-- Mild reverb: probability `0.15`, wet mix `0.3` to `0.5`, D/R `12` to `18` dB.
-
-Prefer RIRs with speaker/session labels when available. Normalize the RIR before convolution and keep output length aligned to the clean clip.
+7. Resample the final degraded input to the model input rate, normally 16 kHz.
+8. Apply loudness or peak safety normalization.
+9. Write the degraded input and clean target.
 
 ### Noise Mixing
 
@@ -285,8 +271,8 @@ Keep these effects configurable because aggressive clipping or AGC can easily do
 
 Sample a named degradation profile first, then sample channel path and codec type from that profile. A reasonable profile set is:
 
-- `telephone_clean`: narrowband codec/channel degradation without additive noise or RIR.
-- `telephone_noisy`: narrowband telephone-style speech with environmental noise and rare room coloration.
+- `telephone_clean`: narrowband codec/channel degradation without additive noise.
+- `telephone_noisy`: narrowband telephone-style speech with environmental noise.
 - `voip_lossy`: Opus/AMR/G.711-style degradation with frequent bursty decoded-waveform loss approximation.
 - `mobile_wideband`: wideband mobile or app-call speech with moderate acoustic contamination.
 
@@ -362,8 +348,6 @@ Pair manifest row schema:
   "target_bandwidth": "wideband",
   "model_sample_rate": 16000,
   "duration_sec": 4.18,
-  "rir_id": "rir_...",
-  "reverb_mode": "mild",
   "noise_scenes": ["cafeteria"],
   "snr_db": 4.6,
   "gain_db": -1.2,
@@ -697,7 +681,7 @@ Exit criteria:
 Deliverables:
 
 - Clean Common Voice manifests.
-- RIR and DEMAND indexes.
+- DEMAND noise index.
 - Degraded pair generator.
 - Pair manifests with complete metadata.
 - Inspection report for generated pairs.
@@ -706,7 +690,7 @@ Exit criteria:
 
 - No missing files.
 - Clean and degraded lengths match.
-- Codec, SNR, RIR, and packet-loss distributions match the configured probabilities within reasonable sampling variance.
+- Codec, SNR, and packet-loss distributions match the configured probabilities within reasonable sampling variance.
 
 ### Milestone 3: PrimeK-Net Domain Adaptation
 

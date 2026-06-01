@@ -8,18 +8,7 @@ manifests:
   train: data/speech_enhancement/manifests/clean_train.jsonl
   valid: data/speech_enhancement/manifests/clean_valid.jsonl
 
-rir_index: data/speech_enhancement/manifests/rir_index.jsonl
 noise_index: data/speech_enhancement/manifests/demand_noise_index.jsonl
-
-reverb:
-  severe:
-    probability: 0.03
-    wet_mix: [0.6, 0.8]
-    dr_db: [6, 10]
-  mild:
-    probability: 0.15
-    wet_mix: [0.3, 0.5]
-    dr_db: [12, 18]
 
 noise:
   probability: 0.60
@@ -73,12 +62,7 @@ codec_distribution:
 profiles:
   - name: telephone_clean
     weight: 0.25
-    description: Narrowband codec and channel simulation without additive noise or RIR.
-    reverb:
-      severe:
-        probability: 0.0
-      mild:
-        probability: 0.0
+    description: Narrowband codec and channel simulation without additive noise.
     noise:
       probability: 0.0
     network_impairment:
@@ -95,12 +79,7 @@ profiles:
 
   - name: telephone_noisy
     weight: 0.30
-    description: Narrowband telephone-style speech with environmental noise and rare room coloration.
-    reverb:
-      severe:
-        probability: 0.02
-      mild:
-        probability: 0.08
+    description: Narrowband telephone-style speech with environmental noise.
     noise:
       probability: 0.70
     network_impairment:
@@ -118,11 +97,6 @@ profiles:
   - name: voip_lossy
     weight: 0.25
     description: VoIP-style wideband/narrowband codecs with bursty decoded-waveform loss approximation.
-    reverb:
-      severe:
-        probability: 0.01
-      mild:
-        probability: 0.05
     noise:
       probability: 0.30
     network_impairment:
@@ -146,11 +120,6 @@ profiles:
   - name: mobile_wideband
     weight: 0.20
     description: Mobile and app-call wideband speech with moderate acoustic contamination.
-    reverb:
-      severe:
-        probability: 0.03
-      mild:
-        probability: 0.15
     noise:
       probability: 0.45
     network_impairment:

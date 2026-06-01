@@ -43,13 +43,6 @@
 
           <div class="form-section">
             <h2>Acoustic scene</h2>
-            <label class="field-label" for="reverb_mode">RIR convolution</label>
-            <select id="reverb_mode" name="reverb_mode">
-              <option value="disabled" {% if form_values.reverb_mode == "disabled" %}selected{% endif %}>Disabled</option>
-              <option value="mild" {% if form_values.reverb_mode == "mild" %}selected{% endif %}>Mild room</option>
-              <option value="severe" {% if form_values.reverb_mode == "severe" %}selected{% endif %}>Severe room</option>
-            </select>
-
             <label class="check-row">
               <input type="checkbox" name="noise_enabled" value="1" {% if form_values.noise_enabled %}checked{% endif %} />
               <span>Mix environmental noise from configured noise index</span>
@@ -103,7 +96,7 @@
 
         <div class="form-actions">
           <button type="submit" class="primary-action">Generate degraded pair</button>
-          <p class="field-hint">RIR and noise require configured asset indexes; disable them if assets are not installed.</p>
+          <p class="field-hint">Noise requires a configured asset index; disable it if assets are not installed.</p>
         </div>
       </form>
     </section>
@@ -145,7 +138,6 @@
     <section class="tab-panel" id="tab-pipeline" role="tabpanel" aria-labelledby="tab-pipeline-button" data-tab-panel="pipeline">
       <ol class="pipeline-list">
         <li><strong>Decode upload:</strong> convert the clean file to mono 16 kHz WAV.</li>
-        <li><strong>RIR convolution:</strong> optionally apply mild or severe room response from the configured RIR index.</li>
         <li><strong>DEMAND noise:</strong> optionally mix environmental noise at the selected SNR bucket.</li>
         <li><strong>Level effects:</strong> apply gain shift and optional clipping before channel simulation.</li>
         <li><strong>Telephone channel:</strong> resample and band-limit to narrowband or wideband, then run an ffmpeg codec round-trip.</li>
@@ -157,7 +149,6 @@
 
     <section class="tab-panel" id="tab-parameters" role="tabpanel" aria-labelledby="tab-parameters-button" data-tab-panel="parameters">
       <div class="definition-grid">
-        <article><h2>RIR</h2><p>Room impulse response convolution simulates reverberation before the channel.</p></article>
         <article><h2>Noise</h2><p>Background noise is mixed to a target SNR from the configured noise index.</p></article>
         <article><h2>Narrowband</h2><p>Uses 8 kHz channel audio and a 300-3400 Hz band limit.</p></article>
         <article><h2>Wideband</h2><p>Uses 16 kHz channel audio and a 50-7000 Hz band limit.</p></article>

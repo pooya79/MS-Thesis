@@ -103,15 +103,3 @@ def repeat_or_crop(audio: FloatArray, length: int, start: int = 0) -> FloatArray
         return arr
     start = max(0, min(start, len(arr) - length))
     return np.asarray(arr[start : start + length], dtype=np.float32)
-
-
-def convolve_rir(audio: FloatArray, rir: FloatArray, wet_mix: float) -> FloatArray:
-    if len(rir) == 0:
-        return np.asarray(audio, dtype=np.float32)
-    rir = np.asarray(rir, dtype=np.float32)
-    rir_peak = float(np.max(np.abs(rir)))
-    if rir_peak > 0:
-        rir = rir / rir_peak
-    reverbed = signal.fftconvolve(audio, rir, mode="full")[: len(audio)]
-    reverbed = peak_safety_normalize(reverbed, peak=1.0)
-    return np.asarray((1 - wet_mix) * audio + wet_mix * reverbed, dtype=np.float32)
