@@ -149,8 +149,15 @@ def sample_uniform(rng: np.random.Generator, bounds: list[float] | tuple[float, 
     return float(rng.uniform(low, high))
 
 
+def configured_codec_entries(config: dict[str, Any]) -> list[dict[str, Any]]:
+    entries = list(config["codec_distribution"])
+    for profile in config.get("profiles") or []:
+        entries.extend(profile.get("codec_distribution", []))
+    return entries
+
+
 def require_ffmpeg_codecs(config: dict[str, Any]) -> None:
-    selected_codecs = {entry["codec"] for entry in config["codec_distribution"] if entry["codec"] != "pass_through"}
+    selected_codecs = {entry["codec"] for entry in configured_codec_entries(config) if entry["codec"] != "pass_through"}
     if not selected_codecs:
         return
     if shutil.which("ffmpeg") is None:
@@ -176,7 +183,13 @@ def safe_pair_id(split: str, clip_id: str, variant_index: int) -> str:
     return f"{split}_{safe_clip_id}_v{variant_index}"
 
 
-def codec_roundtrip(audio: np.ndarray, sample_rate: int, codec: str) -> np.ndarray:
+def codec_roundtrip(
+    audio: np.ndarray,
+    sample_rate: int,
+    codec: str,
+    bitrate: str | None = None,
+    frame_duration_ms: int | None = None,
+) -> np.ndarray:
     spec = CODECS[codec]
     if spec["ffmpeg"] is None:
         return np.asarray(audio, dtype=np.float32)
@@ -201,8 +214,11 @@ def codec_roundtrip(audio: np.ndarray, sample_rate: int, codec: str) -> np.ndarr
             "-c:a",
             str(spec["ffmpeg"]),
         ]
-        if "bitrate" in spec:
-            encode_cmd.extend(["-b:a", str(spec["bitrate"])])
+        selected_bitrate = bitrate or spec.get("bitrate")
+        if selected_bitrate:
+            encode_cmd.extend(["-b:a", str(selected_bitrate)])
+        if spec["ffmpeg"] == "libopus" and frame_duration_ms is not None:
+            encode_cmd.extend(["-frame_duration", str(frame_duration_ms)])
         encode_cmd.append(str(encoded_path))
         decode_cmd = [
             "ffmpeg",
@@ -226,29 +242,53 @@ def codec_roundtrip(audio: np.ndarray, sample_rate: int, codec: str) -> np.ndarr
     return np.asarray(decoded, dtype=np.float32)
 
 
-def apply_waveform_dropout(
+def apply_decoded_waveform_dropout(
     audio: np.ndarray,
     sample_rate: int,
     rng: np.random.Generator,
     loss_rate: float,
     burst_length: int,
     frame_ms: int,
-) -> np.ndarray:
+) -> tuple[np.ndarray, int, int]:
     frame_len = max(1, int(round(sample_rate * frame_ms / 1000)))
     output = np.asarray(audio, dtype=np.float32).copy()
     frame_count = int(np.ceil(len(output) / frame_len))
-    drop_probability = min(1.0, max(0.0, loss_rate / max(1, burst_length)))
+    target_loss_rate = min(1.0, max(0.0, loss_rate))
+    if frame_count == 0 or target_loss_rate == 0:
+        return output, 0, frame_count
+    bad_to_good = min(1.0, 1.0 / max(1, burst_length))
+    good_to_bad = min(1.0, (target_loss_rate * bad_to_good) / max(1e-6, 1.0 - target_loss_rate))
     frame = 0
+    in_bad_state = False
+    dropped_frames = 0
     while frame < frame_count:
-        if rng.random() < drop_probability:
-            burst = int(rng.integers(1, max(2, burst_length + 1)))
+        if in_bad_state:
             start = frame * frame_len
-            end = min(len(output), (frame + burst) * frame_len)
+            end = min(len(output), (frame + 1) * frame_len)
             output[start:end] = 0
-            frame += burst
+            dropped_frames += 1
+            in_bad_state = rng.random() >= bad_to_good
         else:
-            frame += 1
-    return output
+            in_bad_state = rng.random() < good_to_bad
+        frame += 1
+    return output, dropped_frames, frame_count
+
+
+def choose_profile(config: dict[str, Any], rng: np.random.Generator) -> tuple[str, dict[str, Any]]:
+    profiles = config.get("profiles") or [{"name": "legacy", "weight": 1.0}]
+    profile = weighted_choice(rng, profiles)
+    profile_name = str(profile.get("name", "unnamed"))
+    overrides = {key: value for key, value in profile.items() if key not in {"name", "weight", "description"}}
+    effective_config = deep_merge({key: value for key, value in config.items() if key != "profiles"}, overrides)
+    return profile_name, effective_config
+
+
+def sample_codec_parameter(rng: np.random.Generator, value: Any) -> Any:
+    if isinstance(value, list):
+        if not value:
+            return None
+        return value[int(rng.integers(0, len(value)))]
+    return value
 
 
 def choose_reverb(config: dict[str, Any], rng: np.random.Generator) -> tuple[str, float, float | None]:
@@ -286,9 +326,11 @@ def process_item(
     clean_original, source_rate = load_audio(item.clean_path)
     clean_working = resample_audio(clean_original, source_rate, working_rate)
     degraded = clean_working.copy()
+    profile_name, degradation_config = choose_profile(config, rng)
     metadata: dict[str, Any] = {
         "pair_id": safe_pair_id(item.split, item.id, variant_index),
         "split": item.split,
+        "profile": profile_name,
         "source_clean_id": item.id,
         "source_clean_path": str(item.clean_path),
         "model_sample_rate": model_rate,
@@ -296,7 +338,7 @@ def process_item(
         "transcript": item.transcript,
     }
 
-    reverb_mode, wet_mix, dr_db = choose_reverb(config, rng)
+    reverb_mode, wet_mix, dr_db = choose_reverb(degradation_config, rng)
     metadata.update({"rir_id": None, "reverb_mode": reverb_mode, "reverb_wet_mix": wet_mix, "reverb_dr_db": dr_db})
     if reverb_mode != "none" and rir_assets:
         rir_asset = rir_assets[int(rng.integers(0, len(rir_assets)))]
@@ -305,7 +347,7 @@ def process_item(
         degraded = convolve_rir(degraded, rir_audio, wet_mix=wet_mix)
         metadata["rir_id"] = rir_asset.get("id")
 
-    noise_cfg = config["noise"]
+    noise_cfg = degradation_config["noise"]
     metadata.update({"noise_scenes": [], "noise_ids": [], "snr_db": None})
     if noise_assets and rng.random() < float(noise_cfg["probability"]):
         scene_count = 2 if rng.random() < float(noise_cfg["second_scene_probability"]) else 1
@@ -323,7 +365,7 @@ def process_item(
         degraded = mix_at_snr(degraded, combined_noise, snr_db=snr_db)
         metadata["snr_db"] = snr_db
 
-    level_cfg = config["level"]
+    level_cfg = degradation_config["level"]
     gain_db = sample_uniform(rng, level_cfg["gain_db"])
     degraded = np.asarray(degraded * (10 ** (gain_db / 20)), dtype=np.float32)
     metadata["gain_db"] = gain_db
@@ -336,28 +378,38 @@ def process_item(
         metadata["clipping"] = {"enabled": True, "mode": clipping_cfg.get("mode", "hard"), "threshold": threshold}
     metadata["agc"] = {"enabled": bool(level_cfg.get("agc", {}).get("enabled", False))}
 
-    codec_entry = weighted_choice(rng, config["codec_distribution"])
+    codec_entry = weighted_choice(rng, degradation_config["codec_distribution"])
     codec = str(codec_entry["codec"])
+    codec_bitrate = sample_codec_parameter(rng, codec_entry.get("bitrate"))
+    codec_frame_duration_ms = sample_codec_parameter(rng, codec_entry.get("frame_duration_ms"))
+    if codec_frame_duration_ms is not None:
+        codec_frame_duration_ms = int(codec_frame_duration_ms)
     if codec in NARROWBAND_CODECS:
         channel_path = "narrowband"
         channel_rate = 8000
-        bandpass_hz = config["channel"]["narrowband"]["bandpass_hz"]
+        bandpass_hz = degradation_config["channel"]["narrowband"]["bandpass_hz"]
     elif codec in WIDEBAND_CODECS:
         channel_path = "wideband"
         channel_rate = 16000
-        bandpass_hz = config["channel"]["wideband"]["bandpass_hz"]
+        bandpass_hz = degradation_config["channel"]["wideband"]["bandpass_hz"]
     else:
-        channel_entry = weighted_choice(rng, config["channel"]["pass_through_path_distribution"])
+        channel_entry = weighted_choice(rng, degradation_config["channel"]["pass_through_path_distribution"])
         channel_path = str(channel_entry["path"])
         channel_rate = 8000 if channel_path == "narrowband" else 16000
-        bandpass_hz = config["channel"][channel_path]["bandpass_hz"]
+        bandpass_hz = degradation_config["channel"][channel_path]["bandpass_hz"]
 
     degraded_channel = resample_audio(degraded, working_rate, channel_rate)
     degraded_channel = bandpass_filter(degraded_channel, channel_rate, float(bandpass_hz[0]), float(bandpass_hz[1]))
-    degraded_channel = codec_roundtrip(degraded_channel, channel_rate, codec)
+    degraded_channel = codec_roundtrip(
+        degraded_channel,
+        channel_rate,
+        codec,
+        bitrate=str(codec_bitrate) if codec_bitrate is not None else None,
+        frame_duration_ms=codec_frame_duration_ms,
+    )
     degraded_channel = match_length(degraded_channel, len(resample_audio(degraded, working_rate, channel_rate)))
 
-    network_cfg = config["network_impairment"]
+    network_cfg = degradation_config["network_impairment"]
     network_enabled = bool(network_cfg.get("enabled", True)) and rng.random() < float(network_cfg["probability"])
     network_metadata = {
         "enabled": network_enabled,
@@ -367,26 +419,35 @@ def process_item(
         "burst_length": None,
         "frame_ms": None,
         "dropout_ms": None,
+        "dropped_frames": None,
+        "total_frames": None,
+        "observed_loss_rate": None,
     }
     if network_enabled:
         loss_bucket = network_cfg["loss_rate_buckets"][int(rng.integers(0, len(network_cfg["loss_rate_buckets"])))]
         loss_rate = sample_uniform(rng, loss_bucket)
         burst_length = int(rng.integers(int(network_cfg["burst_length"][0]), int(network_cfg["burst_length"][1]) + 1))
         frame_ms = int(network_cfg["frame_ms"])
-        degraded_channel = apply_waveform_dropout(degraded_channel, channel_rate, rng, loss_rate, burst_length, frame_ms)
+        degraded_channel, dropped_frames, total_frames = apply_decoded_waveform_dropout(
+            degraded_channel, channel_rate, rng, loss_rate, burst_length, frame_ms
+        )
+        observed_loss_rate = dropped_frames / max(1, total_frames)
         network_metadata = {
             "enabled": True,
-            "mode": "waveform_dropout",
-            "model": "gilbert_elliott_approximation",
+            "mode": "decoded_waveform_dropout",
+            "model": "two_state_burst",
             "loss_rate": loss_rate,
             "burst_length": burst_length,
             "frame_ms": frame_ms,
-            "dropout_ms": burst_length * frame_ms,
+            "dropout_ms": dropped_frames * frame_ms,
+            "dropped_frames": dropped_frames,
+            "total_frames": total_frames,
+            "observed_loss_rate": observed_loss_rate,
         }
 
     degraded_model = resample_audio(degraded_channel, channel_rate, model_rate)
     degraded_model = match_length(degraded_model, int(round(len(clean_working) * model_rate / working_rate)))
-    degraded_model = peak_safety_normalize(degraded_model, peak=float(config["normalization"]["peak"]))
+    degraded_model = peak_safety_normalize(degraded_model, peak=float(degradation_config["normalization"]["peak"]))
 
     clean_target = resample_audio(clean_working, working_rate, model_rate)
     if channel_path == "narrowband":
@@ -394,14 +455,14 @@ def process_item(
         target_channel = bandpass_filter(target_channel, channel_rate, float(bandpass_hz[0]), float(bandpass_hz[1]))
         clean_target = resample_audio(target_channel, channel_rate, model_rate)
         target_bandwidth = "narrowband"
-    elif bool(config["channel"]["wideband"].get("filter_target", False)):
+    elif bool(degradation_config["channel"]["wideband"].get("filter_target", False)):
         target_channel = resample_audio(clean_working, working_rate, channel_rate)
         target_channel = bandpass_filter(target_channel, channel_rate, float(bandpass_hz[0]), float(bandpass_hz[1]))
         clean_target = resample_audio(target_channel, channel_rate, model_rate)
         target_bandwidth = "wideband_filtered"
     else:
         target_bandwidth = "wideband"
-    clean_target = peak_safety_normalize(match_length(clean_target, len(degraded_model)), peak=float(config["normalization"]["peak"]))
+    clean_target = peak_safety_normalize(match_length(clean_target, len(degraded_model)), peak=float(degradation_config["normalization"]["peak"]))
 
     pair_dir = Path(config["output_dir"]) / "pairs" / item.split
     clean_out = pair_dir / "clean" / f"{metadata['pair_id']}.wav"
@@ -419,8 +480,10 @@ def process_item(
             "channel_sample_rate": channel_rate,
             "channel_bandpass_hz": [float(bandpass_hz[0]), float(bandpass_hz[1])],
             "codec": codec,
+            "codec_bitrate": codec_bitrate,
+            "codec_frame_duration_ms": codec_frame_duration_ms,
             "network_impairment": network_metadata,
-            "normalization": config["normalization"]["mode"],
+            "normalization": degradation_config["normalization"]["mode"],
         }
     )
     return metadata
@@ -437,10 +500,10 @@ def default_config(config: dict[str, Any]) -> dict[str, Any]:
         "rir_index": None,
         "noise_index": None,
         "reverb": {
-            "severe": {"probability": 0.10, "wet_mix": [0.6, 0.8], "dr_db": [6, 10]},
-            "mild": {"probability": 0.25, "wet_mix": [0.3, 0.5], "dr_db": [12, 18]},
+            "severe": {"probability": 0.03, "wet_mix": [0.6, 0.8], "dr_db": [6, 10]},
+            "mild": {"probability": 0.15, "wet_mix": [0.3, 0.5], "dr_db": [12, 18]},
         },
-        "noise": {"probability": 0.90, "second_scene_probability": 0.10, "snr_buckets": [[10, 15], [5, 10], [0, 5], [-5, 0]]},
+        "noise": {"probability": 0.60, "second_scene_probability": 0.10, "snr_buckets": [[10, 15], [5, 10], [0, 5], [-5, 0]]},
         "level": {"gain_db": [-6, 6], "clipping": {"enabled": False, "probability": 0.1, "mode": "hard", "threshold": [0.8, 0.98]}, "agc": {"enabled": False}},
         "channel": {
             "narrowband": {"bandpass_hz": [300, 3400]},
@@ -449,12 +512,15 @@ def default_config(config: dict[str, Any]) -> dict[str, Any]:
         },
         "codec_distribution": [
             {"codec": "g711_alaw", "weight": 0.30},
-            {"codec": "amr_wb_12k65", "weight": 0.30},
-            {"codec": "amr_nb_12k2", "weight": 0.20},
+            {"codec": "g711_mulaw", "weight": 0.10},
+            {"codec": "gsm", "weight": 0.10},
+            {"codec": "amr_wb_12k65", "weight": 0.25},
+            {"codec": "amr_nb_12k2", "weight": 0.15},
             {"codec": "opus_wb", "weight": 0.05},
             {"codec": "opus_nb", "weight": 0.05},
             {"codec": "pass_through", "weight": 0.10},
         ],
+        "profiles": None,
         "network_impairment": {"enabled": True, "probability": 0.60, "loss_rate_buckets": [[0.003, 0.02], [0.02, 0.05], [0.05, 0.10]], "burst_length": [1, 5], "frame_ms": 20},
         "normalization": {"mode": "peak_safety", "peak": 0.99},
     }
@@ -478,6 +544,19 @@ def validate_config(config: dict[str, Any]) -> None:
             raise ValueError(f"config.manifests.{split} is required")
     validate_distribution("codec", config["codec_distribution"])
     validate_distribution("pass_through_path", config["channel"]["pass_through_path_distribution"])
+    profiles = config.get("profiles") or []
+    if profiles:
+        validate_distribution("profile", profiles)
+    for index, profile in enumerate(profiles, start=1):
+        if "name" not in profile:
+            raise ValueError(f"profile {index} is missing required key: name")
+        if "codec_distribution" in profile:
+            validate_distribution(f"profile {profile['name']} codec", profile["codec_distribution"])
+        if "channel" in profile and "pass_through_path_distribution" in profile["channel"]:
+            validate_distribution(
+                f"profile {profile['name']} pass_through_path",
+                profile["channel"]["pass_through_path_distribution"],
+            )
     severe = float(config["reverb"]["severe"]["probability"])
     mild = float(config["reverb"]["mild"]["probability"])
     if severe + mild > 1:

@@ -61,6 +61,9 @@ uv run python -m ml.speech_data.generate_degraded_pairs \
   --config configs/speech_enhancement/degradation.yaml
 ```
 
+See `docs/speech-degradation-pipeline.md` for the full degradation chain, profile
+semantics, metadata fields, and known limitations.
+
 ## Manifest Inspection
 
 Inspect a generated speech-enhancement manifest:

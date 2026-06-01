@@ -243,16 +243,16 @@ Apply degradations in this order:
 
 ### RIR Simulation
 
-Use total RIR probability `0.35`.
+Use total RIR probability `0.18`.
 
-- Severe reverb: probability `0.10`, wet mix `0.6` to `0.8`, D/R `6` to `10` dB.
-- Mild reverb: probability `0.25`, wet mix `0.3` to `0.5`, D/R `12` to `18` dB.
+- Severe reverb: probability `0.03`, wet mix `0.6` to `0.8`, D/R `6` to `10` dB.
+- Mild reverb: probability `0.15`, wet mix `0.3` to `0.5`, D/R `12` to `18` dB.
 
 Prefer RIRs with speaker/session labels when available. Normalize the RIR before convolution and keep output length aligned to the clean clip.
 
 ### Noise Mixing
 
-Use noise probability `0.90`.
+Use noise probability `0.60`.
 
 - Choose one DEMAND scene by default.
 - Add a second scene with probability `0.10`.
@@ -283,13 +283,12 @@ Keep these effects configurable because aggressive clipping or AGC can easily do
 
 ### Telephone Channel Simulation
 
-Sample channel path and codec type from a configurable distribution. A reasonable starting distribution is:
+Sample a named degradation profile first, then sample channel path and codec type from that profile. A reasonable profile set is:
 
-- `30%` G.711 A-law.
-- `30%` AMR-WB at 12.65 kb/s.
-- `20%` AMR-NB at 12.2 kb/s or GSM.
-- `10%` Opus, split between narrowband and wideband modes.
-- `10%` pass-through.
+- `telephone_clean`: narrowband codec/channel degradation without additive noise or RIR.
+- `telephone_noisy`: narrowband telephone-style speech with environmental noise and rare room coloration.
+- `voip_lossy`: Opus/AMR/G.711-style degradation with frequent bursty decoded-waveform loss approximation.
+- `mobile_wideband`: wideband mobile or app-call speech with moderate acoustic contamination.
 
 The channel path controls the sample rate and bandwidth:
 
@@ -310,7 +309,7 @@ For narrowband paths, produce a bandwidth-aligned clean target by applying the s
 
 ### Network Impairment
 
-If packet-level simulation is available for the selected codec, apply Gilbert-Elliott packet or burst loss before decoding with probability `0.60`.
+If packet-level simulation is available for the selected codec in a future implementation, apply packet or burst loss before decoding.
 
 Sample packet loss rate from:
 
@@ -318,7 +317,7 @@ Sample packet loss rate from:
 - Medium: `2%` to `5%`.
 - Heavy: `5%` to `10%`.
 
-If packet-level simulation is not available, use waveform dropout as a simpler approximation. The implementation should clearly record which mode was used, plus loss rate, burst parameters, frame size, and dropout duration.
+The current implementation uses decoded waveform dropout as a simpler approximation. It records `mode: decoded_waveform_dropout`, `model: two_state_burst`, target loss rate, observed loss rate, burst parameters, frame size, and dropout duration.
 
 ### Deterministic Seeding
 
@@ -356,6 +355,7 @@ Pair manifest row schema:
 {
   "pair_id": "train_cv-fa-000001_v0",
   "split": "train",
+  "profile": "voip_lossy",
   "source_clean_id": "cv-fa-000001",
   "clean_path": "data/speech_enhancement/pairs/train/clean/train_cv-fa-000001_v0.wav",
   "degraded_path": "data/speech_enhancement/pairs/train/degraded/train_cv-fa-000001_v0.wav",
@@ -378,14 +378,17 @@ Pair manifest row schema:
   "channel_sample_rate": 16000,
   "channel_bandpass_hz": [50, 7000],
   "codec": "amr_wb_12k65",
+  "codec_bitrate": null,
+  "codec_frame_duration_ms": null,
   "network_impairment": {
     "enabled": true,
-    "mode": "packet_loss",
-    "model": "gilbert_elliott",
+    "mode": "decoded_waveform_dropout",
+    "model": "two_state_burst",
     "loss_rate": 0.031,
+    "observed_loss_rate": 0.028,
     "burst_length": 3,
     "frame_ms": 20,
-    "dropout_ms": null
+    "dropout_ms": 120
   },
   "normalization": "peak_safety",
   "seed": 123456789
@@ -399,9 +402,10 @@ Add a lightweight inspection command in `ml/speech_data/inspect_manifest.py` tha
 - Number of pairs per split.
 - Total hours per split.
 - Duration distribution.
+- Profile distribution.
 - Codec distribution.
 - SNR distribution.
-- Packet-loss distribution.
+- Decoded-dropout loss distribution.
 - Count of missing/unreadable files.
 - Count of length mismatches.
 

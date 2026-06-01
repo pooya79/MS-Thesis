@@ -21,8 +21,10 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
 def inspect_manifest(path: Path) -> dict[str, Any]:
     rows = read_jsonl(path)
     counters = {
+        "profile": Counter(),
         "channel_path": Counter(),
         "codec": Counter(),
+        "codec_bitrate": Counter(),
         "reverb_mode": Counter(),
         "network_impairment": Counter(),
         "target_bandwidth": Counter(),
@@ -32,6 +34,7 @@ def inspect_manifest(path: Path) -> dict[str, Any]:
     length_mismatches = 0
     total_duration = 0.0
     snr_values: list[float] = []
+    loss_values: list[float] = []
 
     for row in rows:
         for key, counter in counters.items():
@@ -42,6 +45,9 @@ def inspect_manifest(path: Path) -> dict[str, Any]:
             counter[str(value)] += 1
         if row.get("snr_db") is not None:
             snr_values.append(float(row["snr_db"]))
+        network = row.get("network_impairment") or {}
+        if network.get("observed_loss_rate") is not None:
+            loss_values.append(float(network["observed_loss_rate"]))
         clean_path = Path(row["clean_path"])
         degraded_path = Path(row["degraded_path"])
         if not clean_path.exists() or not degraded_path.exists():
@@ -69,6 +75,12 @@ def inspect_manifest(path: Path) -> dict[str, Any]:
             "min": min(snr_values) if snr_values else None,
             "max": max(snr_values) if snr_values else None,
             "mean": sum(snr_values) / len(snr_values) if snr_values else None,
+        },
+        "observed_loss_rate": {
+            "count": len(loss_values),
+            "min": min(loss_values) if loss_values else None,
+            "max": max(loss_values) if loss_values else None,
+            "mean": sum(loss_values) / len(loss_values) if loss_values else None,
         },
     }
 

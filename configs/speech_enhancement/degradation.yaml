@@ -13,16 +13,16 @@ noise_index: data/speech_enhancement/manifests/demand_noise_index.jsonl
 
 reverb:
   severe:
-    probability: 0.10
+    probability: 0.03
     wet_mix: [0.6, 0.8]
     dr_db: [6, 10]
   mild:
-    probability: 0.25
+    probability: 0.15
     wet_mix: [0.3, 0.5]
     dr_db: [12, 18]
 
 noise:
-  probability: 0.90
+  probability: 0.60
   second_scene_probability: 0.10
   snr_buckets:
     - [10, 15]
@@ -55,16 +55,115 @@ channel:
 codec_distribution:
   - codec: g711_alaw
     weight: 0.30
+  - codec: g711_mulaw
+    weight: 0.10
+  - codec: gsm
+    weight: 0.10
   - codec: amr_wb_12k65
-    weight: 0.30
+    weight: 0.25
   - codec: amr_nb_12k2
-    weight: 0.20
+    weight: 0.15
   - codec: opus_wb
     weight: 0.05
   - codec: opus_nb
     weight: 0.05
   - codec: pass_through
     weight: 0.10
+
+profiles:
+  - name: telephone_clean
+    weight: 0.25
+    description: Narrowband codec and channel simulation without additive noise or RIR.
+    reverb:
+      severe:
+        probability: 0.0
+      mild:
+        probability: 0.0
+    noise:
+      probability: 0.0
+    network_impairment:
+      probability: 0.10
+    codec_distribution:
+      - codec: g711_alaw
+        weight: 0.35
+      - codec: g711_mulaw
+        weight: 0.20
+      - codec: gsm
+        weight: 0.20
+      - codec: amr_nb_12k2
+        weight: 0.25
+
+  - name: telephone_noisy
+    weight: 0.30
+    description: Narrowband telephone-style speech with environmental noise and rare room coloration.
+    reverb:
+      severe:
+        probability: 0.02
+      mild:
+        probability: 0.08
+    noise:
+      probability: 0.70
+    network_impairment:
+      probability: 0.20
+    codec_distribution:
+      - codec: g711_alaw
+        weight: 0.35
+      - codec: g711_mulaw
+        weight: 0.15
+      - codec: gsm
+        weight: 0.20
+      - codec: amr_nb_12k2
+        weight: 0.30
+
+  - name: voip_lossy
+    weight: 0.25
+    description: VoIP-style wideband/narrowband codecs with bursty decoded-waveform loss approximation.
+    reverb:
+      severe:
+        probability: 0.01
+      mild:
+        probability: 0.05
+    noise:
+      probability: 0.30
+    network_impairment:
+      probability: 0.80
+    codec_distribution:
+      - codec: opus_wb
+        weight: 0.45
+        bitrate: [16k, 24k, 32k]
+        frame_duration_ms: [20, 40, 60]
+      - codec: opus_nb
+        weight: 0.20
+        bitrate: [12k, 16k]
+        frame_duration_ms: [20, 40]
+      - codec: amr_wb_12k65
+        weight: 0.20
+      - codec: g711_alaw
+        weight: 0.10
+      - codec: pass_through
+        weight: 0.05
+
+  - name: mobile_wideband
+    weight: 0.20
+    description: Mobile and app-call wideband speech with moderate acoustic contamination.
+    reverb:
+      severe:
+        probability: 0.03
+      mild:
+        probability: 0.15
+    noise:
+      probability: 0.45
+    network_impairment:
+      probability: 0.30
+    codec_distribution:
+      - codec: amr_wb_12k65
+        weight: 0.55
+      - codec: opus_wb
+        weight: 0.30
+        bitrate: [16k, 24k, 32k]
+        frame_duration_ms: [20, 40]
+      - codec: pass_through
+        weight: 0.15
 
 network_impairment:
   enabled: true
