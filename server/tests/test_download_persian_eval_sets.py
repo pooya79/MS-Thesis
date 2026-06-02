@@ -1,78 +1,27 @@
 from __future__ import annotations
 
-import csv
 import io
 import tarfile
 import zipfile
 from pathlib import Path
 
-from ml.speech_data.scripts.download_persian_eval_sets import (
-    DatasetAudit,
-    PreparedRow,
-    build_persian_speech_corpus_rows,
-    build_persian_speech_rows,
-    convert_required_clips,
-    download_google_drive_file,
-    extract_archive,
-    normalize_prepared_rows,
-)
+import pytest
+
+from ml.speech_data.scripts import download_persian_eval_sets as script
 
 
-def read_simple_tsv(path: Path) -> list[dict[str, str]]:
-    with path.open("r", encoding="utf-8", newline="") as handle:
-        return list(csv.DictReader(handle, delimiter="\t"))
+def zip_bytes(filename: str = "file.txt") -> bytes:
+    payload = io.BytesIO()
+    with zipfile.ZipFile(payload, "w") as archive:
+        archive.writestr(filename, "content")
+    return payload.getvalue()
 
 
-def write_minimal_xlsx(path: Path, rows: list[list[str]]) -> None:
-    shared_strings: list[str] = []
-    string_indexes: dict[str, int] = {}
-
-    def shared_index(value: str) -> int:
-        if value not in string_indexes:
-            string_indexes[value] = len(shared_strings)
-            shared_strings.append(value)
-        return string_indexes[value]
-
-    row_xml = []
-    for row_number, row in enumerate(rows, start=1):
-        cells = []
-        for column_number, value in enumerate(row):
-            column_name = chr(ord("A") + column_number)
-            cells.append(f'<c r="{column_name}{row_number}" t="s"><v>{shared_index(value)}</v></c>')
-        row_xml.append(f'<row r="{row_number}">{"".join(cells)}</row>')
-
-    shared_xml = "".join(f"<si><t>{value}</t></si>" for value in shared_strings)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(path, "w") as archive:
-        archive.writestr("[Content_Types].xml", "")
-        archive.writestr(
-            "xl/workbook.xml",
-            '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
-            'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
-            '<sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>',
-        )
-        archive.writestr(
-            "xl/_rels/workbook.xml.rels",
-            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
-            '<Relationship Id="rId1" Type="worksheet" Target="worksheets/sheet1.xml"/></Relationships>',
-        )
-        archive.writestr(
-            "xl/worksheets/sheet1.xml",
-            '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
-            f'<sheetData>{"".join(row_xml)}</sheetData></worksheet>',
-        )
-        archive.writestr(
-            "xl/sharedStrings.xml",
-            '<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
-            f"{shared_xml}</sst>",
-        )
-
-
-def tar_bytes() -> bytes:
+def tar_gz_bytes(filename: str = "clip.wav") -> bytes:
     payload = io.BytesIO()
     with tarfile.open(fileobj=payload, mode="w:gz") as archive:
-        info = tarfile.TarInfo("clip.wav")
         content = b"audio"
+        info = tarfile.TarInfo(filename)
         info.size = len(content)
         archive.addfile(info, io.BytesIO(content))
     return payload.getvalue()
@@ -106,81 +55,47 @@ class FakeOpener:
         return self.responses.pop(0)
 
 
-def test_build_persian_speech_corpus_rows_reads_orthographic_transcript(tmp_path: Path) -> None:
-    source_root = tmp_path / "psc"
-    (source_root / "wav").mkdir(parents=True)
-    (source_root / "wav" / "utt001.wav").write_bytes(b"audio")
-    (source_root / "orthographic-transcript.txt").write_text('"utt001" "خب ، تو چیكار می كنی؟"\n', encoding="utf-8")
+def test_download_public_file_reuses_valid_cached_file(tmp_path: Path) -> None:
+    output_path = tmp_path / "persian-speech-corpus.zip"
+    output_path.write_bytes(zip_bytes())
 
-    rows = build_persian_speech_corpus_rows(source_root)
-    audit = DatasetAudit(source_rows=len(rows))
-    normalized = normalize_prepared_rows(rows, audit)
+    downloaded = script.download_validated_public_file(
+        url="https://example.test/archive.zip",
+        output_path=output_path,
+        validator=script.is_valid_zip,
+        show_progress=False,
+    )
 
-    assert normalized == [PreparedRow(path="psc-utt001.wav", sentence="خب تو چیکار می کنی", source_audio_path=source_root / "wav" / "utt001.wav")]
-    assert audit.normalized_rows == 1
-
-
-def test_build_persian_speech_rows_reads_xlsx_metadata(tmp_path: Path) -> None:
-    source_root = tmp_path / "persian-speech"
-    (source_root / "clips").mkdir(parents=True)
-    (source_root / "clips" / "a.wav").write_bytes(b"audio-a")
-    metadata_path = tmp_path / "myaudio_tiny.xlsx"
-    write_minimal_xlsx(metadata_path, [["file", "text"], ["a.wav", "سلام! «دوست»؛"]])
-
-    rows = build_persian_speech_rows(source_root, metadata_path)
-    audit = DatasetAudit(source_rows=len(rows))
-    normalized = normalize_prepared_rows(rows, audit)
-
-    assert normalized == [PreparedRow(path="ps-a.wav", sentence="سلام دوست", source_audio_path=source_root / "clips" / "a.wav")]
+    assert downloaded.reused_existing is True
+    assert downloaded.bytes_written == output_path.stat().st_size
 
 
-def test_convert_required_clips_writes_clips_directory_and_tsv_shape(tmp_path: Path) -> None:
-    source_root = tmp_path / "source"
-    output_root = tmp_path / "output"
-    source_root.mkdir()
-    (source_root / "a.wav").write_bytes(b"a")
-    rows = [PreparedRow(path="a.wav", sentence="سلام", source_audio_path=source_root / "a.wav")]
-    converted: list[tuple[Path, Path]] = []
+def test_download_public_file_replaces_invalid_cached_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    output_path = tmp_path / "myaudio_tiny.xlsx"
+    output_path.write_text("<html>bad cache</html>", encoding="utf-8")
 
-    def fake_converter(source: Path, output: Path) -> None:
-        converted.append((source, output))
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_bytes(source.read_bytes())
+    def fake_download_url_to_file(
+        url: str,
+        output_path: Path,
+        *,
+        force: bool = False,
+        resume: bool = False,
+        show_progress: bool = True,
+    ) -> int:
+        output_path.write_bytes(zip_bytes("[Content_Types].xml"))
+        return output_path.stat().st_size
 
-    audit = DatasetAudit()
-    from ml.speech_data.scripts.prepare_common_voice_25 import write_split_tsv
+    monkeypatch.setattr(script, "download_url_to_file", fake_download_url_to_file)
 
-    output_root.mkdir()
-    write_split_tsv(output_root / "test.tsv", rows)
-    convert_required_clips(output_root, rows, audit, converter=fake_converter, show_progress=False)
+    downloaded = script.download_validated_public_file(
+        url="https://example.test/myaudio_tiny.xlsx",
+        output_path=output_path,
+        validator=script.is_valid_xlsx,
+        show_progress=False,
+    )
 
-    assert read_simple_tsv(output_root / "test.tsv") == [{"path": "a.wav", "sentence": "سلام"}]
-    assert converted == [(source_root / "a.wav", output_root / "clips" / "a.wav")]
-    assert (output_root / "clips" / "a.wav").read_bytes() == b"a"
-    assert audit.wav_converted == 1
-
-
-def test_extract_archive_rejects_unsafe_zip_member(tmp_path: Path) -> None:
-    archive_path = tmp_path / "bad.zip"
-    with zipfile.ZipFile(archive_path, "w") as archive:
-        archive.writestr("../escape.txt", "bad")
-
-    import pytest
-
-    with pytest.raises(RuntimeError, match="unsafe archive member"):
-        extract_archive(archive_path, tmp_path / "out")
-
-
-def test_download_google_drive_file_redownloads_invalid_cached_file(tmp_path: Path) -> None:
-    output_path = tmp_path / "myaudio_tiny.tar.gz"
-    output_path.write_text("<html>not an archive</html>", encoding="utf-8")
-    opener = FakeOpener([FakeResponse(tar_bytes())])
-
-    bytes_written = download_google_drive_file("https://drive.google.com/uc?export=download&id=file", output_path, opener=opener, show_progress=False)
-
-    assert bytes_written == output_path.stat().st_size
-    assert tarfile.is_tarfile(output_path)
-    assert opener.urls == ["https://drive.google.com/uc?export=download&id=file"]
+    assert downloaded.reused_existing is False
+    assert zipfile.is_zipfile(output_path)
 
 
 def test_download_google_drive_file_follows_confirmation_form(tmp_path: Path) -> None:
@@ -192,9 +107,79 @@ def test_download_google_drive_file_follows_confirmation_form(tmp_path: Path) ->
         '<input type="hidden" name="confirm" value="token">'
         "</form></html>"
     ).encode()
-    opener = FakeOpener([FakeResponse(html), FakeResponse(tar_bytes(), url="https://drive.usercontent.google.com/download")])
+    opener = FakeOpener([FakeResponse(html), FakeResponse(tar_gz_bytes(), url="https://drive.usercontent.google.com/download")])
 
-    download_google_drive_file("https://drive.google.com/uc?export=download&id=file", output_path, opener=opener, show_progress=False)
+    downloaded = script.download_validated_google_drive_file(
+        url="https://drive.google.com/uc?export=download&id=file",
+        output_path=output_path,
+        validator=script.is_valid_tar,
+        opener=opener,
+        show_progress=False,
+    )
 
+    assert downloaded.reused_existing is False
     assert tarfile.is_tarfile(output_path)
     assert opener.urls[1] == "https://drive.usercontent.google.com/download?id=file&export=download&confirm=token"
+
+
+def test_download_google_drive_file_rejects_html_response(tmp_path: Path) -> None:
+    output_path = tmp_path / "myaudio_tiny.tar.gz"
+    opener = FakeOpener([FakeResponse(b"<html>access denied</html>")])
+
+    with pytest.raises(RuntimeError, match="Google Drive download did not produce the expected file type"):
+        script.download_validated_google_drive_file(
+            url="https://drive.google.com/uc?export=download&id=file",
+            output_path=output_path,
+            validator=script.is_valid_tar,
+            opener=opener,
+            show_progress=False,
+        )
+
+    assert not output_path.exists()
+
+
+def test_download_persian_eval_sets_downloads_three_cached_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    public_payloads = {
+        "https://example.test/persian-speech-corpus.zip": zip_bytes("orthographic-transcript.txt"),
+        "https://example.test/myaudio_tiny.xlsx": zip_bytes("[Content_Types].xml"),
+    }
+
+    def fake_public_download(
+        *,
+        url: str,
+        output_path: Path,
+        validator,
+        force: bool = False,
+        show_progress: bool = True,
+    ):
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(public_payloads[url])
+        return script.DownloadedFile(output_path.name, output_path, output_path.stat().st_size, False)
+
+    def fake_drive_download(
+        *,
+        url: str,
+        output_path: Path,
+        validator,
+        force: bool = False,
+        show_progress: bool = True,
+        opener=None,
+    ):
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(tar_gz_bytes())
+        return script.DownloadedFile(output_path.name, output_path, output_path.stat().st_size, False)
+
+    monkeypatch.setattr(script, "download_validated_public_file", fake_public_download)
+    monkeypatch.setattr(script, "download_validated_google_drive_file", fake_drive_download)
+
+    audit = script.download_persian_eval_sets(
+        cache_dir=tmp_path / "cache",
+        persian_speech_corpus_url="https://example.test/persian-speech-corpus.zip",
+        persian_speech_url="https://example.test/myaudio_tiny.tar.gz",
+        persian_speech_metadata_url="https://example.test/myaudio_tiny.xlsx",
+        show_progress=False,
+    )
+
+    assert audit.persian_speech_corpus_archive.path.name == "persian-speech-corpus.zip"
+    assert audit.persian_speech_archive.path.name == "myaudio_tiny.tar.gz"
+    assert audit.persian_speech_metadata.path.name == "myaudio_tiny.xlsx"

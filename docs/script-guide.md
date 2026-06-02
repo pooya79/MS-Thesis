@@ -10,6 +10,7 @@ uv run python -m ml.speech_data.scripts.download_persian_eval_sets --help
 uv run python -m ml.speech_data.scripts.prepare_common_voice_25 --help
 uv run python -m ml.speech_data.scripts.prepare_degradation_assets --help
 uv run python -m ml.speech_data.scripts.prepare_fleurs_persian --help
+uv run python -m ml.speech_data.scripts.prepare_persian_eval_sets --help
 uv run python -m ml.speech_data.scripts.generate_random_degraded_clip --help
 uv run python -m ml.speech_data.generate_degraded_dataset --help
 uv run python -m ml.speech_data.generate_degraded_pairs --help
@@ -39,20 +40,42 @@ uv run python -m ml.speech_data.scripts.download_fleurs_persian \
 ## Persian Evaluation Set Download
 
 Download Nawar Halabi's Persian Speech Corpus and the free `myaudio_tiny`
-PersianSpeech release, normalize transcripts, and export both as test-set-shaped
-ASR datasets with `test.tsv` and mono 16 kHz WAV files under `clips/`:
+PersianSpeech release into a local cache. This step only downloads and validates
+the upstream archive/metadata files; preparation into TSVs and WAV clips is a
+separate step.
 
 ```bash
 uv run python -m ml.speech_data.scripts.download_persian_eval_sets \
+  --cache-dir data/downloads/persian_eval_sets
+```
+
+The script caches the upstream archives under `data/downloads/persian_eval_sets/`.
+Use `--force` to redownload valid cached files. The default URLs point to the
+public Persian Speech Corpus package, the public Google Drive `myaudio_tiny.tar.gz`
+archive, and the PersianSpeech GitHub XLSX metadata file.
+
+## Persian Evaluation Set Preparation
+
+Extract the downloaded Persian evaluation archives and prepare both sources as
+repo-style ASR test datasets with `test.tsv` and mono 16 kHz WAV clips under
+`clips/`:
+
+```bash
+uv run python -m ml.speech_data.scripts.prepare_persian_eval_sets \
+  --cache-dir data/downloads/persian_eval_sets \
+  --source-root data/persian_eval_sets/source \
   --persian-speech-corpus-output-root data/persian-speech-corpus-test \
   --persian-speech-output-root data/PersianSpeech_test \
   --workers 4
 ```
 
-The script caches the upstream archives under `data/downloads/persian_eval_sets/`.
-Use `--force` to replace existing output directories. The default URLs point to
-the public Persian Speech Corpus package, the public Google Drive
-`myaudio_tiny.tar.gz` archive, and the PersianSpeech GitHub XLSX metadata file.
+The script parses `orthographic-transcript.txt` from Persian Speech Corpus and
+the `audio`/`text` columns from PersianSpeech `myaudio_tiny.xlsx`. It normalizes
+transcripts with the same Persian text rules as the other ASR preparation
+scripts, but keeps rejected rows with raw text because these are test/evaluation
+sets. Transcript rows whose referenced audio is absent from the downloaded
+archive are skipped and reported as `missing audio rows` in the summary. Use
+`--force` to replace prepared outputs and re-extract the source archives.
 
 ## Common Voice Preparation
 
