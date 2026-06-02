@@ -13,7 +13,7 @@ import zipfile
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterable
+from typing import Any, Callable, Iterable
 from xml.etree import ElementTree
 
 from tqdm import tqdm
@@ -88,41 +88,90 @@ def download_google_drive_file(
     *,
     force: bool = False,
     show_progress: bool = True,
+    opener: Any | None = None,
 ) -> int:
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    if output_path.exists() and not force:
+    if output_path.exists() and not force and file_is_supported_archive(output_path):
         return output_path.stat().st_size
+    if output_path.exists():
+        output_path.unlink()
 
-    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor())
+    opener = opener or urllib.request.build_opener(urllib.request.HTTPCookieProcessor())
     with opener.open(url) as response:
-        html = response.read()
+        payload = response.read()
         final_url = response.geturl()
 
-    token_match = re.search(rb"confirm=([0-9A-Za-z_%-]+)", html)
-    if "drive.google.com" in final_url and token_match:
-        parsed = urllib.parse.urlparse(final_url)
-        query = urllib.parse.parse_qs(parsed.query)
-        query["confirm"] = [token_match.group(1).decode("ascii")]
-        confirm_url = urllib.parse.urlunparse(parsed._replace(query=urllib.parse.urlencode(query, doseq=True)))
-        with opener.open(confirm_url) as response, output_path.open("wb") as handle:
-            with tqdm.wrapattr(
-                response,
-                "read",
-                desc=f"Downloading {output_path.name}",
-                unit="B",
-                unit_scale=True,
-                disable=not show_progress,
-            ) as reader:
-                shutil.copyfileobj(reader, handle)
+    confirm_url = google_drive_confirm_url(final_url, payload)
+    if confirm_url is None:
+        output_path.write_bytes(payload)
     else:
-        output_path.write_bytes(html)
+        with opener.open(confirm_url) as response:
+            write_response_to_file(response, output_path, show_progress=show_progress)
+
+    if not file_is_supported_archive(output_path):
+        hint = html_error_hint(output_path)
+        output_path.unlink(missing_ok=True)
+        raise RuntimeError(f"Google Drive download did not produce a supported archive for {output_path}.{hint}")
     return output_path.stat().st_size
 
 
 def download_public_url(url: str, output_path: Path, *, force: bool = False, show_progress: bool = True) -> int:
-    if output_path.exists() and not force:
+    if output_path.exists() and not force and file_is_supported_archive(output_path):
         return output_path.stat().st_size
+    if output_path.exists():
+        output_path.unlink()
     return download_url_to_file(url, output_path, force=force, resume=False, show_progress=show_progress)
+
+
+def write_response_to_file(response: Any, output_path: Path, *, show_progress: bool = True) -> None:
+    with output_path.open("wb") as handle:
+        with tqdm.wrapattr(
+            response,
+            "read",
+            desc=f"Downloading {output_path.name}",
+            unit="B",
+            unit_scale=True,
+            disable=not show_progress,
+        ) as reader:
+            shutil.copyfileobj(reader, handle)
+
+
+def google_drive_confirm_url(final_url: str, payload: bytes) -> str | None:
+    if "drive.google.com" not in final_url and "drive.usercontent.google.com" not in final_url:
+        return None
+
+    token_match = re.search(rb"confirm=([0-9A-Za-z_%-]+)", payload)
+    if token_match:
+        parsed = urllib.parse.urlparse(final_url)
+        query = urllib.parse.parse_qs(parsed.query)
+        query["confirm"] = [token_match.group(1).decode("ascii")]
+        return urllib.parse.urlunparse(parsed._replace(query=urllib.parse.urlencode(query, doseq=True)))
+
+    form_match = re.search(rb'<form(?=[^>]+id="download-form")[^>]+action="([^"]+)"', payload)
+    if form_match:
+        action = form_match.group(1).decode("utf-8").replace("&amp;", "&")
+        inputs = dict(
+            (name.decode("utf-8"), value.decode("utf-8"))
+            for name, value in re.findall(rb'<input[^>]+name="([^"]+)"[^>]+value="([^"]*)"', payload)
+        )
+        parsed = urllib.parse.urlparse(action)
+        query = urllib.parse.parse_qs(parsed.query)
+        for key, value in inputs.items():
+            query[key] = [value]
+        return urllib.parse.urlunparse(parsed._replace(query=urllib.parse.urlencode(query, doseq=True)))
+
+    return None
+
+
+def file_is_supported_archive(path: Path) -> bool:
+    return path.exists() and (zipfile.is_zipfile(path) or tarfile.is_tarfile(path))
+
+
+def html_error_hint(path: Path) -> str:
+    prefix = path.read_bytes()[:512].lstrip().lower()
+    if prefix.startswith(b"<!doctype html") or prefix.startswith(b"<html"):
+        return " The cached response was HTML, likely a Google Drive confirmation or access page; retry after deleting the cache or pass --force."
+    return ""
 
 
 def extract_archive(archive_path: Path, output_dir: Path) -> None:

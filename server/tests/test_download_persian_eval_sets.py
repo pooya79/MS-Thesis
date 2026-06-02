@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import csv
+import io
+import tarfile
 import zipfile
 from pathlib import Path
 
@@ -10,6 +12,7 @@ from ml.speech_data.scripts.download_persian_eval_sets import (
     build_persian_speech_corpus_rows,
     build_persian_speech_rows,
     convert_required_clips,
+    download_google_drive_file,
     extract_archive,
     normalize_prepared_rows,
 )
@@ -63,6 +66,44 @@ def write_minimal_xlsx(path: Path, rows: list[list[str]]) -> None:
             '<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
             f"{shared_xml}</sst>",
         )
+
+
+def tar_bytes() -> bytes:
+    payload = io.BytesIO()
+    with tarfile.open(fileobj=payload, mode="w:gz") as archive:
+        info = tarfile.TarInfo("clip.wav")
+        content = b"audio"
+        info.size = len(content)
+        archive.addfile(info, io.BytesIO(content))
+    return payload.getvalue()
+
+
+class FakeResponse:
+    def __init__(self, payload: bytes, url: str = "https://drive.google.com/uc?export=download&id=file") -> None:
+        self.payload = io.BytesIO(payload)
+        self.url = url
+
+    def __enter__(self) -> "FakeResponse":
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+    def read(self, size: int = -1) -> bytes:
+        return self.payload.read(size)
+
+    def geturl(self) -> str:
+        return self.url
+
+
+class FakeOpener:
+    def __init__(self, responses: list[FakeResponse]) -> None:
+        self.responses = responses
+        self.urls: list[str] = []
+
+    def open(self, url: str) -> FakeResponse:
+        self.urls.append(url)
+        return self.responses.pop(0)
 
 
 def test_build_persian_speech_corpus_rows_reads_orthographic_transcript(tmp_path: Path) -> None:
@@ -128,3 +169,32 @@ def test_extract_archive_rejects_unsafe_zip_member(tmp_path: Path) -> None:
 
     with pytest.raises(RuntimeError, match="unsafe archive member"):
         extract_archive(archive_path, tmp_path / "out")
+
+
+def test_download_google_drive_file_redownloads_invalid_cached_file(tmp_path: Path) -> None:
+    output_path = tmp_path / "myaudio_tiny.tar.gz"
+    output_path.write_text("<html>not an archive</html>", encoding="utf-8")
+    opener = FakeOpener([FakeResponse(tar_bytes())])
+
+    bytes_written = download_google_drive_file("https://drive.google.com/uc?export=download&id=file", output_path, opener=opener, show_progress=False)
+
+    assert bytes_written == output_path.stat().st_size
+    assert tarfile.is_tarfile(output_path)
+    assert opener.urls == ["https://drive.google.com/uc?export=download&id=file"]
+
+
+def test_download_google_drive_file_follows_confirmation_form(tmp_path: Path) -> None:
+    output_path = tmp_path / "myaudio_tiny.tar.gz"
+    html = (
+        '<html><form action="https://drive.usercontent.google.com/download" id="download-form">'
+        '<input type="hidden" name="id" value="file">'
+        '<input type="hidden" name="export" value="download">'
+        '<input type="hidden" name="confirm" value="token">'
+        "</form></html>"
+    ).encode()
+    opener = FakeOpener([FakeResponse(html), FakeResponse(tar_bytes(), url="https://drive.usercontent.google.com/download")])
+
+    download_google_drive_file("https://drive.google.com/uc?export=download&id=file", output_path, opener=opener, show_progress=False)
+
+    assert tarfile.is_tarfile(output_path)
+    assert opener.urls[1] == "https://drive.usercontent.google.com/download?id=file&export=download&confirm=token"
