@@ -20,3 +20,4 @@ eval:
   num_workers: 4
   device: auto
   generation_max_length: 225
+  max_label_tokens: 448

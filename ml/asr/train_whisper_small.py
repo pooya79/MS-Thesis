@@ -66,6 +66,14 @@ class WhisperExample:
     dataset_dir: Path | None = None
 
 
+@dataclass(frozen=True)
+class SkippedWhisperExample:
+    example: WhisperExample
+    token_count: int
+    max_label_tokens: int
+    reason: str
+
+
 def utc_now() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -269,6 +277,59 @@ def write_examples_manifest(path: Path, examples: list[WhisperExample]) -> None:
                 )
                 + "\n"
             )
+
+
+def write_skipped_examples_manifest(path: Path, skipped: list[SkippedWhisperExample]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        for index, skipped_example in enumerate(skipped, start=1):
+            example = skipped_example.example
+            handle.write(
+                json.dumps(
+                    {
+                        "id": index,
+                        "audio_path": str(example.audio_path),
+                        "dataset": str(example.dataset_dir or example.audio_path.parent),
+                        "transcript": example.transcript,
+                        "token_count": skipped_example.token_count,
+                        "max_label_tokens": skipped_example.max_label_tokens,
+                        "reason": skipped_example.reason,
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+                + "\n"
+            )
+
+
+def model_max_target_positions(model: Any) -> int | None:
+    value = getattr(getattr(model, "config", None), "max_target_positions", None)
+    return int(value) if value is not None else None
+
+
+def filter_examples_by_label_length(
+    examples: list[WhisperExample],
+    tokenizer: Any,
+    max_label_tokens: int | None,
+) -> tuple[list[WhisperExample], list[SkippedWhisperExample]]:
+    if max_label_tokens is None:
+        return examples, []
+    kept: list[WhisperExample] = []
+    skipped: list[SkippedWhisperExample] = []
+    for example in examples:
+        token_count = len(tokenizer(example.transcript).input_ids)
+        if token_count > max_label_tokens:
+            skipped.append(
+                SkippedWhisperExample(
+                    example=example,
+                    token_count=token_count,
+                    max_label_tokens=max_label_tokens,
+                    reason="label_token_length_exceeds_model_limit",
+                )
+            )
+            continue
+        kept.append(example)
+    return kept, skipped
 
 
 def word_error_rate(references: list[str], hypotheses: list[str]) -> float:
@@ -503,6 +564,13 @@ def run_training(config_path: Path, run_dir_override: Path | None = None, resume
             task=str(model_config.get("task", "transcribe")),
         )
 
+        logging.info("loading model=%s", pretrained_model)
+        model = WhisperForConditionalGeneration.from_pretrained(pretrained_model)
+        model.config.forced_decoder_ids = None
+        model.config.suppress_tokens = []
+        max_label_tokens = model_max_target_positions(model)
+        logging.info("max_label_tokens=%s", max_label_tokens or "unbounded")
+
         logging.info("resolving dataset directories root=%s datasets=%s", data_config["root_dir"], data_config["datasets"])
         dataset_dirs = resolve_dataset_dirs(config)
         logging.info("resolved dataset directories=%s", ", ".join(str(path) for path in dataset_dirs))
@@ -510,14 +578,32 @@ def run_training(config_path: Path, run_dir_override: Path | None = None, resume
         train_examples = load_split_examples(dataset_dirs, "train")
         logging.info("loading evaluation examples")
         eval_examples = load_split_examples(dataset_dirs, "dev")
+        train_examples, skipped_train_examples = filter_examples_by_label_length(train_examples, processor.tokenizer, max_label_tokens)
+        eval_examples, skipped_eval_examples = filter_examples_by_label_length(eval_examples, processor.tokenizer, max_label_tokens)
+        if not train_examples:
+            raise ValueError("no train examples remain after label length filtering")
+        if not eval_examples:
+            raise ValueError("no dev examples remain after label length filtering")
+        skipped_count = len(skipped_train_examples) + len(skipped_eval_examples)
+        if skipped_count:
+            logging.warning(
+                "skipped %s examples with label token length above %s",
+                skipped_count,
+                max_label_tokens,
+            )
         logging.info("writing source manifests")
         write_examples_manifest(run_dir / "manifests" / "train.jsonl", train_examples)
         write_examples_manifest(run_dir / "manifests" / "dev.jsonl", eval_examples)
+        write_skipped_examples_manifest(run_dir / "manifests" / "skipped_train.jsonl", skipped_train_examples)
+        write_skipped_examples_manifest(run_dir / "manifests" / "skipped_dev.jsonl", skipped_eval_examples)
         update_status(
             run_dir,
             datasets=[str(path) for path in dataset_dirs],
             train_examples=len(train_examples),
             eval_examples=len(eval_examples),
+            skipped_train_examples=len(skipped_train_examples),
+            skipped_eval_examples=len(skipped_eval_examples),
+            max_label_tokens=max_label_tokens,
         )
         logging.info("datasets=%s", ", ".join(str(path) for path in dataset_dirs))
         logging.info("train_examples=%s eval_examples=%s", len(train_examples), len(eval_examples))
@@ -525,10 +611,6 @@ def run_training(config_path: Path, run_dir_override: Path | None = None, resume
         train_dataset = WhisperDataset(train_examples, processor, int(data_config["sample_rate"]))
         eval_dataset = WhisperDataset(eval_examples, processor, int(data_config["sample_rate"]))
         update_status(run_dir, pretrained_model=pretrained_model)
-        logging.info("loading model=%s", pretrained_model)
-        model = WhisperForConditionalGeneration.from_pretrained(pretrained_model)
-        model.config.forced_decoder_ids = None
-        model.config.suppress_tokens = []
         logging.info("building training arguments")
         args = build_training_arguments(config, run_dir)
 

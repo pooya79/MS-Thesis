@@ -16,10 +16,13 @@ from ml.asr.train_whisper_small import (
     WhisperExample,
     character_error_rate,
     deep_merge,
+    filter_examples_by_label_length,
     load_split_examples,
+    model_max_target_positions,
     resolve_dataset_dirs,
     word_error_rate,
     write_examples_manifest,
+    write_skipped_examples_manifest,
 )
 
 
@@ -43,6 +46,7 @@ DEFAULT_EVAL_CONFIG: dict[str, Any] = {
         "num_workers": 2,
         "device": "auto",
         "generation_max_length": 225,
+        "max_label_tokens": None,
     },
 }
 
@@ -88,6 +92,8 @@ def validate_eval_config(config: dict[str, Any]) -> None:
         "num_workers": (eval_config, 0),
         "generation_max_length": (eval_config, 1),
     }
+    if eval_config.get("max_label_tokens") is not None:
+        minimums["max_label_tokens"] = (eval_config, 1)
     for key, (section, minimum) in minimums.items():
         if float(section[key]) < minimum:
             raise ValueError(f"{key} must be >= {minimum:g}")
@@ -240,11 +246,27 @@ def run_evaluation(config_path: Path, output_dir_override: Path | None = None) -
     model = WhisperForConditionalGeneration.from_pretrained(str(checkpoint))
     model.config.forced_decoder_ids = None
     model.config.suppress_tokens = []
+    model_limit = model_max_target_positions(model)
+    configured_limit = config["eval"].get("max_label_tokens")
+    max_label_tokens = int(configured_limit) if configured_limit is not None else model_limit
+    if model_limit is not None and (max_label_tokens is None or max_label_tokens > model_limit):
+        max_label_tokens = model_limit
 
     dataset_dirs = resolve_dataset_dirs(config)
     split = str(data_config["split"])
     examples = load_split_examples(dataset_dirs, split)
+    examples, skipped_examples = filter_examples_by_label_length(examples, processor.tokenizer, max_label_tokens)
+    if not examples:
+        raise ValueError(f"no {split} examples remain after label length filtering")
+    if skipped_examples:
+        logging.warning(
+            "skipped %s %s examples with label token length above %s",
+            len(skipped_examples),
+            split,
+            max_label_tokens,
+        )
     write_examples_manifest(output_dir / "manifests" / f"{split}.jsonl", examples)
+    write_skipped_examples_manifest(output_dir / "manifests" / f"skipped_{split}.jsonl", skipped_examples)
 
     dataset = WhisperDataset(examples, processor, int(data_config["sample_rate"]))
     args = build_eval_arguments(config, output_dir)
@@ -273,6 +295,8 @@ def run_evaluation(config_path: Path, output_dir_override: Path | None = None) -
         "datasets": [str(path) for path in dataset_dirs],
         "split": split,
         "examples": len(examples),
+        "skipped_examples": len(skipped_examples),
+        "max_label_tokens": max_label_tokens,
         **aggregate_metrics,
         "dataset_metrics": dataset_error_metrics(examples, references, hypotheses),
     }

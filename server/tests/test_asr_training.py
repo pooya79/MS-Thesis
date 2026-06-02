@@ -15,6 +15,7 @@ from ml.asr.train_whisper_small import (
     WhisperDataset,
     WhisperExample,
     character_error_rate,
+    filter_examples_by_label_length,
     latest_checkpoint,
     load_split_examples,
     load_training_config,
@@ -86,7 +87,7 @@ class FakeFeatureExtractor:
 
 class FakeTokenizer:
     def __call__(self, text: str):
-        return SimpleNamespace(input_ids=[len(text), 1])
+        return SimpleNamespace(input_ids=list(range(len(text))))
 
 
 class FakeProcessor:
@@ -285,6 +286,21 @@ def test_load_split_examples_reads_test_tsv_without_train_or_dev(tmp_path: Path)
     assert test_examples[0].transcript == "test text"
 
 
+def test_filter_examples_by_label_length_skips_overlong_transcripts(tmp_path: Path) -> None:
+    examples = [
+        WhisperExample(audio_path=tmp_path / "clips" / "short.wav", transcript="short", dataset_dir=tmp_path),
+        WhisperExample(audio_path=tmp_path / "clips" / "long.wav", transcript="too long", dataset_dir=tmp_path),
+    ]
+
+    kept, skipped = filter_examples_by_label_length(examples, FakeTokenizer(), max_label_tokens=5)
+
+    assert kept == [examples[0]]
+    assert skipped[0].example == examples[1]
+    assert skipped[0].token_count == 8
+    assert skipped[0].max_label_tokens == 5
+    assert skipped[0].reason == "label_token_length_exceeds_model_limit"
+
+
 def test_load_eval_config_merges_yaml_with_defaults_and_resolves_processor(tmp_path: Path) -> None:
     checkpoint = tmp_path / "runs" / "run-1" / "final"
     processor = tmp_path / "runs" / "run-1" / "processor"
@@ -307,6 +323,7 @@ def test_load_eval_config_merges_yaml_with_defaults_and_resolves_processor(tmp_p
                 "output_dir": str(tmp_path / "evals"),
                 "name": "smoke",
                 "batch_size": 2,
+                "max_label_tokens": 448,
             },
         },
     )
@@ -315,6 +332,7 @@ def test_load_eval_config_merges_yaml_with_defaults_and_resolves_processor(tmp_p
 
     assert config["data"]["split"] == "test"
     assert config["eval"]["generation_max_length"] == 225
+    assert config["eval"]["max_label_tokens"] == 448
     assert resolve_output_dir(config) == tmp_path / "evals" / "smoke"
     assert resolve_processor_source(config["model"]["processor"], config_path) == str(processor.resolve())
     assert resolve_processor_source("openai/whisper-small", config_path) == "openai/whisper-small"
@@ -335,7 +353,7 @@ def test_whisper_dataset_computes_features_in_getitem(tmp_path: Path) -> None:
     item = WhisperDataset(examples, FakeProcessor(), 16000)[0]
 
     assert torch.equal(item["input_features"], torch.ones((2, 3), dtype=torch.float32))
-    assert item["labels"] == [10, 1]
+    assert item["labels"] == list(range(10))
 
 
 def test_load_split_examples_rejects_missing_audio(tmp_path: Path) -> None:
