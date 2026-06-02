@@ -13,6 +13,8 @@ import yaml
 from ml.asr.train_whisper_small import (
     WhisperDataCollator,
     WhisperDataset,
+    WhisperExample,
+    character_error_rate,
     deep_merge,
     load_split_examples,
     resolve_dataset_dirs,
@@ -145,6 +147,35 @@ def configure_logging(output_dir: Path) -> None:
         logging.getLogger(noisy_logger).setLevel(logging.WARNING)
 
 
+def error_metrics(references: list[str], hypotheses: list[str]) -> dict[str, float]:
+    return {
+        "wer": word_error_rate(references, hypotheses),
+        "cer": character_error_rate(references, hypotheses),
+    }
+
+
+def dataset_error_metrics(
+    examples: list[WhisperExample],
+    references: list[str],
+    hypotheses: list[str],
+) -> list[dict[str, Any]]:
+    grouped: dict[str, dict[str, list[str]]] = {}
+    for example, reference, hypothesis in zip(examples, references, hypotheses, strict=True):
+        dataset = str(example.dataset_dir or example.audio_path.parent)
+        group = grouped.setdefault(dataset, {"references": [], "hypotheses": []})
+        group["references"].append(reference)
+        group["hypotheses"].append(hypothesis)
+
+    return [
+        {
+            "dataset": dataset,
+            "examples": len(group["references"]),
+            **error_metrics(group["references"], group["hypotheses"]),
+        }
+        for dataset, group in grouped.items()
+    ]
+
+
 def build_eval_arguments(config: dict[str, Any], output_dir: Path) -> Any:
     from transformers import Seq2SeqTrainingArguments
 
@@ -232,6 +263,7 @@ def run_evaluation(config_path: Path, output_dir_override: Path | None = None) -
     label_ids[label_ids == -100] = processor.tokenizer.pad_token_id
     hypotheses = processor.tokenizer.batch_decode(prediction.predictions, skip_special_tokens=True)
     references = processor.tokenizer.batch_decode(label_ids, skip_special_tokens=True)
+    aggregate_metrics = error_metrics(references, hypotheses)
     metrics = {
         "created_at": utc_now(),
         "config_path": str(config_path),
@@ -241,7 +273,8 @@ def run_evaluation(config_path: Path, output_dir_override: Path | None = None) -
         "datasets": [str(path) for path in dataset_dirs],
         "split": split,
         "examples": len(examples),
-        "wer": word_error_rate(references, hypotheses),
+        **aggregate_metrics,
+        "dataset_metrics": dataset_error_metrics(examples, references, hypotheses),
     }
     write_json(output_dir / "metrics.json", metrics)
 
@@ -253,6 +286,7 @@ def run_evaluation(config_path: Path, output_dir_override: Path | None = None) -
                     {
                         "id": index,
                         "audio_path": str(example.audio_path),
+                        "dataset": str(example.dataset_dir or example.audio_path.parent),
                         "reference": reference,
                         "hypothesis": hypothesis,
                     },

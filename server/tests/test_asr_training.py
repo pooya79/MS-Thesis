@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import csv
-from types import SimpleNamespace
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -13,6 +13,8 @@ import yaml
 from ml.asr.train_whisper_small import (
     JsonMetricsCallback,
     WhisperDataset,
+    WhisperExample,
+    character_error_rate,
     latest_checkpoint,
     load_split_examples,
     load_training_config,
@@ -23,6 +25,8 @@ from ml.asr.train_whisper_small import (
     word_error_rate,
 )
 from ml.asr.eval_whisper_small import (
+    dataset_error_metrics,
+    error_metrics,
     load_eval_config,
     resolve_output_dir,
     resolve_processor_source,
@@ -186,6 +190,42 @@ def test_word_error_rate_uses_jiwer_for_insertions_deletions_and_substitutions()
     assert word_error_rate(["سلام دنیا"], ["سلام"]) == 0.5
     assert word_error_rate(["سلام دنیا"], ["سلام امروز"]) == 0.5
     assert word_error_rate(["سلام دنیا"], ["سلام دنیا اضافه"]) == 0.5
+
+
+def test_character_error_rate_uses_jiwer_for_character_level_edits() -> None:
+    assert character_error_rate(["ab"], ["ac"]) == 0.5
+    assert error_metrics(["ab"], ["ac"]) == {"wer": 1.0, "cer": 0.5}
+
+
+def test_dataset_error_metrics_groups_results_by_dataset_directory(tmp_path: Path) -> None:
+    first_dataset = tmp_path / "data" / "first"
+    second_dataset = tmp_path / "data" / "second"
+    examples = [
+        WhisperExample(audio_path=first_dataset / "clips" / "one.wav", transcript="ab", dataset_dir=first_dataset),
+        WhisperExample(audio_path=first_dataset / "clips" / "two.wav", transcript="cd", dataset_dir=first_dataset),
+        WhisperExample(audio_path=second_dataset / "clips" / "three.wav", transcript="ef", dataset_dir=second_dataset),
+    ]
+
+    metrics = dataset_error_metrics(
+        examples,
+        references=["ab", "cd", "ef"],
+        hypotheses=["ac", "cd", "eg"],
+    )
+
+    assert metrics == [
+        {
+            "dataset": str(first_dataset),
+            "examples": 2,
+            "wer": 0.5,
+            "cer": 0.25,
+        },
+        {
+            "dataset": str(second_dataset),
+            "examples": 1,
+            "wer": 1.0,
+            "cer": 0.5,
+        },
+    ]
 
 
 def test_latest_checkpoint_uses_largest_checkpoint_step(tmp_path: Path) -> None:

@@ -63,6 +63,7 @@ CHECKPOINT_RE = re.compile(r"^checkpoint-(\d+)$")
 class WhisperExample:
     audio_path: Path
     transcript: str
+    dataset_dir: Path | None = None
 
 
 def utc_now() -> str:
@@ -238,7 +239,7 @@ def load_split_examples(dataset_dirs: list[Path], split: str) -> list[WhisperExa
             audio_path = resolve_audio_path(dataset_dir, raw_audio)
             if not audio_path.exists():
                 raise FileNotFoundError(f"{split_path}:{index} missing audio file: {audio_path}")
-            examples.append(WhisperExample(audio_path=audio_path, transcript=transcript))
+            examples.append(WhisperExample(audio_path=audio_path, transcript=transcript, dataset_dir=dataset_dir.resolve()))
     if not examples:
         names = ", ".join(str(path) for path in dataset_dirs)
         raise ValueError(f"no usable {split} examples found in: {names}")
@@ -272,6 +273,10 @@ def write_examples_manifest(path: Path, examples: list[WhisperExample]) -> None:
 
 def word_error_rate(references: list[str], hypotheses: list[str]) -> float:
     return float(jiwer.wer(references, hypotheses))
+
+
+def character_error_rate(references: list[str], hypotheses: list[str]) -> float:
+    return float(jiwer.cer(references, hypotheses))
 
 
 def checkpoint_step(path: Path) -> int:

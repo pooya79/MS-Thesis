@@ -6,6 +6,7 @@ Every maintained Python script exposes `--help`. Use the help output before runn
 uv run python -m ml.speech_data.scripts.download_common_voice_fa --help
 uv run python -m ml.speech_data.scripts.download_degradation_assets --help
 uv run python -m ml.speech_data.scripts.download_fleurs_persian --help
+uv run python -m ml.speech_data.scripts.download_persian_eval_sets --help
 uv run python -m ml.speech_data.scripts.prepare_common_voice_25 --help
 uv run python -m ml.speech_data.scripts.prepare_degradation_assets --help
 uv run python -m ml.speech_data.scripts.prepare_fleurs_persian --help
@@ -34,6 +35,24 @@ Download and export the Persian FLEURS subset from Hugging Face:
 uv run python -m ml.speech_data.scripts.download_fleurs_persian \
   --output-root data/fleurs/fa_ir/source
 ```
+
+## Persian Evaluation Set Download
+
+Download Nawar Halabi's Persian Speech Corpus and the free `myaudio_tiny`
+PersianSpeech release, normalize transcripts, and export both as test-set-shaped
+ASR datasets with `test.tsv` and mono 16 kHz WAV files under `clips/`:
+
+```bash
+uv run python -m ml.speech_data.scripts.download_persian_eval_sets \
+  --persian-speech-corpus-output-root data/persian-speech-corpus-test \
+  --persian-speech-output-root data/PersianSpeech_test \
+  --workers 4
+```
+
+The script caches the upstream archives under `data/downloads/persian_eval_sets/`.
+Use `--force` to replace existing output directories. The default URLs point to
+the public Persian Speech Corpus package, the public Google Drive
+`myaudio_tiny.tar.gz` archive, and the PersianSpeech GitHub XLSX metadata file.
 
 ## Common Voice Preparation
 
@@ -176,7 +195,7 @@ Set `model.pretrained_model` to start from an existing local model directory, su
 
 ## Whisper-small Evaluation
 
-Run a saved Whisper-small checkpoint on the configured dataset `test.tsv` files. Outputs include `metrics.json`, `predictions.jsonl`, the effective config, logs, and a source manifest:
+Run a saved Whisper-small checkpoint on the configured dataset `test.tsv` files. Outputs include `metrics.json`, `predictions.jsonl`, the effective config, logs, and a source manifest. `metrics.json` reports aggregate WER/CER and a `dataset_metrics` list with WER/CER per dataset directory:
 
 ```bash
 uv run python -m ml.asr.eval_whisper_small \
