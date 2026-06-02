@@ -9,6 +9,7 @@ SCRIPT_MODULES = [
     "ml.speech_data.scripts.download_common_voice_fa",
     "ml.speech_data.scripts.download_degradation_assets",
     "ml.speech_data.scripts.download_fleurs_persian",
+    "ml.speech_data.scripts.normalize_tsv_dataset",
     "ml.speech_data.scripts.prepare_common_voice_25",
     "ml.speech_data.scripts.prepare_degradation_assets",
     "ml.speech_data.scripts.prepare_fleurs_persian",

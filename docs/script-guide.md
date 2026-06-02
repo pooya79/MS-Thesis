@@ -57,6 +57,23 @@ uv run python -m ml.speech_data.scripts.prepare_fleurs_persian \
   --workers 4
 ```
 
+## TSV Dataset Transcript Normalization
+
+Copy an existing ASR dataset to a new directory and normalize the `sentence`
+column in `train.tsv`, `dev.tsv`, and `test.tsv` with the same Persian text
+rules used by the Common Voice 25 preparation script:
+
+```bash
+uv run python -m ml.speech_data.scripts.normalize_tsv_dataset \
+  --source-root data/my_dataset/raw \
+  --output-root data/my_dataset/normalized
+```
+
+The output directory must be new unless `--overwrite` is passed. The script
+copies the full source tree first, preserves TSV columns, rewrites normalized
+transcriptions in place under the output directory, and discards rows whose
+sentences are rejected by the Common Voice 25 normalization rules.
+
 ## Degradation Asset Download
 
 Download all DEMAND `*_16k.zip` noise archives:

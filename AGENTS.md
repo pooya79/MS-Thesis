@@ -27,6 +27,11 @@ This repository is my research archive for my MS thesis.
 - Do not commit generated audio, checkpoints, or large experiment artifacts under `data/` or `artifacts/`.
 - Use the configured `ffmpeg` codec round-trips for speech degradation unless explicitly changing the experiment design.
 
+## ASR Dataset Layout
+- Each dataset directory should contain split TSV files such as `train.tsv`, `dev.tsv`, and optionally `test.tsv`, plus a `clips/` directory containing the referenced audio.
+- Split TSV files must include at least `path` and `sentence` columns.
+- Audio paths in TSV rows are resolved first as `<dataset>/clips/<path>`, then as `<dataset>/<path>`.
+
 ## Frontend and Template Conventions
 - Use `server/app/templates/base.html` as the global document skeleton.
 - Use `server/app/templates/shell.html` for authenticated app pages that need top nav + left sidebar + right sidebar.
