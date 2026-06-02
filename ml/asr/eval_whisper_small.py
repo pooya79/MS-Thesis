@@ -47,6 +47,7 @@ DEFAULT_EVAL_CONFIG: dict[str, Any] = {
         "device": "auto",
         "generation_max_length": 225,
         "max_label_tokens": None,
+        "eval_accumulation_steps": 1,
     },
 }
 
@@ -91,6 +92,7 @@ def validate_eval_config(config: dict[str, Any]) -> None:
         "batch_size": (eval_config, 1),
         "num_workers": (eval_config, 0),
         "generation_max_length": (eval_config, 1),
+        "eval_accumulation_steps": (eval_config, 1),
     }
     if eval_config.get("max_label_tokens") is not None:
         minimums["max_label_tokens"] = (eval_config, 1)
@@ -200,6 +202,7 @@ def build_eval_arguments(config: dict[str, Any], output_dir: Path) -> Any:
         "report_to": [],
         "remove_unused_columns": False,
         "dataloader_num_workers": int(eval_config["num_workers"]),
+        "eval_accumulation_steps": int(eval_config["eval_accumulation_steps"]),
     }
     argument_names = inspect.signature(Seq2SeqTrainingArguments.__init__).parameters
     if device == "cpu":

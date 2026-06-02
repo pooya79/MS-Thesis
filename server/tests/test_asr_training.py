@@ -26,6 +26,7 @@ from ml.asr.train_whisper_small import (
     word_error_rate,
 )
 from ml.asr.eval_whisper_small import (
+    build_eval_arguments,
     dataset_error_metrics,
     error_metrics,
     load_eval_config,
@@ -324,6 +325,7 @@ def test_load_eval_config_merges_yaml_with_defaults_and_resolves_processor(tmp_p
                 "name": "smoke",
                 "batch_size": 2,
                 "max_label_tokens": 448,
+                "eval_accumulation_steps": 2,
             },
         },
     )
@@ -333,6 +335,7 @@ def test_load_eval_config_merges_yaml_with_defaults_and_resolves_processor(tmp_p
     assert config["data"]["split"] == "test"
     assert config["eval"]["generation_max_length"] == 225
     assert config["eval"]["max_label_tokens"] == 448
+    assert config["eval"]["eval_accumulation_steps"] == 2
     assert resolve_output_dir(config) == tmp_path / "evals" / "smoke"
     assert resolve_processor_source(config["model"]["processor"], config_path) == str(processor.resolve())
     assert resolve_processor_source("openai/whisper-small", config_path) == "openai/whisper-small"
@@ -344,6 +347,22 @@ def test_load_eval_config_requires_checkpoint(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="model.checkpoint"):
         load_eval_config(config_path)
+
+
+def test_build_eval_arguments_flushes_predictions_during_eval(tmp_path: Path) -> None:
+    config = {
+        "eval": {
+            "batch_size": 1,
+            "num_workers": 0,
+            "device": "cpu",
+            "generation_max_length": 225,
+            "eval_accumulation_steps": 1,
+        }
+    }
+
+    args = build_eval_arguments(config, tmp_path)
+
+    assert args.eval_accumulation_steps == 1
 
 
 def test_whisper_dataset_computes_features_in_getitem(tmp_path: Path) -> None:

@@ -21,3 +21,4 @@ eval:
   device: auto
   generation_max_length: 225
   max_label_tokens: 448
+  eval_accumulation_steps: 1
