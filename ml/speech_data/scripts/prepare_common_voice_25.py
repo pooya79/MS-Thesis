@@ -120,6 +120,7 @@ def maybe_normalize(text: str) -> str | None:
 
     text = unicodedata.normalize("NFKC", text)
     text = text.replace("ء", "")
+    text = "".join(char for char in text if not unicodedata.category(char).startswith("P"))
 
     return " ".join(t for t in text.split() if t)
 

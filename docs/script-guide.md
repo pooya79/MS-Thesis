@@ -103,7 +103,8 @@ uv run python -m ml.speech_data.scripts.prepare_fleurs_persian \
 
 Copy an existing ASR dataset to a new directory and normalize the `sentence`
 column in `train.tsv`, `dev.tsv`, and `test.tsv` with the same Persian text
-rules used by the Common Voice 25 preparation script:
+rules used by the Common Voice 25 preparation script, including Unicode
+punctuation removal:
 
 ```bash
 uv run python -m ml.speech_data.scripts.normalize_tsv_dataset \

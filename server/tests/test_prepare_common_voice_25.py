@@ -58,6 +58,7 @@ def test_maybe_normalize_matches_nvidia_card_rules() -> None:
     assert maybe_normalize("خب ، تو چیكار می كنی؟") == "خب تو چیکار می کنی"
     assert maybe_normalize("أۀك ي ى ﯽ ﻮ ے ﺒ ﻢ ٬") == "اهک ی ی ی و ی ب م"
     assert maybe_normalize("سلام! «دوست»؛") == "سلام دوست"
+    assert maybe_normalize("سلام [دوست] / امروز") == "سلام دوست امروز"
     assert maybe_normalize("سلام #خوانده_نمیشود دنیا") == "سلام دنیا"
     assert maybe_normalize("  سلام    دنیا  ") == "سلام دنیا"
     assert maybe_normalize("hello سلام") is None

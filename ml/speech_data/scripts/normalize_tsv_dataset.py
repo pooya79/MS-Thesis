@@ -121,7 +121,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
             "Copy a TSV ASR dataset to a new output directory and normalize the "
-            "sentence column using the same Persian text rules as Common Voice 25 preparation."
+            "sentence column using the same Persian text rules as Common Voice 25 preparation, "
+            "including Unicode punctuation removal."
         )
     )
     parser.add_argument(
