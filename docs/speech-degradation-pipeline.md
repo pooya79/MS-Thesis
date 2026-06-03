@@ -113,11 +113,12 @@ For each clean clip and variant, the generator applies these stages:
 6. Select channel path and codec.
 7. Resample and band-limit for narrowband or wideband channel simulation.
 8. Apply an ffmpeg codec round-trip.
-9. Optionally apply decoded waveform dropout as a network-loss approximation.
-10. Resample degraded input to the model sample rate.
-11. Normalize peaks for safety.
-12. Create the clean target, with bandwidth alignment for narrowband samples.
-13. Write WAV files and JSONL metadata.
+9. Cross-correlate against the pre-codec channel waveform and compensate codec delay.
+10. Optionally apply decoded waveform dropout as a network-loss approximation.
+11. Resample degraded input to the model sample rate.
+12. Create the clean target, with bandwidth alignment for narrowband and default wideband samples.
+13. Apply one shared peak-safety scale to the clean/degraded pair.
+14. Write WAV files and JSONL metadata.
 
 ## Noise Stage
 
@@ -179,6 +180,10 @@ Supported codecs:
 Codec simulation uses real ffmpeg encode/decode round-trips. Opus config entries can
 sample `bitrate` and `frame_duration_ms`; those values are recorded as:
 
+After decoding, the generator estimates codec delay with bounded cross-correlation
+against the pre-codec channel waveform, shifts the decoded waveform, and records the
+measured `codec_alignment_lag_samples`.
+
 - `codec_bitrate`
 - `codec_frame_duration_ms`
 
@@ -222,11 +227,13 @@ The degraded input and clean target have the same duration and sample rate. The 
 not always the original fullband clean signal:
 
 - Narrowband degraded inputs get a narrowband-filtered clean target.
-- Wideband degraded inputs keep the normal 16 kHz clean target unless
-  `channel.wideband.filter_target` is enabled.
+- Wideband degraded inputs get a wideband-filtered clean target by default because
+  `channel.wideband.filter_target` is enabled in the checked-in config.
+- If `channel.wideband.filter_target` is disabled, wideband degraded inputs keep the
+  normal 16 kHz clean target. That setting intentionally trains bandwidth extension.
 
 This avoids training the model to hallucinate high-frequency content that the simulated
-narrowband channel removed.
+narrowband or wideband channel removed.
 
 ## Manifest Metadata
 
@@ -251,12 +258,14 @@ Each output row records the important choices:
   "codec": "g711_alaw",
   "codec_bitrate": null,
   "codec_frame_duration_ms": null,
+  "codec_alignment_lag_samples": 0,
   "network_impairment": {
     "enabled": false,
     "mode": null,
     "model": null
   },
-  "normalization": "peak_safety",
+  "normalization": "shared_pair_peak_safety",
+  "normalization_scale": 1.0,
   "seed": 123456789
 }
 ```

@@ -34,7 +34,7 @@ channel:
     bandpass_hz: [300, 3400]
   wideband:
     bandpass_hz: [50, 7000]
-    filter_target: false
+    filter_target: true
   pass_through_path_distribution:
     - path: narrowband
       weight: 0.5

@@ -13,11 +13,19 @@ import soundfile as sf
 
 from ml.speech_data.generate_degraded_dataset import generate_degraded_dataset
 from ml.speech_data.generate_degraded_pairs import (
+    CODECS,
+    NARROWBAND_CODECS,
+    WIDEBAND_CODECS,
+    align_to_reference,
     apply_decoded_waveform_dropout,
     codec_roundtrip,
+    default_config,
+    estimate_alignment_lag,
     ffmpeg_encoder_candidates,
     generate_from_config,
+    pair_peak_safety_normalize,
     resolve_ffmpeg_encoder,
+    validate_codec_channel_paths,
 )
 from ml.speech_data.scripts.generate_random_degraded_clip import generate_random_degraded_clip
 from ml.speech_data.inspect_manifest import inspect_manifest
@@ -45,6 +53,46 @@ def test_audio_helpers_preserve_shape_and_peak() -> None:
     assert len(filtered) == len(resampled)
     assert np.isfinite(filtered).all()
     assert np.max(np.abs(normalized)) <= 0.5001
+
+
+def test_alignment_helper_compensates_sample_lag() -> None:
+    rng = np.random.default_rng(42)
+    reference = rng.normal(0, 0.1, 1600).astype(np.float32)
+    lag = 37
+    delayed = np.pad(reference, (lag, 0))[: len(reference)].astype(np.float32)
+
+    estimated_lag = estimate_alignment_lag(reference, delayed, max_lag_samples=80)
+    aligned, alignment_lag = align_to_reference(delayed, reference, sample_rate=16000, max_lag_ms=5)
+
+    assert estimated_lag == lag
+    assert alignment_lag == lag
+    np.testing.assert_allclose(aligned[:-lag], reference[:-lag], atol=1e-6)
+
+
+def test_pair_peak_safety_normalize_uses_shared_scale() -> None:
+    clean = np.asarray([0.2, -0.4, 0.1], dtype=np.float32)
+    degraded = np.asarray([0.8, -2.0, 0.5], dtype=np.float32)
+
+    clean_out, degraded_out, scale = pair_peak_safety_normalize(clean, degraded, peak=0.5)
+
+    assert scale == pytest.approx(0.25)
+    np.testing.assert_allclose(clean_out, clean * scale)
+    np.testing.assert_allclose(degraded_out, degraded * scale)
+    assert np.max(np.abs(clean_out)) <= 0.5001
+    assert np.max(np.abs(degraded_out)) <= 0.5001
+
+
+def test_codec_channel_membership_is_derived_from_codec_specs() -> None:
+    validate_codec_channel_paths()
+    assert NARROWBAND_CODECS == {codec for codec, spec in CODECS.items() if spec["channel_path"] == "narrowband"}
+    assert WIDEBAND_CODECS == {codec for codec, spec in CODECS.items() if spec["channel_path"] == "wideband"}
+
+
+def test_default_config_filters_wideband_targets_and_uses_shared_normalization() -> None:
+    config = default_config({})
+
+    assert config["channel"]["wideband"]["filter_target"] is True
+    assert config["normalization"]["mode"] == "shared_pair_peak_safety"
 
 
 def test_generate_degraded_pairs_smoke(tmp_path: Path) -> None:

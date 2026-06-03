@@ -14,6 +14,7 @@ from typing import Any, Iterable
 import numpy as np
 import soundfile as sf
 import yaml
+from scipy import signal
 from tqdm import tqdm
 
 from ml.utils.audio import (
@@ -21,7 +22,6 @@ from ml.utils.audio import (
     load_audio,
     match_length,
     mix_at_snr,
-    peak_safety_normalize,
     repeat_or_crop,
     resample_audio,
     save_audio,
@@ -30,18 +30,28 @@ from ml.utils.seed import stable_seed
 
 
 CODECS: dict[str, dict[str, Any]] = {
-    "pass_through": {"ffmpeg": None, "extension": None},
-    "g711_alaw": {"ffmpeg": "pcm_alaw", "extension": ".wav"},
-    "g711_mulaw": {"ffmpeg": "pcm_mulaw", "extension": ".wav"},
-    "gsm": {"ffmpeg": ["libgsm", "gsm"], "extension": ".gsm"},
-    "amr_nb_12k2": {"ffmpeg": "libopencore_amrnb", "extension": ".amr", "bitrate": "12.2k"},
-    "amr_wb_12k65": {"ffmpeg": "libvo_amrwbenc", "extension": ".amr", "bitrate": "12.65k"},
-    "opus_nb": {"ffmpeg": "libopus", "extension": ".ogg", "bitrate": "16k"},
-    "opus_wb": {"ffmpeg": "libopus", "extension": ".ogg", "bitrate": "24k"},
+    "pass_through": {"ffmpeg": None, "extension": None, "channel_path": None},
+    "g711_alaw": {"ffmpeg": "pcm_alaw", "extension": ".wav", "channel_path": "narrowband"},
+    "g711_mulaw": {"ffmpeg": "pcm_mulaw", "extension": ".wav", "channel_path": "narrowband"},
+    "gsm": {"ffmpeg": ["libgsm", "gsm"], "extension": ".gsm", "channel_path": "narrowband"},
+    "amr_nb_12k2": {
+        "ffmpeg": "libopencore_amrnb",
+        "extension": ".amr",
+        "bitrate": "12.2k",
+        "channel_path": "narrowband",
+    },
+    "amr_wb_12k65": {
+        "ffmpeg": "libvo_amrwbenc",
+        "extension": ".amr",
+        "bitrate": "12.65k",
+        "channel_path": "wideband",
+    },
+    "opus_nb": {"ffmpeg": "libopus", "extension": ".ogg", "bitrate": "16k", "channel_path": "narrowband"},
+    "opus_wb": {"ffmpeg": "libopus", "extension": ".ogg", "bitrate": "24k", "channel_path": "wideband"},
 }
 
-NARROWBAND_CODECS = {"g711_alaw", "g711_mulaw", "gsm", "amr_nb_12k2", "opus_nb"}
-WIDEBAND_CODECS = {"amr_wb_12k65", "opus_wb"}
+NARROWBAND_CODECS = {codec for codec, spec in CODECS.items() if spec["channel_path"] == "narrowband"}
+WIDEBAND_CODECS = {codec for codec, spec in CODECS.items() if spec["channel_path"] == "wideband"}
 SAFE_ID_PATTERN = re.compile(r"[^A-Za-z0-9_.-]+")
 
 
@@ -200,11 +210,91 @@ def require_ffmpeg_codecs(config: dict[str, Any]) -> None:
         raise RuntimeError(f"ffmpeg is missing required encoders: {missing_encoders}")
 
 
+def validate_codec_channel_paths() -> None:
+    valid_paths = {"narrowband", "wideband", None}
+    invalid = {codec: spec.get("channel_path") for codec, spec in CODECS.items() if spec.get("channel_path") not in valid_paths}
+    if invalid:
+        raise ValueError(f"unsupported codec channel paths: {invalid}")
+    unclassified = sorted(codec for codec, spec in CODECS.items() if codec != "pass_through" and spec.get("channel_path") is None)
+    if unclassified:
+        raise ValueError(f"codec channel_path is required for non-pass-through codecs: {unclassified}")
+
+
 def safe_pair_id(split: str, clip_id: str, variant_index: int) -> str:
     safe_clip_id = SAFE_ID_PATTERN.sub("_", clip_id).strip("._")
     if not safe_clip_id:
         safe_clip_id = "clip"
     return f"{split}_{safe_clip_id}_v{variant_index}"
+
+
+def estimate_alignment_lag(reference: np.ndarray, candidate: np.ndarray, max_lag_samples: int) -> int:
+    reference_arr = np.asarray(reference, dtype=np.float32)
+    candidate_arr = np.asarray(candidate, dtype=np.float32)
+    if max_lag_samples <= 0 or len(reference_arr) == 0 or len(candidate_arr) == 0:
+        return 0
+    compare_length = min(len(reference_arr), len(candidate_arr))
+    if compare_length <= 1:
+        return 0
+    reference_arr = reference_arr[:compare_length]
+    candidate_arr = candidate_arr[:compare_length]
+    if float(np.max(np.abs(reference_arr))) == 0 or float(np.max(np.abs(candidate_arr))) == 0:
+        return 0
+    reference_arr = reference_arr - np.mean(reference_arr)
+    candidate_arr = candidate_arr - np.mean(candidate_arr)
+    correlations = signal.correlate(candidate_arr, reference_arr, mode="full", method="fft")
+    lags = signal.correlation_lags(len(candidate_arr), len(reference_arr), mode="full")
+    lag_limit = min(max_lag_samples, compare_length - 1)
+    window = np.abs(lags) <= lag_limit
+    if not np.any(window):
+        return 0
+    return int(lags[window][int(np.argmax(correlations[window]))])
+
+
+def shift_audio_to_lag(audio: np.ndarray, lag_samples: int) -> np.ndarray:
+    arr = np.asarray(audio, dtype=np.float32)
+    if lag_samples == 0 or len(arr) == 0:
+        return arr
+    if lag_samples > 0:
+        return arr[lag_samples:]
+    return np.pad(arr, (-lag_samples, 0)).astype(np.float32)
+
+
+def align_to_reference(
+    candidate: np.ndarray,
+    reference: np.ndarray,
+    sample_rate: int,
+    max_lag_ms: float = 50.0,
+) -> tuple[np.ndarray, int]:
+    max_lag_samples = int(round(sample_rate * max_lag_ms / 1000))
+    lag_samples = estimate_alignment_lag(reference, candidate, max_lag_samples)
+    aligned = match_length(shift_audio_to_lag(candidate, lag_samples), len(reference))
+    return aligned, lag_samples
+
+
+def pair_peak_safety_normalize(
+    clean: np.ndarray,
+    degraded: np.ndarray,
+    peak: float,
+) -> tuple[np.ndarray, np.ndarray, float]:
+    if not 0 < peak <= 1:
+        raise ValueError("peak must be in (0, 1]")
+    clean_arr = np.nan_to_num(np.asarray(clean, dtype=np.float32), nan=0.0, posinf=peak, neginf=-peak)
+    degraded_arr = np.nan_to_num(np.asarray(degraded, dtype=np.float32), nan=0.0, posinf=peak, neginf=-peak)
+    max_abs = max(
+        float(np.max(np.abs(clean_arr))) if clean_arr.size else 0.0,
+        float(np.max(np.abs(degraded_arr))) if degraded_arr.size else 0.0,
+    )
+    if max_abs == 0 or max_abs <= peak:
+        return clean_arr.astype(np.float32), degraded_arr.astype(np.float32), 1.0
+    scale = peak / max_abs
+    return (clean_arr * scale).astype(np.float32), (degraded_arr * scale).astype(np.float32), float(scale)
+
+
+def channel_path_for_codec(codec: str) -> str | None:
+    if codec not in CODECS:
+        raise ValueError(f"unsupported codec name: {codec}")
+    value = CODECS[codec]["channel_path"]
+    return str(value) if value is not None else None
 
 
 def codec_roundtrip(
@@ -401,30 +491,27 @@ def degrade_item(
     codec_frame_duration_ms = sample_codec_parameter(rng, codec_entry.get("frame_duration_ms"))
     if codec_frame_duration_ms is not None:
         codec_frame_duration_ms = int(codec_frame_duration_ms)
-    if codec in NARROWBAND_CODECS:
-        channel_path = "narrowband"
-        channel_rate = 8000
-        bandpass_hz = degradation_config["channel"]["narrowband"]["bandpass_hz"]
-    elif codec in WIDEBAND_CODECS:
-        channel_path = "wideband"
-        channel_rate = 16000
-        bandpass_hz = degradation_config["channel"]["wideband"]["bandpass_hz"]
-    else:
+    codec_channel_path = channel_path_for_codec(codec)
+    if codec_channel_path is None:
         channel_entry = weighted_choice(rng, degradation_config["channel"]["pass_through_path_distribution"])
         channel_path = str(channel_entry["path"])
         channel_rate = 8000 if channel_path == "narrowband" else 16000
         bandpass_hz = degradation_config["channel"][channel_path]["bandpass_hz"]
+    else:
+        channel_path = codec_channel_path
+        channel_rate = 8000 if channel_path == "narrowband" else 16000
+        bandpass_hz = degradation_config["channel"][channel_path]["bandpass_hz"]
 
-    degraded_channel = resample_audio(degraded, working_rate, channel_rate)
-    degraded_channel = bandpass_filter(degraded_channel, channel_rate, float(bandpass_hz[0]), float(bandpass_hz[1]))
+    pre_codec_channel = resample_audio(degraded, working_rate, channel_rate)
+    pre_codec_channel = bandpass_filter(pre_codec_channel, channel_rate, float(bandpass_hz[0]), float(bandpass_hz[1]))
     degraded_channel = codec_roundtrip(
-        degraded_channel,
+        pre_codec_channel,
         channel_rate,
         codec,
         bitrate=str(codec_bitrate) if codec_bitrate is not None else None,
         frame_duration_ms=codec_frame_duration_ms,
     )
-    degraded_channel = match_length(degraded_channel, len(resample_audio(degraded, working_rate, channel_rate)))
+    degraded_channel, codec_alignment_lag_samples = align_to_reference(degraded_channel, pre_codec_channel, channel_rate)
 
     network_cfg = degradation_config["network_impairment"]
     network_enabled = bool(network_cfg.get("enabled", True)) and rng.random() < float(network_cfg["probability"])
@@ -464,7 +551,6 @@ def degrade_item(
 
     degraded_model = resample_audio(degraded_channel, channel_rate, model_rate)
     degraded_model = match_length(degraded_model, int(round(len(clean_working) * model_rate / working_rate)))
-    degraded_model = peak_safety_normalize(degraded_model, peak=float(degradation_config["normalization"]["peak"]))
 
     clean_target = resample_audio(clean_working, working_rate, model_rate)
     if channel_path == "narrowband":
@@ -479,7 +565,12 @@ def degrade_item(
         target_bandwidth = "wideband_filtered"
     else:
         target_bandwidth = "wideband"
-    clean_target = peak_safety_normalize(match_length(clean_target, len(degraded_model)), peak=float(degradation_config["normalization"]["peak"]))
+    clean_target = match_length(clean_target, len(degraded_model))
+    clean_target, degraded_model, normalization_scale = pair_peak_safety_normalize(
+        clean_target,
+        degraded_model,
+        peak=float(degradation_config["normalization"]["peak"]),
+    )
 
     metadata.update(
         {
@@ -491,8 +582,10 @@ def degrade_item(
             "codec": codec,
             "codec_bitrate": codec_bitrate,
             "codec_frame_duration_ms": codec_frame_duration_ms,
+            "codec_alignment_lag_samples": codec_alignment_lag_samples,
             "network_impairment": network_metadata,
             "normalization": degradation_config["normalization"]["mode"],
+            "normalization_scale": normalization_scale,
         }
     )
     return metadata, clean_target, degraded_model, model_rate
@@ -511,7 +604,7 @@ def default_config(config: dict[str, Any]) -> dict[str, Any]:
         "level": {"gain_db": [-6, 6], "clipping": {"enabled": False, "probability": 0.1, "mode": "hard", "threshold": [0.8, 0.98]}, "agc": {"enabled": False}},
         "channel": {
             "narrowband": {"bandpass_hz": [300, 3400]},
-            "wideband": {"bandpass_hz": [50, 7000], "filter_target": False},
+            "wideband": {"bandpass_hz": [50, 7000], "filter_target": True},
             "pass_through_path_distribution": [{"path": "narrowband", "weight": 0.5}, {"path": "wideband", "weight": 0.5}],
         },
         "codec_distribution": [
@@ -526,7 +619,7 @@ def default_config(config: dict[str, Any]) -> dict[str, Any]:
         ],
         "profiles": None,
         "network_impairment": {"enabled": True, "probability": 0.60, "loss_rate_buckets": [[0.003, 0.02], [0.02, 0.05], [0.05, 0.10]], "burst_length": [1, 5], "frame_ms": 20},
-        "normalization": {"mode": "peak_safety", "peak": 0.99},
+        "normalization": {"mode": "shared_pair_peak_safety", "peak": 0.99},
     }
     return deep_merge(merged, config)
 
@@ -542,6 +635,7 @@ def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]
 
 
 def validate_config(config: dict[str, Any]) -> None:
+    validate_codec_channel_paths()
     manifests = config["manifests"]
     for split in ("train", "valid"):
         if split not in manifests:
