@@ -4,18 +4,20 @@ This document translates the thesis method chapter into an implementation plan f
 
 1. Fine-tune Whisper-small on the general Persian ASR corpus.
 2. Build the paired clean/degraded speech-enhancement dataset.
-3. Train or domain-adapt PrimeK-Net for Persian telecommunication-style degradation.
-4. Train the log-Mel fusion network that combines noisy and enhanced features before the frozen Whisper-small model.
+3. Train a log-Mel speech-enhancement module that maps noisy log-Mel features to clean log-Mel features.
+4. Train the dual-view fusion model that combines noisy and enhanced log-Mel features, and fine-tune the full stack (enhancement + fusion + Whisper-small) end-to-end on the ASR objective.
+
+This revision covers the **general overview** and the **loss function**. The exact enhancement and fusion architectures are intentionally left open and will be specified in a later pass; the relevant phases below mark architecture as deferred.
 
 ## Goals
 
-The implementation should produce a reproducible pipeline that starts from clean Persian speech clips and ends with trained speech-enhancement and fusion checkpoints. The system should keep all generated artifacts traceable to source audio, augmentation parameters, and model configuration.
+The implementation should produce a reproducible pipeline that starts from clean Persian speech clips and ends with a trained dual-view enhancement+fusion ASR system. The system should keep all generated artifacts traceable to source audio, augmentation parameters, and model configuration.
 
 The target behavior is not to make enhancement universally better for every dataset. The expected finding from the thesis is more specific:
 
-- Enhancement should help real or simulated telecommunication audio.
-- Direct Whisper-small should remain strong on clean general-purpose speech.
-- Fusion should reduce the failure mode where a pure enhancement cascade damages clean or out-of-domain speech, even if it does not always beat the best conditional choice.
+- The dual-view fusion system should outperform a single-stream Whisper-small fine-tuned on the same degraded data, especially on the most degraded conditions (codec artifacts, packet loss, low SNR).
+- The system should remain strong on clean general-purpose speech and not regress relative to the noisy single-stream fine-tune.
+- Fusion should reduce the failure mode where a pure enhancement path damages clean or out-of-domain speech, by keeping the noisy view available as a complementary signal.
 
 ## Proposed Repository Layout
 
@@ -29,9 +31,9 @@ ml/
     generate_degraded_pairs.py
     inspect_manifest.py
   enhancement/
-    primek_adapter.py
-    train_primek.py
-    eval_primek.py
+    enhancer.py
+    train_enhancer.py
+    eval_enhancer.py
   fusion/
     model.py
     dataset.py
@@ -52,7 +54,7 @@ configs/
   speech_enhancement/
     data.yaml
     whisper_small_train.yaml
-    primek_train.yaml
+    enhancer_train.yaml
     fusion_train.yaml
 artifacts/
   .gitkeep
@@ -71,7 +73,6 @@ Required input assets:
 - Background noise: DEMAND 16 kHz release.
 - Base ASR checkpoint: OpenAI Whisper-small.
 - Fine-tuned ASR checkpoint: the Persian-adapted Whisper-small checkpoint produced by Phase 1.
-- Optional baseline enhancement checkpoint: official or compatible PrimeK-Net checkpoint.
 
 The exact local paths should live in `configs/speech_enhancement/data.yaml`, not hard-coded in scripts.
 
@@ -93,7 +94,7 @@ seed: 1337
 
 ## Phase 1: Whisper-Small Fine-Tuning
 
-Fine-tune Whisper-small before training enhancement or fusion components. This stage produces the frozen ASR backbone used everywhere downstream.
+Fine-tune Whisper-small before training enhancement or fusion components. This stage produces the Persian-adapted ASR backbone used to initialize the downstream system.
 
 ### 1. Prepare General Persian ASR Manifests
 
@@ -153,7 +154,7 @@ artifacts/asr/whisper_small/
     manifest_hashes.json
 ```
 
-The saved checkpoint is the single ASR backbone for later phases. It should be identified as the fine-tuned Persian Whisper-small checkpoint in configs, logs, and thesis artifacts.
+The saved checkpoint is the Persian ASR backbone used to initialize later phases. It should be identified as the fine-tuned Persian Whisper-small checkpoint in configs, logs, and thesis artifacts.
 
 ## Phase 2: Speech-Enhancement Dataset Preparation
 
@@ -395,57 +396,73 @@ Add a lightweight inspection command in `ml/speech_data/inspect_manifest.py` tha
 
 This must run before training.
 
-## Phase 4: PrimeK-Net Training
+## Phase 4: Speech-Enhancement Module
 
-Implement `ml/enhancement/train_primek.py`.
+Implement a lightweight speech-enhancement module `E` that operates directly in the log-Mel domain consumed by Whisper: it maps a noisy Whisper log-Mel to an estimated clean log-Mel. There is no waveform output and no STFT round-trip. Unlike a perceptual denoiser, this module is optimized for recognition rather than perceptual quality, and it is trained as part of the end-to-end system in Phase 5 (optionally with a standalone warm-up).
 
-The preferred path is to wrap the official PrimeK-Net implementation with a thin adapter instead of reimplementing the architecture from scratch. Keep local code responsible for data loading, configuration, checkpointing, logging, and evaluation.
+### Design Intent
+
+- Input: noisy Whisper log-Mel, shape `[B, 80, T]`.
+- Output: enhanced log-Mel, shape `[B, 80, T]`.
+- Lightweight enough to train alongside Whisper-small on an RTX 3090.
+- Optimized for downstream recognition, with an auxiliary reconstruction loss keeping the output a faithful "clean view."
+
+The exact architecture (block types, depth, parameter budget) is **deferred** and will be specified in a later pass. This phase fixes the interface, training data, loss, and outputs only.
 
 ### Training Data
 
 Use:
 
-- Input: degraded waveform.
-- Target: clean waveform from the pair manifest.
+- Input: degraded waveform converted to noisy log-Mel with the Whisper feature extractor.
+- Target: bandwidth-aligned clean log-Mel from the pair manifest.
 - Train split: `se_train_pairs.jsonl`.
 - Validation split: `se_valid_pairs.jsonl`.
 
 The dataset loader should:
 
-- Load both waveforms.
-- Assert equal sample rate and length.
+- Load both waveforms and assert equal sample rate and length.
+- Compute log-Mel features with the same Whisper feature extractor used downstream.
 - Randomly crop or pad to the configured training segment length.
-- Return tensors shaped as expected by PrimeK-Net.
 
-### Training Configuration
+### Auxiliary Enhancement Loss
 
-Start with PrimeK-Net's published defaults. Avoid broad hyperparameter search during the first implementation.
+The enhancement objective is an **L1 loss in the log-Mel domain** between the predicted log-Mel and the clean log-Mel target:
 
-Configuration should include:
+```text
+L_enh = || E(noisy_mel) - clean_mel ||_1
+```
+
+Key points:
+
+- The loss lives in the **log-Mel domain** — the exact representation Whisper consumes — not in the linear magnitude spectrum. It is not magnitude-spectrum MSE.
+- **L1, not L2:** more robust to outliers and over-smooths less, preserving the low-energy phonetic detail that matters for recognition.
+- The target is **log-compressed** (Whisper-style), so errors are weighted perceptually rather than dominated by high-energy bins.
+- The `clean_mel` target must be the **bandwidth-aligned** reference produced by Phase 3 (e.g., narrowband-filtered clean for narrowband paths), so the module is not penalized for failing to reconstruct frequencies the channel genuinely removed.
+
+If a future variant produces a waveform instead of a log-Mel, the auxiliary loss should move to a multi-resolution STFT and/or SI-SDR loss; for the current Mel-domain module, log-Mel L1 is the correct match.
+
+Standalone warm-up of `E` on `L_enh` is performed as **Stage 0 of the single staged training script** (Phase 5), not as a separate job.
+
+### Configuration
 
 ```yaml
-checkpoint_init: /path/to/primek_pretrained.pt
 train_manifest: data/speech_enhancement/manifests/se_train_pairs.jsonl
 valid_manifest: data/speech_enhancement/manifests/se_valid_pairs.jsonl
 sample_rate: 16000
 segment_seconds: 4.0
 batch_size: 8
 gradient_accumulation_steps: 1
-epochs: 100
 learning_rate: 0.0002
 num_workers: 4
 mixed_precision: true
-save_every_epochs: 5
 ```
-
-Exact values can change after confirming the official PrimeK-Net recipe and available GPU memory.
 
 ### Checkpoints and Logs
 
 Write outputs to:
 
 ```text
-artifacts/speech_enhancement/primek/
+artifacts/speech_enhancement/enhancer/
   checkpoints/
     epoch_001.pt
     best.pt
@@ -455,48 +472,37 @@ artifacts/speech_enhancement/primek/
     valid_metrics.json
 ```
 
-Each checkpoint should include:
+Each checkpoint should include model state, optimizer/scheduler state, a config snapshot, the Git commit hash when available, and manifest paths with content hashes.
 
-- Model state.
-- Optimizer state.
-- Scheduler state if used.
-- Config snapshot.
-- Git commit hash when available.
-- Manifest paths and manifest content hashes.
+### Enhancement Evaluation
 
-### PrimeK-Net Evaluation
+Implement `ml/enhancement/eval_enhancer.py`.
 
-Implement `ml/enhancement/eval_primek.py`.
+Because the module is recognition-oriented and Mel-domain, evaluation should focus on log-Mel reconstruction quality and downstream effect rather than perceptual codec metrics:
 
-At minimum, compute:
+- Log-Mel L1/L2 against the bandwidth-aligned clean target on the validation split.
+- Optional: downstream WER/CER of `E` + Whisper as a sanity check (the enhanced-only configuration of Phase 5).
 
-- PESQ where legally and technically available.
-- SI-SDR or SDR.
-- Optional STOI if dependency is acceptable.
-- Runtime per second of audio.
+Export fixed-subset before/after log-Mel visualizations for inspection.
 
-Evaluation should write enhanced validation audio for a small fixed subset:
+## Phase 5: Fusion Network and End-to-End Training
 
-```text
-artifacts/speech_enhancement/primek/samples/
-  <pair_id>_degraded.wav
-  <pair_id>_enhanced.wav
-  <pair_id>_clean.wav
-```
+Combine the two complementary views — noisy and enhanced — and fine-tune the full stack on the ASR objective. This is the core of the proposed method.
 
-This makes auditory inspection reproducible.
+The stack has three trainable components, optimized jointly end-to-end:
 
-## Phase 5: Fusion Network Training
+- The speech-enhancement module `E` (Phase 4).
+- The fusion mechanism.
+- The Whisper-small backbone, initialized from the Persian-adapted checkpoint (Phase 1) and fine-tuned (not frozen).
 
-Implement the fusion model after the enhancement checkpoint is usable.
+### Dual-View Inputs
 
-The fusion stage has three frozen components:
+For each utterance:
 
-- Frozen fine-tuned Persian Whisper-small checkpoint.
-- Frozen Whisper-small feature extractor.
-- Frozen trained PrimeK-Net enhancement checkpoint.
+- `M_n`: noisy Whisper log-Mel.
+- `M_e = E(M_n)`: enhanced log-Mel from the Phase 4 module.
 
-Only the fusion network parameters are trained.
+The fusion mechanism combines `M_n` and `M_e` into the representation consumed by Whisper. The **exact fusion mechanism and its location in the stack** (for example, early channel-level fusion at the encoder input vs. fusion in the encoder feature space) is **deferred** and will be specified in a later pass. This phase fixes the dual-view interface, the training objective, the dataset, and the evaluation protocol only.
 
 ### Fusion Dataset
 
@@ -504,109 +510,138 @@ Implement `ml/fusion/dataset.py`.
 
 Each item should provide:
 
-- Degraded waveform.
-- Enhanced waveform generated by frozen PrimeK-Net.
+- Noisy log-Mel (or the degraded waveform plus the Whisper feature extractor).
+- Bandwidth-aligned clean log-Mel (target for the auxiliary enhancement loss).
 - Transcript tokens for Whisper supervision.
 - Optional metadata from the pair manifest.
 
-For performance, support two modes:
-
-1. `online_enhancement`: run PrimeK-Net inside the training loop.
-2. `cached_enhancement`: precompute enhanced waveforms or log-Mel features before fusion training.
-
-The first implementation should prefer cached enhancement because it reduces GPU memory pressure and makes fusion training easier to debug on an RTX 3090.
-
-Suggested cached layout:
+Because `E` is trainable, its enhanced output **cannot be cached**; only the noisy and clean log-Mel features (which do not depend on model weights) may be precomputed and cached:
 
 ```text
 data/fusion_cache/
   train/
     noisy_mel/
       <pair_id>.pt
-    enhanced_mel/
+    clean_mel/
       <pair_id>.pt
   valid/
     noisy_mel/
       <pair_id>.pt
-    enhanced_mel/
+    clean_mel/
       <pair_id>.pt
   manifests/
     fusion_train.jsonl
     fusion_valid.jsonl
 ```
 
-### Fusion Model
+### Training Objective
 
-Implement `ml/fusion/model.py`.
-
-Inputs:
-
-- `M_n`: noisy Whisper log-Mel, shape `[B, 80, T]`.
-- `M_e`: enhanced Whisper log-Mel, shape `[B, 80, T]`.
-
-Architecture:
-
-1. Rearrange both inputs to `[B, 1, T, 80]`.
-2. Project each stream to `C=64` channels with `1x1 Conv + BatchNorm + PReLU`.
-3. Apply `N=4` ladder stages.
-4. In each stage:
-   - Apply residual attention block independently to enhanced and noisy streams.
-   - Exchange information with gated interaction in both directions.
-5. Down-project both streams to one channel.
-6. Concatenate down-projected streams and original streams.
-7. Produce a time-frequency fusion mask with local convolution and chunked temporal attention.
-8. Compute convex fusion:
+The primary objective is Whisper-small's autoregressive cross-entropy on the fused input, with the auxiliary log-Mel enhancement loss from Phase 4 keeping the enhanced view faithful:
 
 ```text
-X_f = X_e' * mask + X_n' * (1 - mask)
+L_ASR = - sum_t log p(y_t | y_<t, M_f)
+L_enh = || E(noisy_mel) - clean_mel ||_1
+L     = L_ASR + lambda * L_enh
 ```
 
-9. Return fused log-Mel as `[B, 80, T]`.
+where `M_f` is the fused representation and `lambda` is a small weight (around `0.1` to `0.3`) so enhancement regularizes the clean view without dominating recognition.
 
-Implementation constraints:
+### Staged Training in a Single Script
 
-- Keep attention chunk size configurable, default `256`.
-- Keep channel count configurable, default `64`.
-- Avoid changing Whisper internals.
-- Include shape assertions in debug mode.
-- Unit-test the model with random tensors before connecting Whisper.
+Implement `ml/fusion/train_fusion.py` as a **single, config-driven orchestrator** that runs the full curriculum in one invocation and writes all artifacts to one run directory. It must not be three separate scripts.
 
-### Fusion Training Objective
+The script runs three stages in sequence:
 
-Implement `ml/fusion/train_fusion.py`.
+| Stage | What trains | Loss | Purpose |
+|---|---|---|---|
+| 0 — warm-up | enhancer `E` only | `L_enh` | Give `E` a sane init so it does not emit garbage into the backbone |
+| 1 — protect backbone | `E` + fusion, Whisper frozen | `L_ASR + lambda * L_enh` | Front-end learns to produce in-distribution Mels Whisper already accepts |
+| 2 — joint | `E` + fusion + Whisper | `L_ASR + lambda * L_enh` | End-to-end gradients make `E` recognition-aware (the core result) |
 
-Use Whisper-small's autoregressive cross-entropy loss:
+Orchestration requirements:
+
+- A single config file defines all three stages (steps/epochs, learning rates, frozen flags, `lambda` schedule, and the Whisper adaptation mode for Stage 2).
+- The stages run automatically in order within one process; the output of each stage initializes the next.
+- **Checkpoint at every stage boundary and support resume-from-stage** so a Stage 2 crash or OOM does not force re-running Stages 0 and 1. Default behavior is still a single end-to-end run; resume is for recovery.
+- **Discriminative learning rates** in Stage 2: a much lower learning rate for Whisper than for `E`/fusion (for example, 10x lower).
+- **`lambda` annealing:** higher in Stage 1 to anchor the clean view, decayed in Stage 2 so recognition dominates.
+- Stage 2 uses either full fine-tuning or LoRA/adapters on Whisper, selected by config; LoRA is the fallback if Stage 2 does not fit RTX 3090 memory or trains unstably.
+
+Per-stage loop responsibilities:
+
+- Load cached noisy/clean log-Mel features (or compute them online).
+- Run `E` to produce the enhanced view, then fuse with the noisy view (Stages 1 and 2).
+- Feed the fused representation to Whisper-small.
+- Compute the active stage's loss and backpropagate only through the parameters that stage trains.
+- Log metrics and write checkpoints.
+
+### Configuration
+
+A single config drives the whole run:
+
+```yaml
+run_dir: artifacts/speech_enhancement/fusion/run_001
+base_asr_checkpoint: artifacts/asr/whisper_small/checkpoints/best
+train_manifest: data/fusion_cache/manifests/fusion_train.jsonl
+valid_manifest: data/fusion_cache/manifests/fusion_valid.jsonl
+sample_rate: 16000
+mixed_precision: true
+resume_from_stage: null   # null | 0 | 1 | 2
+
+stages:
+  warmup:        # Stage 0
+    max_steps: 5000
+    lr_enhancer: 0.0002
+    lambda: 1.0
+  fusion:        # Stage 1 (Whisper frozen)
+    max_steps: 20000
+    lr_frontend: 0.0002
+    lambda: 0.3
+  joint:         # Stage 2 (end-to-end)
+    max_steps: 40000
+    lr_frontend: 0.0001
+    lr_whisper: 0.00001
+    lambda: 0.1
+    whisper_adaptation: full   # full | lora
+```
+
+### Outputs
+
+All stages write under one run directory:
 
 ```text
-L_ASR = -sum_t log p(y_t | y_<t, M_f)
+artifacts/speech_enhancement/fusion/run_001/
+  checkpoints/
+    stage0_warmup/
+    stage1_fusion/
+    stage2_joint/
+    best/
+  logs/
+    train_metrics.jsonl
+    valid_metrics.json
+  config/
+    training_config.yaml
+    manifest_hashes.json
+    git_commit.txt
 ```
 
-Whisper-small remains frozen. The optimizer updates only fusion network parameters.
-
-Training loop responsibilities:
-
-- Load cached noisy/enhanced log-Mel features.
-- Run fusion network.
-- Feed fused features to frozen Whisper-small.
-- Compute token-level cross-entropy against transcript labels.
-- Backpropagate only through fusion.
-- Save checkpoints and validation metrics.
+The `best/` checkpoint holds the final enhancement + fusion + Whisper weights for evaluation.
 
 ### Fusion Evaluation
 
 Implement `ml/fusion/eval_fusion.py`.
 
-Compare three inference modes on the same evaluation manifests:
+Compare inference modes on the same evaluation manifests, with the noisy single-stream fine-tune as the baseline to beat:
 
-1. Baseline: noisy audio directly to frozen fine-tuned Persian Whisper-small.
-2. Cascade: PrimeK-Net enhanced audio to frozen fine-tuned Persian Whisper-small.
-3. Fusion: noisy and enhanced log-Mels through fusion network, then frozen fine-tuned Persian Whisper-small.
+1. Baseline: Whisper-small fine-tuned on the degraded data, evaluated directly on noisy audio (single stream).
+2. Enhanced-only: `E` + Whisper-small (no noisy view).
+3. Fusion: noisy and enhanced log-Mels combined by the fusion mechanism, then Whisper-small.
 
 Report:
 
 - WER.
 - CER.
-- Per-dataset averages.
+- Per-dataset averages, with attention to the most degraded subsets (codec artifacts, packet loss, low SNR).
 - Runtime and memory if feasible.
 
 Keep text normalization identical across all modes.
@@ -631,8 +666,9 @@ Recommended tests:
 - Stable deterministic seed generation.
 - Audio pair length alignment.
 - Degradation metadata completeness.
-- Fusion model forward pass shape.
-- Frozen-parameter check for Whisper-small and PrimeK-Net during fusion training.
+- Enhancement module forward pass shape: `[B, 80, T]` in and out.
+- Fusion model forward pass shape produces a valid Whisper input.
+- Combined loss assembles `L_ASR` and `L_enh` and is finite on a tiny batch.
 - Text normalization consistency between training and scoring.
 
 For long-running GPU jobs, add smoke-test commands that run on a tiny manifest with 2 to 4 clips.
@@ -652,8 +688,8 @@ prepare-se-data:
 generate-se-pairs:
 	uv run python -m ml.speech_data.generate_degraded_pairs --config configs/speech_enhancement/data.yaml
 
-train-primek:
-	uv run python -m ml.enhancement.train_primek --config configs/speech_enhancement/primek_train.yaml
+train-enhancer:
+	uv run python -m ml.enhancement.train_enhancer --config configs/speech_enhancement/enhancer_train.yaml
 
 train-fusion:
 	uv run python -m ml.fusion.train_fusion --config configs/speech_enhancement/fusion_train.yaml
@@ -692,34 +728,36 @@ Exit criteria:
 - Clean and degraded lengths match.
 - Codec, SNR, and packet-loss distributions match the configured probabilities within reasonable sampling variance.
 
-### Milestone 3: PrimeK-Net Domain Adaptation
+### Milestone 3: Speech-Enhancement Module
 
 Deliverables:
 
-- Training wrapper.
-- Best PrimeK-Net checkpoint.
-- Validation PESQ/SI-SDR report.
-- Fixed sample audio exports for inspection.
+- Mel-domain enhancement module implementation.
+- Optional standalone warm-up checkpoint.
+- Log-Mel reconstruction report on the validation split.
+- Fixed-subset before/after log-Mel visualizations.
 
 Exit criteria:
 
-- Validation metrics improve over degraded input.
-- No obvious speech deletion or severe artifacting on the fixed sample subset.
+- Validation log-Mel reconstruction improves over the noisy input.
+- The module forward pass is shape-correct and trains without instability on a tiny overfit run.
 
-### Milestone 4: Fusion Model
+### Milestone 4: Fusion Model and End-to-End Training
 
 Deliverables:
 
-- Cached noisy/enhanced log-Mel generation.
+- Cached noisy/clean log-Mel generation.
 - Fusion model implementation.
-- Fusion training loop with frozen Whisper-small and PrimeK-Net.
-- WER/CER comparison against baseline and cascade.
+- Single staged training script (`train_fusion.py`) running Stage 0 -> 1 -> 2 in one invocation, with per-stage checkpoints, resume-from-stage, and one run directory.
+- WER/CER comparison against the noisy single-stream baseline and the enhanced-only configuration.
 
 Exit criteria:
 
-- Fusion training loss decreases on a tiny overfit run.
-- Frozen models remain unchanged.
-- Evaluation script produces comparable WER/CER tables for all three inference modes.
+- The script runs all three stages end-to-end from a single config and writes all artifacts to one run directory.
+- Resume-from-stage restores Stage 2 from the Stage 1 checkpoint without re-running Stages 0 and 1.
+- The combined training loss decreases on a tiny overfit run.
+- The evaluation script produces comparable WER/CER tables for all inference modes.
+- The fusion system beats the noisy single-stream fine-tune on at least the most degraded subsets.
 
 ### Milestone 5: Thesis-Ready Result Reproduction
 
@@ -729,7 +767,7 @@ Deliverables:
 - Config snapshots.
 - Checkpoint hashes.
 - Manifest hashes.
-- Short written analysis of where enhancement helps, where it hurts, and whether fusion reduces cascade failures.
+- Short written analysis of where the dual-view helps, where it does not, and how it compares to the noisy single-stream fine-tune.
 
 Exit criteria:
 
@@ -738,11 +776,14 @@ Exit criteria:
 
 ## Open Decisions
 
-These should be resolved before implementation starts:
+These should be resolved before or during implementation:
 
+- Exact architecture and parameter budget of the Mel-domain enhancement module.
+- Exact fusion mechanism and its location in the stack (early channel-level vs. encoder-feature-space fusion).
+- Full fine-tuning vs. parameter-efficient adaptation (LoRA/adapters) for Whisper-small, given RTX 3090 memory.
+- The auxiliary-loss weight `lambda`.
+- Whether to warm up the enhancement module standalone before end-to-end training.
 - Exact path and format of the fine-tuned Persian Whisper-small checkpoint.
 - Exact location and source metadata for each non-telephone general Persian ASR training source.
-- Whether PrimeK-Net will be vendored, installed as a dependency, or used as a Git submodule.
 - Whether codec simulation will rely on `ffmpeg`/external binaries or a pure Python implementation where possible.
-- Whether enhanced audio/log-Mel features should be cached before fusion training. The recommended default is yes.
 - Exact WER/CER normalization rules for Persian punctuation, digits, whitespace, and Arabic/Persian character variants.
