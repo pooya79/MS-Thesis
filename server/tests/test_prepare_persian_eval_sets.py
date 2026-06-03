@@ -133,7 +133,7 @@ def test_normalize_eval_rows_keeps_rejected_text_as_test_fallback(tmp_path: Path
     source_audio = tmp_path / "a.wav"
     source_audio.write_bytes(b"audio")
     audit = DatasetAudit()
-    rows = [SourceRow(path="a.wav", sentence="hello سلام", source_audio_path=source_audio)]
+    rows = [SourceRow(path="a.wav", sentence="hello سلام؟.", source_audio_path=source_audio)]
 
     normalized = normalize_eval_rows(rows, audit)
 

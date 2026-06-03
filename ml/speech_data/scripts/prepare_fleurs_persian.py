@@ -13,7 +13,7 @@ from typing import Callable, Iterable
 
 from tqdm import tqdm
 
-from ml.speech_data.scripts.prepare_common_voice_25 import maybe_normalize, write_split_tsv
+from ml.speech_data.scripts.prepare_common_voice_25 import maybe_normalize, remove_punctuation, write_split_tsv
 
 
 SOURCE_TO_OUTPUT_SPLIT = {
@@ -92,7 +92,11 @@ def normalize_rows(
             if keep_rejected_with_raw_text:
                 audit.test_fallback_rows += 1
                 normalized_rows.append(
-                    PreparedRow(path=wav_name(row.path), sentence=row.sentence, source_audio_path=row.source_audio_path)
+                    PreparedRow(
+                        path=wav_name(row.path),
+                        sentence=remove_punctuation(row.sentence),
+                        source_audio_path=row.source_audio_path,
+                    )
                 )
             else:
                 audit.discarded_rows += 1

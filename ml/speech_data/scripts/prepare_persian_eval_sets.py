@@ -15,7 +15,7 @@ from xml.etree import ElementTree
 
 from tqdm import tqdm
 
-from ml.speech_data.scripts.prepare_common_voice_25 import maybe_normalize, write_split_tsv
+from ml.speech_data.scripts.prepare_common_voice_25 import maybe_normalize, remove_punctuation, write_split_tsv
 
 
 @dataclass(frozen=True)
@@ -273,7 +273,13 @@ def normalize_eval_rows(rows: Iterable[SourceRow], audit: DatasetAudit) -> list[
         if normalized is None or not normalized:
             if row.sentence.strip():
                 audit.test_fallback_rows += 1
-                prepared_rows.append(PreparedRow(path=wav_name(row.path), sentence=row.sentence, source_audio_path=row.source_audio_path))
+                prepared_rows.append(
+                    PreparedRow(
+                        path=wav_name(row.path),
+                        sentence=remove_punctuation(row.sentence),
+                        source_audio_path=row.source_audio_path,
+                    )
+                )
             else:
                 audit.discarded_rows += 1
             continue

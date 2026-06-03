@@ -120,8 +120,14 @@ def maybe_normalize(text: str) -> str | None:
 
     text = unicodedata.normalize("NFKC", text)
     text = text.replace("ء", "")
-    text = "".join(char for char in text if not unicodedata.category(char).startswith("P"))
+    text = remove_punctuation(text)
 
+    return " ".join(t for t in text.split() if t)
+
+
+def remove_punctuation(text: str) -> str:
+    text = unicodedata.normalize("NFKC", text)
+    text = "".join(char for char in text if not unicodedata.category(char).startswith("P"))
     return " ".join(t for t in text.split() if t)
 
 
@@ -153,7 +159,9 @@ def normalize_rows(
         if normalized is None or not normalized:
             if keep_rejected_with_raw_text:
                 audit.test_fallback_rows += 1
-                normalized_rows.append(CommonVoiceRow(path=wav_name(row.path), sentence=row.sentence))
+                normalized_rows.append(
+                    CommonVoiceRow(path=wav_name(row.path), sentence=remove_punctuation(row.sentence))
+                )
             else:
                 audit.discarded_rows += 1
             continue

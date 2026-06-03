@@ -73,7 +73,7 @@ def test_build_splits_preserves_test_and_excludes_it_from_train_dev(tmp_path: Pa
         {"path": "train-skip.mp3", "sentence": "hello سلام"},
         {"path": "dev-a.mp3", "sentence": "خب ، تو چیكار می كنی؟"},
         {"path": "test-a.mp3", "sentence": "این تست است."},
-        {"path": "test-reject.mp3", "sentence": "hello تست"},
+        {"path": "test-reject.mp3", "sentence": "hello تست؟."},
     ]
     dev = [
         {"path": "dev-a.mp3", "sentence": "خب ، تو چیكار می كنی؟"},
@@ -82,7 +82,7 @@ def test_build_splits_preserves_test_and_excludes_it_from_train_dev(tmp_path: Pa
     ]
     test = [
         {"path": "test-a.mp3", "sentence": "این تست است."},
-        {"path": "test-reject.mp3", "sentence": "hello تست"},
+        {"path": "test-reject.mp3", "sentence": "hello تست؟."},
     ]
     write_cv_tsv(source_root / "validated.tsv", validated)
     write_cv_tsv(source_root / "dev.tsv", dev)

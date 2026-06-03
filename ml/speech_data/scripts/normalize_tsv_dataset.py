@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
-from ml.speech_data.scripts.prepare_common_voice_25 import maybe_normalize
+from ml.speech_data.scripts.prepare_common_voice_25 import maybe_normalize, remove_punctuation
 
 
 csv.field_size_limit(sys.maxsize)
@@ -69,6 +69,7 @@ def normalize_tsv_file(path: Path, *, discard_rejected: bool = True) -> Normaliz
             if discard_rejected:
                 audit.discarded_rows += 1
                 continue
+            row["sentence"] = remove_punctuation(row.get("sentence", ""))
             normalized_rows.append(row)
             continue
 

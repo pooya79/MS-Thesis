@@ -61,7 +61,7 @@ def build_fake_source(source_root: Path) -> None:
         "test",
         [
             ("test-a", "این تست است."),
-            ("test-reject", "hello تست"),
+            ("test-reject", "hello تست؟."),
         ],
     )
 
