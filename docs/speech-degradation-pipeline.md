@@ -82,8 +82,8 @@ Current profiles:
 - `telephone_clean`: narrowband telephone codec/channel degradation without additive
   noise.
 - `telephone_noisy`: narrowband telephone-style speech with environmental noise.
-- `voip_lossy`: Opus/AMR/G.711-style VoIP degradation with frequent bursty decoded
-  waveform loss approximation.
+- `voip_lossy`: Opus VoIP degradation with bursty packet loss and decoder packet-loss
+  concealment.
 - `mobile_wideband`: wideband mobile or app-call speech with moderate acoustic
   contamination.
 
@@ -114,7 +114,9 @@ For each clean clip and variant, the generator applies these stages:
 7. Resample and band-limit for narrowband or wideband channel simulation.
 8. Apply an ffmpeg codec round-trip.
 9. Cross-correlate against the pre-codec channel waveform and compensate codec delay.
-10. Optionally apply decoded waveform dropout as a network-loss approximation.
+10. Optionally apply packet loss during Opus encode/decode so decoder PLC handles
+    missing packets. Non-Opus codecs receive a clearly labeled decoded-waveform fallback
+    impairment.
 11. Resample degraded input to the model sample rate.
 12. Create the clean target, with bandwidth alignment for narrowband and default wideband samples.
 13. Apply one shared peak-safety scale to the clean/degraded pair.
@@ -187,25 +189,42 @@ measured `codec_alignment_lag_samples`.
 - `codec_bitrate`
 - `codec_frame_duration_ms`
 
-This improves VoIP diversity without requiring a full packet-level network simulator.
+This improves VoIP diversity without requiring a full network simulator.
 
 ## Network Impairment Stage
 
-The current network stage is intentionally labeled as an approximation:
+The primary VoIP network stage applies loss before decoding for Opus codecs:
 
 ```json
 {
-  "mode": "decoded_waveform_dropout",
+  "mode": "packet_loss_plc",
+  "model": "opus_decoder_plc"
+}
+```
+
+The generator encodes each Opus frame, samples a two-state burst loss process over the
+encoded packet sequence, and passes missing packets to the Opus decoder. The degraded
+waveform therefore contains the decoder's packet-loss concealment output rather than hard
+zeroed gaps.
+
+For non-Opus codecs, the pipeline uses a clearly labeled fallback mode:
+
+```json
+{
+  "mode": "decoded_waveform_dropout_fallback",
   "model": "two_state_burst"
 }
 ```
 
-It runs after codec decoding, so it does not model codec packet loss, decoder packet-loss
-concealment, jitter buffers, retransmission, or late packets. It does create short bursty
-dropouts using a two-state frame process:
+That fallback runs after codec decoding and should not be used as evidence for true VoIP
+packet-loss robustness. The checked-in `voip_lossy` profile is Opus-only so packet-loss
+examples use decoder PLC by default. Explicit ablations can also request
+`mode: decoded_waveform_dropout`, which uses the same waveform dropout model.
+
+Both modes use a two-state frame process:
 
 - Good state: frames pass through.
-- Bad state: frames are zeroed.
+- Bad state: encoded Opus packets are dropped, or fallback waveform frames are zeroed.
 - `loss_rate` controls the target long-run loss rate.
 - `burst_length` controls expected bad-state duration.
 
@@ -213,13 +232,15 @@ Recorded fields:
 
 - `loss_rate`
 - `burst_length`
-- `frame_ms`
+- `frame_ms` records the effective impairment frame size. For Opus PLC this is the
+  selected codec frame duration when present.
 - `dropout_ms`
 - `dropped_frames`
 - `total_frames`
 - `observed_loss_rate`
 
-This is more honest and more auditable than calling the effect true packet loss.
+Metadata records which path was used, making packet-loss PLC and fallback examples
+auditable.
 
 ## Clean Target Policy
 
@@ -299,15 +320,15 @@ telephone or VoIP emulator.
 
 Known limitations:
 
-- Network loss is applied after decoding, not as packet corruption before decoding.
-- There is no codec-specific packet-loss concealment simulation.
+- Packet loss with decoder PLC is currently implemented for Opus codecs only.
+- Non-Opus packet-loss requests use decoded waveform dropout as a labeled fallback.
 - There is no jitter buffer, variable delay, duplicate packet, or late-packet model.
 - There is no DTX, comfort noise, sidetone, echo, or acoustic echo cancellation model.
 - AGC is currently metadata-only unless implemented in a future level stage.
 - Noise assets only reflect the quality and diversity of the indexed corpora.
 
 The thesis should describe the generated data as telephone/VoIP-inspired synthetic
-degradation, not as real network capture.
+degradation with Opus packet-loss PLC, not as real network capture.
 
 ## Recommended Experiment Reporting
 

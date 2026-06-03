@@ -23,6 +23,7 @@ from ml.speech_data.generate_degraded_pairs import (
     estimate_alignment_lag,
     ffmpeg_encoder_candidates,
     generate_from_config,
+    opus_packet_loss_plc_roundtrip,
     pair_peak_safety_normalize,
     resolve_ffmpeg_encoder,
     validate_codec_channel_paths,
@@ -407,6 +408,123 @@ def test_decoded_waveform_dropout_reports_observed_loss() -> None:
     assert total_frames == 50
     assert 0 < dropped_frames < total_frames
     assert np.count_nonzero(degraded == 0) > 0
+
+
+def test_opus_packet_loss_plc_roundtrip_uses_decoder_concealment() -> None:
+    rng = np.random.default_rng(123)
+    sample_rate = 16000
+    t = np.linspace(0, 0.5, sample_rate // 2, endpoint=False, dtype=np.float32)
+    audio = (0.2 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
+
+    try:
+        degraded, dropped_frames, total_frames = opus_packet_loss_plc_roundtrip(
+            audio,
+            sample_rate=sample_rate,
+            rng=rng,
+            loss_rate=0.35,
+            burst_length=3,
+            frame_ms=20,
+            bitrate="24k",
+        )
+    except RuntimeError as exc:
+        pytest.skip(str(exc))
+
+    assert len(degraded) == len(audio)
+    assert total_frames == 25
+    assert 0 < dropped_frames < total_frames
+    assert np.isfinite(degraded).all()
+    assert np.count_nonzero(degraded == 0) < sample_rate * 0.02
+
+
+def test_generate_degraded_pairs_records_opus_packet_loss_plc(tmp_path: Path) -> None:
+    clean_dir = tmp_path / "clean"
+    clean_dir.mkdir()
+    sample_rate = 16000
+    t = np.linspace(0, 0.5, sample_rate // 2, endpoint=False, dtype=np.float32)
+    audio = (0.2 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
+    sf.write(clean_dir / "train.wav", audio, sample_rate)
+    sf.write(clean_dir / "valid.wav", audio, sample_rate)
+
+    manifest_dir = tmp_path / "manifests"
+    manifest_dir.mkdir()
+    for split in ("train", "valid"):
+        row = {"id": f"{split}-clip", "split": split, "clean_path": str(clean_dir / f"{split}.wav")}
+        (manifest_dir / f"{split}.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+    config = {
+        "seed": 13,
+        "variants_per_clip": 1,
+        "output_dir": str(tmp_path / "out"),
+        "manifests": {"train": str(manifest_dir / "train.jsonl"), "valid": str(manifest_dir / "valid.jsonl")},
+        "noise_index": None,
+        "noise": {"probability": 0.0, "second_scene_probability": 0.0, "snr_buckets": [[0, 1]]},
+        "level": {"gain_db": [0, 0], "clipping": {"enabled": False}, "agc": {"enabled": False}},
+        "codec_distribution": [{"codec": "opus_wb", "weight": 1.0, "bitrate": "24k", "frame_duration_ms": 60}],
+        "channel": {
+            "narrowband": {"bandpass_hz": [300, 3400]},
+            "wideband": {"bandpass_hz": [50, 7000], "filter_target": False},
+            "pass_through_path_distribution": [{"path": "wideband", "weight": 1.0}],
+        },
+        "network_impairment": {"enabled": True, "mode": "packet_loss_plc", "probability": 1.0, "loss_rate_buckets": [[1.0, 1.0]], "burst_length": [2, 2], "frame_ms": 20},
+    }
+
+    try:
+        generate_from_config(config)
+    except RuntimeError as exc:
+        pytest.skip(str(exc))
+
+    train_manifest = tmp_path / "out" / "manifests" / "se_train_pairs.jsonl"
+    row = json.loads(train_manifest.read_text(encoding="utf-8").splitlines()[0])
+    network = row["network_impairment"]
+    assert network["enabled"] is True
+    assert network["mode"] == "packet_loss_plc"
+    assert network["model"] == "opus_decoder_plc"
+    assert network["frame_ms"] == 60
+    assert network["dropout_ms"] == network["dropped_frames"] * 60
+    assert network["dropped_frames"] > 0
+
+
+def test_packet_loss_plc_falls_back_for_non_opus_codecs_with_explicit_metadata(tmp_path: Path) -> None:
+    clean_dir = tmp_path / "clean"
+    clean_dir.mkdir()
+    sample_rate = 16000
+    t = np.linspace(0, 0.25, sample_rate // 4, endpoint=False, dtype=np.float32)
+    audio = (0.2 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
+    sf.write(clean_dir / "train.wav", audio, sample_rate)
+    sf.write(clean_dir / "valid.wav", audio, sample_rate)
+
+    manifest_dir = tmp_path / "manifests"
+    manifest_dir.mkdir()
+    for split in ("train", "valid"):
+        row = {"id": f"{split}-clip", "split": split, "clean_path": str(clean_dir / f"{split}.wav")}
+        (manifest_dir / f"{split}.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+    config = {
+        "seed": 17,
+        "variants_per_clip": 1,
+        "output_dir": str(tmp_path / "out"),
+        "manifests": {"train": str(manifest_dir / "train.jsonl"), "valid": str(manifest_dir / "valid.jsonl")},
+        "noise_index": None,
+        "noise": {"probability": 0.0, "second_scene_probability": 0.0, "snr_buckets": [[0, 1]]},
+        "level": {"gain_db": [0, 0], "clipping": {"enabled": False}, "agc": {"enabled": False}},
+        "codec_distribution": [{"codec": "pass_through", "weight": 1.0}],
+        "channel": {
+            "narrowband": {"bandpass_hz": [300, 3400]},
+            "wideband": {"bandpass_hz": [50, 7000], "filter_target": False},
+            "pass_through_path_distribution": [{"path": "wideband", "weight": 1.0}],
+        },
+        "network_impairment": {"enabled": True, "mode": "packet_loss_plc", "probability": 1.0, "loss_rate_buckets": [[1.0, 1.0]], "burst_length": [2, 2], "frame_ms": 20},
+    }
+
+    generate_from_config(config)
+
+    train_manifest = tmp_path / "out" / "manifests" / "se_train_pairs.jsonl"
+    row = json.loads(train_manifest.read_text(encoding="utf-8").splitlines()[0])
+    network = row["network_impairment"]
+    assert network["enabled"] is True
+    assert network["mode"] == "decoded_waveform_dropout_fallback"
+    assert network["model"] == "two_state_burst"
+    assert network["dropped_frames"] > 0
 
 
 def test_ffmpeg_available_for_configured_codecs() -> None:

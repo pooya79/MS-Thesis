@@ -96,26 +96,20 @@ profiles:
 
   - name: voip_lossy
     weight: 0.25
-    description: VoIP-style wideband/narrowband codecs with bursty decoded-waveform loss approximation.
+    description: VoIP-style Opus wideband/narrowband codecs with packet-loss concealment.
     noise:
       probability: 0.30
     network_impairment:
       probability: 0.80
     codec_distribution:
       - codec: opus_wb
-        weight: 0.45
+        weight: 0.70
         bitrate: [16k, 24k, 32k]
         frame_duration_ms: [20, 40, 60]
       - codec: opus_nb
-        weight: 0.20
+        weight: 0.30
         bitrate: [12k, 16k]
         frame_duration_ms: [20, 40]
-      - codec: amr_wb_12k65
-        weight: 0.20
-      - codec: g711_alaw
-        weight: 0.10
-      - codec: pass_through
-        weight: 0.05
 
   - name: mobile_wideband
     weight: 0.20
@@ -136,6 +130,7 @@ profiles:
 
 network_impairment:
   enabled: true
+  mode: packet_loss_plc
   probability: 0.60
   loss_rate_buckets:
     - [0.003, 0.02]

@@ -7,6 +7,8 @@ import re
 import shutil
 import subprocess
 import tempfile
+from ctypes import POINTER, byref, c_float, c_int, c_ubyte, c_void_p, cdll
+from ctypes.util import find_library
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
@@ -52,7 +54,12 @@ CODECS: dict[str, dict[str, Any]] = {
 
 NARROWBAND_CODECS = {codec for codec, spec in CODECS.items() if spec["channel_path"] == "narrowband"}
 WIDEBAND_CODECS = {codec for codec, spec in CODECS.items() if spec["channel_path"] == "wideband"}
+OPUS_CODECS = {"opus_nb", "opus_wb"}
 SAFE_ID_PATTERN = re.compile(r"[^A-Za-z0-9_.-]+")
+OPUS_APPLICATION_VOIP = 2048
+OPUS_OK = 0
+OPUS_SET_BITRATE_REQUEST = 4002
+MAX_OPUS_PACKET_BYTES = 4000
 
 
 @dataclass(frozen=True)
@@ -357,6 +364,145 @@ def codec_roundtrip(
     return np.asarray(decoded, dtype=np.float32)
 
 
+@functools.cache
+def opus_library() -> Any:
+    library_path = find_library("opus")
+    if library_path is None:
+        raise RuntimeError("libopus is required for Opus packet-loss PLC simulation but was not found")
+    library = cdll.LoadLibrary(library_path)
+    library.opus_encoder_create.argtypes = [c_int, c_int, c_int, POINTER(c_int)]
+    library.opus_encoder_create.restype = c_void_p
+    library.opus_encoder_destroy.argtypes = [c_void_p]
+    library.opus_decoder_create.argtypes = [c_int, c_int, POINTER(c_int)]
+    library.opus_decoder_create.restype = c_void_p
+    library.opus_decoder_destroy.argtypes = [c_void_p]
+    library.opus_encode_float.argtypes = [c_void_p, POINTER(c_float), c_int, POINTER(c_ubyte), c_int]
+    library.opus_encode_float.restype = c_int
+    library.opus_decode_float.argtypes = [c_void_p, POINTER(c_ubyte), c_int, POINTER(c_float), c_int, c_int]
+    library.opus_decode_float.restype = c_int
+    library.opus_encoder_ctl.argtypes = [c_void_p, c_int, c_int]
+    library.opus_encoder_ctl.restype = c_int
+    return library
+
+
+def parse_bitrate_bps(value: str | int | None) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    text = str(value).strip().lower()
+    multiplier = 1
+    if text.endswith("k"):
+        multiplier = 1000
+        text = text[:-1]
+    return int(float(text) * multiplier)
+
+
+def sample_burst_loss_mask(
+    frame_count: int,
+    rng: np.random.Generator,
+    loss_rate: float,
+    burst_length: int,
+) -> np.ndarray:
+    target_loss_rate = min(1.0, max(0.0, loss_rate))
+    mask = np.zeros(frame_count, dtype=bool)
+    if frame_count == 0 or target_loss_rate == 0:
+        return mask
+    bad_to_good = min(1.0, 1.0 / max(1, burst_length))
+    good_to_bad = min(1.0, (target_loss_rate * bad_to_good) / max(1e-6, 1.0 - target_loss_rate))
+    in_bad_state = False
+    for frame in range(frame_count):
+        if in_bad_state:
+            mask[frame] = True
+            in_bad_state = rng.random() >= bad_to_good
+        else:
+            in_bad_state = rng.random() < good_to_bad
+    return mask
+
+
+def opus_packet_loss_plc_roundtrip(
+    audio: np.ndarray,
+    sample_rate: int,
+    rng: np.random.Generator,
+    loss_rate: float,
+    burst_length: int,
+    frame_ms: int,
+    bitrate: str | int | None = None,
+) -> tuple[np.ndarray, int, int]:
+    if sample_rate not in {8000, 12000, 16000, 24000, 48000}:
+        raise ValueError(f"unsupported Opus sample rate for packet-loss PLC: {sample_rate}")
+    frame_len = max(1, int(round(sample_rate * frame_ms / 1000)))
+    frame_count = int(np.ceil(len(audio) / frame_len))
+    loss_mask = sample_burst_loss_mask(frame_count, rng, loss_rate, burst_length)
+    if frame_count == 0:
+        return np.asarray(audio, dtype=np.float32).copy(), 0, 0
+
+    library = opus_library()
+    error = c_int()
+    encoder = library.opus_encoder_create(sample_rate, 1, OPUS_APPLICATION_VOIP, byref(error))
+    if error.value != OPUS_OK or not encoder:
+        raise RuntimeError(f"failed to create Opus encoder: error {error.value}")
+    decoder = library.opus_decoder_create(sample_rate, 1, byref(error))
+    if error.value != OPUS_OK or not decoder:
+        library.opus_encoder_destroy(encoder)
+        raise RuntimeError(f"failed to create Opus decoder: error {error.value}")
+
+    bitrate_bps = parse_bitrate_bps(bitrate)
+    if bitrate_bps is not None:
+        ctl_result = library.opus_encoder_ctl(encoder, OPUS_SET_BITRATE_REQUEST, bitrate_bps)
+        if ctl_result != OPUS_OK:
+            library.opus_decoder_destroy(decoder)
+            library.opus_encoder_destroy(encoder)
+            raise RuntimeError(f"failed to set Opus bitrate: error {ctl_result}")
+
+    padded_len = frame_count * frame_len
+    padded = np.zeros(padded_len, dtype=np.float32)
+    padded[: len(audio)] = np.asarray(audio, dtype=np.float32)
+    decoded_frames: list[np.ndarray] = []
+    try:
+        for frame_index in range(frame_count):
+            frame = np.ascontiguousarray(padded[frame_index * frame_len : (frame_index + 1) * frame_len], dtype=np.float32)
+            packet = (c_ubyte * MAX_OPUS_PACKET_BYTES)()
+            packet_len = library.opus_encode_float(
+                encoder,
+                frame.ctypes.data_as(POINTER(c_float)),
+                frame_len,
+                packet,
+                MAX_OPUS_PACKET_BYTES,
+            )
+            if packet_len < 0:
+                raise RuntimeError(f"Opus encode failed: error {packet_len}")
+
+            decoded = np.zeros(frame_len, dtype=np.float32)
+            if loss_mask[frame_index]:
+                decoded_len = library.opus_decode_float(
+                    decoder,
+                    None,
+                    0,
+                    decoded.ctypes.data_as(POINTER(c_float)),
+                    frame_len,
+                    0,
+                )
+            else:
+                decoded_len = library.opus_decode_float(
+                    decoder,
+                    packet,
+                    packet_len,
+                    decoded.ctypes.data_as(POINTER(c_float)),
+                    frame_len,
+                    0,
+                )
+            if decoded_len < 0:
+                raise RuntimeError(f"Opus decode failed: error {decoded_len}")
+            decoded_frames.append(decoded[:decoded_len].copy())
+    finally:
+        library.opus_decoder_destroy(decoder)
+        library.opus_encoder_destroy(encoder)
+
+    decoded_audio = np.concatenate(decoded_frames).astype(np.float32) if decoded_frames else np.asarray([], dtype=np.float32)
+    return decoded_audio, int(np.count_nonzero(loss_mask)), frame_count
+
+
 def apply_decoded_waveform_dropout(
     audio: np.ndarray,
     sample_rate: int,
@@ -368,25 +514,16 @@ def apply_decoded_waveform_dropout(
     frame_len = max(1, int(round(sample_rate * frame_ms / 1000)))
     output = np.asarray(audio, dtype=np.float32).copy()
     frame_count = int(np.ceil(len(output) / frame_len))
-    target_loss_rate = min(1.0, max(0.0, loss_rate))
-    if frame_count == 0 or target_loss_rate == 0:
-        return output, 0, frame_count
-    bad_to_good = min(1.0, 1.0 / max(1, burst_length))
-    good_to_bad = min(1.0, (target_loss_rate * bad_to_good) / max(1e-6, 1.0 - target_loss_rate))
-    frame = 0
-    in_bad_state = False
-    dropped_frames = 0
-    while frame < frame_count:
-        if in_bad_state:
-            start = frame * frame_len
-            end = min(len(output), (frame + 1) * frame_len)
-            output[start:end] = 0
-            dropped_frames += 1
-            in_bad_state = rng.random() >= bad_to_good
-        else:
-            in_bad_state = rng.random() < good_to_bad
-        frame += 1
-    return output, dropped_frames, frame_count
+    loss_mask = sample_burst_loss_mask(frame_count, rng, loss_rate, burst_length)
+    for frame in np.flatnonzero(loss_mask):
+        start = int(frame) * frame_len
+        end = min(len(output), (int(frame) + 1) * frame_len)
+        output[start:end] = 0
+    return output, int(np.count_nonzero(loss_mask)), frame_count
+
+
+def codec_supports_packet_loss_plc(codec: str) -> bool:
+    return codec in OPUS_CODECS
 
 
 def choose_profile(config: dict[str, Any], rng: np.random.Generator) -> tuple[str, dict[str, Any]]:
@@ -502,17 +639,6 @@ def degrade_item(
         channel_rate = 8000 if channel_path == "narrowband" else 16000
         bandpass_hz = degradation_config["channel"][channel_path]["bandpass_hz"]
 
-    pre_codec_channel = resample_audio(degraded, working_rate, channel_rate)
-    pre_codec_channel = bandpass_filter(pre_codec_channel, channel_rate, float(bandpass_hz[0]), float(bandpass_hz[1]))
-    degraded_channel = codec_roundtrip(
-        pre_codec_channel,
-        channel_rate,
-        codec,
-        bitrate=str(codec_bitrate) if codec_bitrate is not None else None,
-        frame_duration_ms=codec_frame_duration_ms,
-    )
-    degraded_channel, codec_alignment_lag_samples = align_to_reference(degraded_channel, pre_codec_channel, channel_rate)
-
     network_cfg = degradation_config["network_impairment"]
     network_enabled = bool(network_cfg.get("enabled", True)) and rng.random() < float(network_cfg["probability"])
     network_metadata = {
@@ -527,27 +653,65 @@ def degrade_item(
         "total_frames": None,
         "observed_loss_rate": None,
     }
+
+    pre_codec_channel = resample_audio(degraded, working_rate, channel_rate)
+    pre_codec_channel = bandpass_filter(pre_codec_channel, channel_rate, float(bandpass_hz[0]), float(bandpass_hz[1]))
     if network_enabled:
         loss_bucket = network_cfg["loss_rate_buckets"][int(rng.integers(0, len(network_cfg["loss_rate_buckets"])))]
         loss_rate = sample_uniform(rng, loss_bucket)
         burst_length = int(rng.integers(int(network_cfg["burst_length"][0]), int(network_cfg["burst_length"][1]) + 1))
         frame_ms = int(network_cfg["frame_ms"])
-        degraded_channel, dropped_frames, total_frames = apply_decoded_waveform_dropout(
-            degraded_channel, channel_rate, rng, loss_rate, burst_length, frame_ms
-        )
+        mode = str(network_cfg.get("mode", "packet_loss_plc"))
+        if mode == "packet_loss_plc" and codec_supports_packet_loss_plc(codec):
+            impairment_frame_ms = codec_frame_duration_ms or frame_ms
+            degraded_channel, dropped_frames, total_frames = opus_packet_loss_plc_roundtrip(
+                pre_codec_channel,
+                channel_rate,
+                rng,
+                loss_rate,
+                burst_length,
+                impairment_frame_ms,
+                bitrate=str(codec_bitrate) if codec_bitrate is not None else CODECS[codec].get("bitrate"),
+            )
+            network_mode = "packet_loss_plc"
+            network_model = "opus_decoder_plc"
+        else:
+            degraded_channel = codec_roundtrip(
+                pre_codec_channel,
+                channel_rate,
+                codec,
+                bitrate=str(codec_bitrate) if codec_bitrate is not None else None,
+                frame_duration_ms=codec_frame_duration_ms,
+            )
+            impairment_frame_ms = frame_ms
+            degraded_channel, dropped_frames, total_frames = apply_decoded_waveform_dropout(
+                degraded_channel, channel_rate, rng, loss_rate, burst_length, impairment_frame_ms
+            )
+            network_mode = "decoded_waveform_dropout" if mode == "decoded_waveform_dropout" else "decoded_waveform_dropout_fallback"
+            network_model = "two_state_burst"
         observed_loss_rate = dropped_frames / max(1, total_frames)
         network_metadata = {
             "enabled": True,
-            "mode": "decoded_waveform_dropout",
-            "model": "two_state_burst",
+            "mode": network_mode,
+            "model": network_model,
             "loss_rate": loss_rate,
             "burst_length": burst_length,
-            "frame_ms": frame_ms,
-            "dropout_ms": dropped_frames * frame_ms,
+            "frame_ms": impairment_frame_ms,
+            "dropout_ms": dropped_frames * impairment_frame_ms,
             "dropped_frames": dropped_frames,
             "total_frames": total_frames,
             "observed_loss_rate": observed_loss_rate,
         }
+    else:
+        degraded_channel = codec_roundtrip(
+            pre_codec_channel,
+            channel_rate,
+            codec,
+            bitrate=str(codec_bitrate) if codec_bitrate is not None else None,
+            frame_duration_ms=codec_frame_duration_ms,
+        )
+
+    degraded_channel, codec_alignment_lag_samples = align_to_reference(degraded_channel, pre_codec_channel, channel_rate)
 
     degraded_model = resample_audio(degraded_channel, channel_rate, model_rate)
     degraded_model = match_length(degraded_model, int(round(len(clean_working) * model_rate / working_rate)))
@@ -618,7 +782,7 @@ def default_config(config: dict[str, Any]) -> dict[str, Any]:
             {"codec": "pass_through", "weight": 0.10},
         ],
         "profiles": None,
-        "network_impairment": {"enabled": True, "probability": 0.60, "loss_rate_buckets": [[0.003, 0.02], [0.02, 0.05], [0.05, 0.10]], "burst_length": [1, 5], "frame_ms": 20},
+        "network_impairment": {"enabled": True, "mode": "packet_loss_plc", "probability": 0.60, "loss_rate_buckets": [[0.003, 0.02], [0.02, 0.05], [0.05, 0.10]], "burst_length": [1, 5], "frame_ms": 20},
         "normalization": {"mode": "shared_pair_peak_safety", "peak": 0.99},
     }
     return deep_merge(merged, config)
