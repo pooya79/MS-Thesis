@@ -13,7 +13,9 @@ from typing import Callable, Iterable
 
 from tqdm import tqdm
 
-from ml.speech_data.scripts.prepare_common_voice_25 import maybe_normalize, remove_punctuation, write_split_tsv
+from ml.speech_data.scripts.prepare_common_voice_25 import write_split_tsv
+from ml.speech_data.text_normalization import normalize_persian_asr_text as maybe_normalize
+from ml.speech_data.text_normalization import remove_punctuation
 
 
 SOURCE_TO_OUTPUT_SPLIT = {

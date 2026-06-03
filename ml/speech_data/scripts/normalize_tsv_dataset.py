@@ -8,7 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
-from ml.speech_data.scripts.prepare_common_voice_25 import maybe_normalize, remove_punctuation
+from ml.speech_data.text_normalization import normalize_persian_asr_text as maybe_normalize
+from ml.speech_data.text_normalization import remove_punctuation
 
 
 csv.field_size_limit(sys.maxsize)

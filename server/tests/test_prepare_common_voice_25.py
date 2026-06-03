@@ -10,7 +10,6 @@ from ml.speech_data.scripts.prepare_common_voice_25 import (
     CommonVoiceRow,
     build_splits,
     convert_required_clips,
-    maybe_normalize,
     write_split_tsv,
 )
 
@@ -52,16 +51,6 @@ def write_cv_tsv(path: Path, rows: list[dict[str, str]]) -> None:
 def read_simple_tsv(path: Path) -> list[dict[str, str]]:
     with path.open("r", encoding="utf-8", newline="") as handle:
         return list(csv.DictReader(handle, delimiter="\t"))
-
-
-def test_maybe_normalize_matches_nvidia_card_rules() -> None:
-    assert maybe_normalize("خب ، تو چیكار می كنی؟") == "خب تو چیکار می کنی"
-    assert maybe_normalize("أۀك ي ى ﯽ ﻮ ے ﺒ ﻢ ٬") == "اهک ی ی ی و ی ب م"
-    assert maybe_normalize("سلام! «دوست»؛") == "سلام دوست"
-    assert maybe_normalize("سلام [دوست] / امروز") == "سلام دوست امروز"
-    assert maybe_normalize("سلام #خوانده_نمیشود دنیا") == "سلام دنیا"
-    assert maybe_normalize("  سلام    دنیا  ") == "سلام دنیا"
-    assert maybe_normalize("hello سلام") is None
 
 
 def test_build_splits_preserves_test_and_excludes_it_from_train_dev(tmp_path: Path) -> None:

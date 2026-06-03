@@ -4,10 +4,8 @@ import argparse
 import csv
 import os
 import shutil
-import string
 import subprocess
 import sys
-import unicodedata
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,74 +13,11 @@ from typing import Callable, Iterable
 
 from tqdm import tqdm
 
+from ml.speech_data.text_normalization import normalize_persian_asr_text as maybe_normalize
+from ml.speech_data.text_normalization import remove_punctuation
+
 
 csv.field_size_limit(sys.maxsize)
-
-SKIP = set(
-    list(string.ascii_letters)
-    + [
-        "=",  # occurs only 2x in utterance (transl.): "twenty = xx"
-        "ā",  # occurs only 4x together with "š"
-        "š",
-        # Arabic letters
-        "ة",  # TEH MARBUTA
-    ]
-)
-
-DISCARD = [
-    # "(laughter)" in Farsi
-    "(خنده)",
-    # ASCII
-    "!",
-    '"',
-    "#",
-    "&",
-    "'",
-    "(",
-    ")",
-    ",",
-    "-",
-    ".",
-    ":",
-    ";",
-    # Unicode punctuation?
-    "–",
-    "¬",
-    "“",
-    "”",
-    "…",
-    "؟",
-    "،",
-    "؛",
-    "ـ",
-    # Unicode whitespace?
-    "ً",
-    "ٌ",
-    "َ",
-    "ُ",
-    "ِ",
-    "ّ",
-    "ْ",
-    "ٔ",
-    # Other
-    "«",
-    "»",
-]
-
-REPLACEMENTS = {
-    "أ": "ا",
-    "ۀ": "ە",
-    "ك": "ک",
-    "ي": "ی",
-    "ى": "ی",
-    "ﯽ": "ی",
-    "ﻮ": "و",
-    "ے": "ی",
-    "ﺒ": "ب",
-    "ﻢ": "ﻡ",
-    "٬": " ",
-    "ە": "ه",
-}
 
 
 @dataclass(frozen=True)
@@ -105,31 +40,6 @@ class Audit:
     test_fallback_rows: int = 0
     wav_converted: int = 0
     wav_skipped_existing: int = 0
-
-
-def maybe_normalize(text: str) -> str | None:
-    if set(text) & SKIP:
-        return None
-
-    text = " ".join(w for w in text.split() if not w.startswith("#"))
-
-    for lhs, rhs in REPLACEMENTS.items():
-        text = text.replace(lhs, rhs)
-
-    for tok in DISCARD:
-        text = text.replace(tok, "")
-
-    text = unicodedata.normalize("NFKC", text)
-    text = text.replace("ء", "")
-    text = remove_punctuation(text)
-
-    return " ".join(t for t in text.split() if t)
-
-
-def remove_punctuation(text: str) -> str:
-    text = unicodedata.normalize("NFKC", text)
-    text = "".join(char for char in text if not unicodedata.category(char).startswith("P"))
-    return " ".join(t for t in text.split() if t)
 
 
 def read_cv_tsv(path: Path) -> list[CommonVoiceRow]:
