@@ -14,6 +14,7 @@ from ml.speech_data.scripts.prepare_common_voice_25 import maybe_normalize, remo
 csv.field_size_limit(sys.maxsize)
 
 DEFAULT_SPLITS = ("train.tsv", "dev.tsv", "test.tsv")
+DEFAULT_SPLIT_STEMS = tuple(Path(split).stem for split in DEFAULT_SPLITS)
 
 
 @dataclass
@@ -91,11 +92,16 @@ def normalize_dataset(
     source_root: Path,
     output_root: Path,
     *,
-    splits: Iterable[str] = DEFAULT_SPLITS,
+    splits: Iterable[str] | None = None,
     overwrite: bool = False,
 ) -> dict[str, NormalizeAudit]:
-    split_paths = [split_name(split) for split in splits]
     copy_dataset_tree(source_root, output_root, overwrite=overwrite)
+    if splits is None:
+        split_paths = [split for split in DEFAULT_SPLITS if (output_root / split).exists()]
+        if not split_paths:
+            raise FileNotFoundError(f"missing split TSV: expected one of {', '.join(DEFAULT_SPLITS)} under {output_root}")
+    else:
+        split_paths = [split_name(split) for split in splits]
 
     audits: dict[str, NormalizeAudit] = {}
     for split in split_paths:
@@ -141,8 +147,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--splits",
         nargs="+",
-        default=list(DEFAULT_SPLITS),
-        help="Split TSV filenames to normalize. Defaults to train.tsv dev.tsv test.tsv.",
+        choices=DEFAULT_SPLITS + DEFAULT_SPLIT_STEMS,
+        help=(
+            "Split TSV filenames to normalize. Defaults to whichever of train.tsv, dev.tsv, "
+            "and test.tsv exist in the copied dataset."
+        ),
     )
     parser.add_argument(
         "--overwrite",

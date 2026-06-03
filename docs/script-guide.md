@@ -115,7 +115,9 @@ uv run python -m ml.speech_data.scripts.normalize_tsv_dataset \
 The output directory must be new unless `--overwrite` is passed. The script
 copies the full source tree first, preserves TSV columns, rewrites normalized
 transcriptions in place under the output directory, and discards rows whose
-sentences are rejected by the Common Voice 25 normalization rules.
+sentences are rejected by the Common Voice 25 normalization rules. By default it
+normalizes whichever of `train.tsv`, `dev.tsv`, and `test.tsv` exist, so
+test-only evaluation directories are supported.
 
 ## Degradation Asset Download
 

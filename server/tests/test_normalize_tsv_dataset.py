@@ -61,6 +61,27 @@ def test_normalize_dataset_rejects_existing_output_without_overwrite(tmp_path: P
         normalize_dataset(source_root, output_root)
 
 
+def test_normalize_dataset_defaults_to_existing_split_files(tmp_path: Path) -> None:
+    source_root = tmp_path / "source"
+    output_root = tmp_path / "normalized"
+    (source_root / "clips").mkdir(parents=True)
+    write_tsv(
+        source_root / "test.tsv",
+        [
+            {"path": "clips/sample.wav", "sentence": "اين قيچي است يا نيزه؟", "speaker": "a"},
+            {"path": "clips/sample2.wav", "sentence": "مثل آدم هاي مسخ شده به نظر مي¬رسد.", "speaker": "b"},
+        ],
+    )
+
+    audits = normalize_dataset(source_root, output_root)
+
+    assert set(audits) == {"test.tsv"}
+    assert read_tsv(output_root / "test.tsv") == [
+        {"path": "clips/sample.wav", "sentence": "این قیچی است یا نیزه", "speaker": "a"},
+        {"path": "clips/sample2.wav", "sentence": "مثل آدم های مسخ شده به نظر میرسد", "speaker": "b"},
+    ]
+
+
 def test_normalize_dataset_rejects_output_inside_source(tmp_path: Path) -> None:
     source_root = tmp_path / "source"
     make_dataset(source_root)

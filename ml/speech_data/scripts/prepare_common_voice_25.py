@@ -47,6 +47,7 @@ DISCARD = [
     ";",
     # Unicode punctuation?
     "–",
+    "¬",
     "“",
     "”",
     "…",
