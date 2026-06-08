@@ -431,7 +431,7 @@ def evaluate_wer(
             batch_size=batch_size,
             device=device,
             target_sr=sample_rate,
-            progress=False,
+            progress=True,
             max_batch_seconds=max_batch_seconds,
         )
         references = [example.transcript for example, _ in eval_items]
@@ -443,6 +443,21 @@ def evaluate_wer(
         if was_training:
             model.train()
     return metrics
+
+
+def make_progress_bar(iterable: Any, desc: str, total: int) -> Any:
+    """Wrap an iterable in a tqdm bar (auto-disabled when not attached to a TTY).
+
+    ``disable=None`` lets tqdm silence itself for non-interactive runs (nohup,
+    redirected logs), so the file log stays clean while interactive terminals
+    still get a live bar. Falls back to the bare iterable if tqdm is missing.
+    """
+    try:
+        from tqdm.auto import tqdm
+
+        return tqdm(iterable, desc=desc, total=total, unit="batch", dynamic_ncols=True, leave=False, disable=None)
+    except ImportError:
+        return iterable
 
 
 def build_dataloader(dataset: Any, batch_size: int, num_workers: int, shuffle: bool, generator: Any) -> Any:
@@ -637,7 +652,9 @@ def run_training(config_path: Path, run_dir_override: Path | None = None, resume
         logging.info("starting training global_step=%s -> max_steps=%s", global_step, max_steps)
         for epoch in range(start_epoch, num_epochs):
             current_epoch = epoch
-            for micro_step, batch in enumerate(train_loader):
+            progress = make_progress_bar(train_loader, desc=f"epoch {epoch + 1}/{num_epochs}", total=len(train_loader))
+            set_postfix = getattr(progress, "set_postfix", None)
+            for micro_step, batch in enumerate(progress):
                 with torch.autocast(device_type="cuda" if device == "cuda" else "cpu", enabled=fp16):
                     loss = ctc_loss_step(model, batch, device)
                 loss_value = float(loss.detach().item())
@@ -656,6 +673,9 @@ def run_training(config_path: Path, run_dir_override: Path | None = None, resume
                 scheduler.step()
                 optimizer.zero_grad(set_to_none=True)
                 global_step += 1
+
+                if set_postfix is not None:
+                    set_postfix(step=global_step, loss=f"{loss_value:.3f}", lr=f"{scheduler.get_last_lr()[0]:.1e}")
 
                 if global_step % logging_steps == 0:
                     avg_loss = running_loss / max(1, running_count)
