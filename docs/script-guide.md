@@ -17,6 +17,7 @@ uv run python -m ml.speech_data.generate_degraded_pairs --help
 uv run python -m ml.speech_data.inspect_manifest --help
 uv run python -m ml.asr.train_whisper_small --help
 uv run python -m ml.asr.eval_whisper_small --help
+uv run python -m ml.asr.eval_fastconformer --help
 ```
 
 ## Common Voice Persian Download
@@ -229,3 +230,21 @@ uv run python -m ml.asr.eval_whisper_small \
 ```
 
 Set `model.checkpoint` to the local model/checkpoint path to evaluate. `model.processor` defaults to `openai/whisper-small`; point it at a saved `final`/`best` model directory only if you intentionally changed processor/tokenizer files. Set `data.datasets` to the dataset directories whose `test.tsv` files should be evaluated. Samples whose transcript token count exceeds `eval.max_label_tokens` are skipped before prediction; by default this should match Whisper-small's 448-token decoder limit. Keep `eval.eval_accumulation_steps` low, such as `1`, so generated prediction tensors are moved off GPU during long evaluations instead of accumulating until the end.
+
+## FastConformer-CTC Evaluation
+
+Evaluate the standalone FastConformer-CTC Persian model (the CTC branch of `nvidia/stt_fa_fastconformer_hybrid_large`, reimplemented under `ml/fa_fastconformer/` with no NeMo dependency) on the configured dataset `test.tsv` files. Outputs match the Whisper eval layout: `metrics.json` (aggregate WER/CER plus a `dataset_metrics` list per dataset directory), `predictions.jsonl`, the effective config, logs, and a source manifest:
+
+```bash
+uv run python -m ml.asr.eval_fastconformer \
+  --config configs/fastconformer_eval.yaml
+```
+
+Set `model.checkpoint` to either the original `.nemo` archive or a converted `.pt` bundle — the format is chosen by file extension. To produce the `.pt` bundle (CTC weights + config + tokenizer, repacked from the `.nemo` so loading needs neither a tar unpack nor NeMo), run the standalone converter from inside the package directory:
+
+```bash
+cd ml/fa_fastconformer
+python convert.py /path/to/stt_fa_fastconformer_hybrid_large.nemo models/stt_fa_fastconformer_ctc.pt --verify
+```
+
+Greedy CTC decoding has no decoder token limit, so there is no `max_label_tokens` skipping. Batching is duration-aware: clips are sorted by length and each batch is capped by both `eval.batch_size` and `eval.max_batch_seconds`, so the heaviest batch costs about one clip of that many seconds and a few long clips cannot exhaust GPU memory. Raise `eval.batch_size` to speed up short-clip throughput; lower `eval.max_batch_seconds` if you still hit out-of-memory on long clips (set it to `null` to disable the cap and use fixed-size batches).

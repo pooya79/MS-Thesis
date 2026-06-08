@@ -1,0 +1,22 @@
+model:
+  # Either the original .nemo archive or a converted .pt bundle
+  # (see ml/fa_fastconformer/convert.py). Format is chosen by extension.
+  checkpoint: models/stt_fa_fastconformer_ctc.pt
+
+data:
+  root_dir: data
+  datasets:
+    - cv-corpus-25.0
+    - data/fleurs-normalized
+    - data/persian-speech-corpus-test
+  sample_rate: 16000
+  split: test
+
+eval:
+  output_dir: models/asr/fastconformer/evals
+  name: fastconformer-fa-test
+  batch_size: 4
+  # Duration-aware batching cap: the heaviest batch costs about one clip of this
+  # length, so a few long clips can't OOM the GPU. Lower it if you still OOM.
+  max_batch_seconds: 30
+  device: auto

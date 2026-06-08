@@ -1,0 +1,7 @@
+torch>=2.2
+torchaudio>=2.2
+librosa>=0.10
+sentencepiece>=0.1.99
+soundfile>=0.12
+pyyaml>=6.0
+tqdm>=4.0
