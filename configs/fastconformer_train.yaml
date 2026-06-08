@@ -1,0 +1,40 @@
+model:
+  # Either the original .nemo archive or a converted .pt bundle to fine-tune
+  # from (see ml/fa_fastconformer/convert.py). Format is chosen by extension.
+  checkpoint: models/stt_fa_fastconformer_ctc.pt
+
+data:
+  root_dir: data
+  datasets:
+    - cv-corpus-25.0
+    - data/FarsSpon_train_dev
+    - data/fleurs-normalized
+  sample_rate: 16000
+
+run:
+  output_dir: models/asr/fastconformer/runs
+  name: fastconformer-fa
+  resume: auto
+
+training:
+  seed: 1337
+  num_train_epochs: 1
+  learning_rate: 0.0001
+  warmup_steps: 500
+  weight_decay: 0.0
+  max_grad_norm: 1.0
+  per_device_train_batch_size: 8
+  per_device_eval_batch_size: 8
+  gradient_accumulation_steps: 1
+  eval_steps: 1000
+  save_steps: 500
+  logging_steps: 25
+  save_total_limit: 3
+  num_workers: 4
+  device: auto
+  mixed_precision: auto
+  # Train only the CTC head (encoder frozen) when true; full fine-tune when false.
+  freeze_encoder: false
+  # Duration-aware eval batching cap (seconds) to bound GPU memory; see
+  # ml/fa_fastconformer/model.py::transcribe.
+  eval_max_batch_seconds: 30

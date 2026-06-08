@@ -21,6 +21,7 @@ SCRIPT_MODULES = [
     "ml.speech_data.inspect_manifest",
     "ml.asr.train_whisper_small",
     "ml.asr.eval_whisper_small",
+    "ml.asr.train_fastconformer",
     "ml.asr.eval_fastconformer",
 ]
 

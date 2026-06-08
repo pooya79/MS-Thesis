@@ -17,6 +17,7 @@ uv run python -m ml.speech_data.generate_degraded_pairs --help
 uv run python -m ml.speech_data.inspect_manifest --help
 uv run python -m ml.asr.train_whisper_small --help
 uv run python -m ml.asr.eval_whisper_small --help
+uv run python -m ml.asr.train_fastconformer --help
 uv run python -m ml.asr.eval_fastconformer --help
 ```
 
@@ -230,6 +231,18 @@ uv run python -m ml.asr.eval_whisper_small \
 ```
 
 Set `model.checkpoint` to the local model/checkpoint path to evaluate. `model.processor` defaults to `openai/whisper-small`; point it at a saved `final`/`best` model directory only if you intentionally changed processor/tokenizer files. Set `data.datasets` to the dataset directories whose `test.tsv` files should be evaluated. Samples whose transcript token count exceeds `eval.max_label_tokens` are skipped before prediction; by default this should match Whisper-small's 448-token decoder limit. Keep `eval.eval_accumulation_steps` low, such as `1`, so generated prediction tensors are moved off GPU during long evaluations instead of accumulating until the end.
+
+## FastConformer-CTC Training
+
+Fine-tune the standalone FastConformer-CTC Persian model (the CTC branch of `nvidia/stt_fa_fastconformer_hybrid_large`, reimplemented under `ml/fa_fastconformer/` with no NeMo dependency) on the configured dataset `train.tsv` / `dev.tsv` files. Because the standalone model is a plain `nn.Module` rather than a Hugging Face model, training runs through a small hand-written PyTorch loop (CTC loss, AdamW, linear warmup schedule, gradient accumulation, optional AMP) instead of `transformers.Trainer`. The run layout mirrors the Whisper trainer — `status.json`, `logs/train.log`, `logs/train_metrics.jsonl`, the effective config, source manifests, rolling `checkpoints/checkpoint-<step>.pt` bundles, plus `final.pt` and `best.pt`:
+
+```bash
+uv run python -m ml.asr.train_fastconformer \
+  --config configs/fastconformer_train.yaml \
+  --resume auto
+```
+
+Set `model.checkpoint` to either the original `.nemo` archive or a converted `.pt` bundle to fine-tune from — the format is chosen by file extension (use `ml/fa_fastconformer/convert.py` to produce the `.pt` bundle; see the evaluation section below). Every checkpoint and the `final`/`best` models are written as the same self-contained `.pt` bundle that `eval_fastconformer` loads, so a trained checkpoint can be evaluated directly by pointing `fastconformer_eval.yaml`'s `model.checkpoint` at it. Resume state (optimizer, scheduler, AMP scaler, step) is stashed inside each rolling checkpoint bundle, so `--resume auto` (or `run.resume: auto`) continues from the latest one. Set `training.freeze_encoder: true` to train only the CTC head. Stop with Ctrl+C after a checkpoint exists, then re-run with `--resume auto` to continue.
 
 ## FastConformer-CTC Evaluation
 
