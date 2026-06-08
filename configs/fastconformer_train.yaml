@@ -35,6 +35,3 @@ training:
   mixed_precision: auto
   # Train only the CTC head (encoder frozen) when true; full fine-tune when false.
   freeze_encoder: false
-  # Duration-aware eval batching cap (seconds) to bound GPU memory; see
-  # ml/fa_fastconformer/model.py::transcribe.
-  eval_max_batch_seconds: 30

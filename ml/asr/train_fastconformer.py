@@ -83,8 +83,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "device": "auto",
         "mixed_precision": "auto",
         "freeze_encoder": False,
-        # Duration-aware eval batching cap (seconds); see model.transcribe.
-        "eval_max_batch_seconds": 30,
     },
 }
 
@@ -137,8 +135,6 @@ def validate_config(config: dict[str, Any]) -> None:
         raise ValueError("weight_decay must be >= 0")
     if float(training["max_grad_norm"]) <= 0:
         raise ValueError("max_grad_norm must be > 0")
-    if training.get("eval_max_batch_seconds") is not None and float(training["eval_max_batch_seconds"]) < 1:
-        raise ValueError("eval_max_batch_seconds must be >= 1 when set")
     if training["mixed_precision"] not in {"auto", "true", "false", True, False}:
         raise ValueError("training.mixed_precision must be auto, true, or false")
     if training["device"] not in {"auto", "cuda", "cpu"}:
@@ -388,23 +384,26 @@ def resolve_fp16(mixed_precision: Any, device: str) -> bool:
     return mixed_precision in {True, "true"}
 
 
-def ctc_loss_step(model: Any, batch: dict[str, Any], device: str) -> Any:
-    """Run encoder + CTC head and return the (mean) CTC loss for one batch."""
-    import torch
-    import torch.nn.functional as F
-
+def forward_logprobs(model: Any, batch: dict[str, Any], device: str) -> tuple[Any, Any]:
+    """Run preprocessor + encoder + CTC head; return (log_probs (B,T,V), enc_len)."""
     waveforms = batch["waveforms"].to(device)
     wave_lengths = batch["wave_lengths"].to(device)
-    targets = batch["targets"].to(device)
-    target_lengths = batch["target_lengths"].to(device)
-
     feats, feat_len = model.preprocessor(waveforms, wave_lengths)
     enc, enc_len = model.encoder(feats, feat_len)
     log_probs = model.ctc_decoder(enc)  # (B, T, V+1), already log_softmax
+    return log_probs, enc_len
+
+
+def ctc_loss_from(model: Any, log_probs: Any, enc_len: Any, batch: dict[str, Any], device: str) -> Any:
+    """Mean CTC loss for one batch from precomputed log-probs."""
+    import torch
+    import torch.nn.functional as F
+
+    targets = batch["targets"].to(device)
+    target_lengths = batch["target_lengths"].to(device)
     # CTC expects (T, B, V); compute in float32 for numerical stability under AMP.
-    log_probs = log_probs.transpose(0, 1).float()
     return F.ctc_loss(
-        log_probs,
+        log_probs.transpose(0, 1).float(),
         targets,
         enc_len.to(torch.long),
         target_lengths,
@@ -414,35 +413,66 @@ def ctc_loss_step(model: Any, batch: dict[str, Any], device: str) -> Any:
     )
 
 
-def evaluate_wer(
+def ctc_loss_step(model: Any, batch: dict[str, Any], device: str) -> Any:
+    """Run encoder + CTC head and return the (mean) CTC loss for one batch."""
+    log_probs, enc_len = forward_logprobs(model, batch, device)
+    return ctc_loss_from(model, log_probs, enc_len, batch, device)
+
+
+def evaluate(
     model: Any,
+    eval_loader: Any,
     eval_items: list[tuple[WhisperExample, list[int]]],
-    batch_size: int,
     device: str,
-    sample_rate: int,
-    max_batch_seconds: float | None,
+    fp16: bool,
 ) -> dict[str, float]:
+    """Single timed pass over the dev set: CTC eval loss + greedy WER/CER.
+
+    Returns HF-style ``eval_*`` fields (``eval_loss``, ``eval_wer``,
+    ``eval_cer``, ``eval_runtime``, ``eval_samples_per_second``,
+    ``eval_steps_per_second``). The loader must be unshuffled so that decoded
+    hypotheses line up with ``eval_items`` in order.
+    """
+    import time
+
+    import torch
+
     was_training = model.training
     model.eval()
+    start = time.perf_counter()
+    total_loss = 0.0
+    num_batches = 0
+    references: list[str] = []
+    hypotheses: list[str] = []
+    offset = 0
+    progress = make_progress_bar(eval_loader, desc="eval", total=len(eval_loader))
     try:
-        audio_paths = [str(example.audio_path) for example, _ in eval_items]
-        hypotheses = model.transcribe(
-            audio_paths,
-            batch_size=batch_size,
-            device=device,
-            target_sr=sample_rate,
-            progress=True,
-            max_batch_seconds=max_batch_seconds,
-        )
-        references = [example.transcript for example, _ in eval_items]
-        metrics = {
-            "wer": word_error_rate(references, hypotheses),
-            "cer": character_error_rate(references, hypotheses),
-        }
+        with torch.no_grad():
+            for batch in progress:
+                with torch.autocast(device_type="cuda" if device == "cuda" else "cpu", enabled=fp16):
+                    log_probs, enc_len = forward_logprobs(model, batch, device)
+                    loss = ctc_loss_from(model, log_probs, enc_len, batch, device)
+                total_loss += float(loss.item())
+                num_batches += 1
+                id_seqs = model._greedy_decode_ids(log_probs, enc_len.cpu())
+                for local_index, ids in enumerate(id_seqs):
+                    example, _tokens = eval_items[offset + local_index]
+                    references.append(example.transcript)
+                    hypotheses.append(model.tokenizer.DecodeIds(ids))
+                offset += len(id_seqs)
     finally:
         if was_training:
             model.train()
-    return metrics
+    runtime = max(time.perf_counter() - start, 1e-9)
+    num_examples = len(hypotheses)
+    return {
+        "eval_loss": total_loss / max(1, num_batches),
+        "eval_wer": word_error_rate(references, hypotheses),
+        "eval_cer": character_error_rate(references, hypotheses),
+        "eval_runtime": runtime,
+        "eval_samples_per_second": num_examples / runtime,
+        "eval_steps_per_second": num_batches / runtime,
+    }
 
 
 def make_progress_bar(iterable: Any, desc: str, total: int) -> Any:
@@ -480,6 +510,7 @@ def build_dataloader(dataset: Any, batch_size: int, num_workers: int, shuffle: b
 # --------------------------------------------------------------------------- #
 def run_training(config_path: Path, run_dir_override: Path | None = None, resume_override: str | None = None) -> int:
     import math
+    import time
 
     import torch
     from torch.optim import AdamW
@@ -572,13 +603,18 @@ def run_training(config_path: Path, run_dir_override: Path | None = None, resume
         logging.info("train_examples=%s eval_examples=%s", len(train_items), len(eval_items))
 
         train_dataset = FastConformerDataset(train_items, sample_rate)
+        eval_dataset = FastConformerDataset(eval_items, sample_rate)
         generator = torch.Generator()
         generator.manual_seed(int(training["seed"]))
         train_batch_size = int(training["per_device_train_batch_size"])
+        eval_batch_size = int(training["per_device_eval_batch_size"])
         grad_accum = int(training["gradient_accumulation_steps"])
+        num_workers = int(training["num_workers"])
         train_loader = build_dataloader(
-            train_dataset, train_batch_size, int(training["num_workers"]), shuffle=True, generator=generator
+            train_dataset, train_batch_size, num_workers, shuffle=True, generator=generator
         )
+        # Unshuffled so decoded hypotheses line up with eval_items order in evaluate().
+        eval_loader = build_dataloader(eval_dataset, eval_batch_size, num_workers, shuffle=False, generator=generator)
 
         steps_per_epoch = max(1, math.ceil(len(train_loader) / grad_accum))
         # honour fractional epochs for the optimizer-step budget
@@ -618,10 +654,6 @@ def run_training(config_path: Path, run_dir_override: Path | None = None, resume
         eval_steps = int(training["eval_steps"])
         save_steps = int(training["save_steps"])
         max_grad_norm = float(training["max_grad_norm"])
-        eval_batch_size = int(training["per_device_eval_batch_size"])
-        eval_max_batch_seconds = (
-            float(training["eval_max_batch_seconds"]) if training.get("eval_max_batch_seconds") is not None else None
-        )
 
         def training_state() -> dict[str, Any]:
             return {
@@ -646,8 +678,16 @@ def run_training(config_path: Path, run_dir_override: Path | None = None, resume
         optimizer.zero_grad(set_to_none=True)
         running_loss = 0.0
         running_count = 0
+        epoch_total_loss = 0.0
+        epoch_loss_count = 0
+        samples_seen = 0
+        last_grad_norm = 0.0
         current_epoch = start_epoch
         stop = False
+        train_start = time.perf_counter()
+
+        def fractional_epoch(epoch: int, micro_step: int) -> float:
+            return epoch + (micro_step + 1) / max(1, len(train_loader))
 
         logging.info("starting training global_step=%s -> max_steps=%s", global_step, max_steps)
         for epoch in range(start_epoch, num_epochs):
@@ -660,6 +700,9 @@ def run_training(config_path: Path, run_dir_override: Path | None = None, resume
                 loss_value = float(loss.detach().item())
                 running_loss += loss_value
                 running_count += 1
+                epoch_total_loss += loss_value
+                epoch_loss_count += 1
+                samples_seen += int(batch["wave_lengths"].numel())
                 scaler.scale(loss / grad_accum).backward()
 
                 is_update_step = (micro_step + 1) % grad_accum == 0 or (micro_step + 1) == len(train_loader)
@@ -667,7 +710,7 @@ def run_training(config_path: Path, run_dir_override: Path | None = None, resume
                     continue
 
                 scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(trainable, max_grad_norm)
+                last_grad_norm = float(torch.nn.utils.clip_grad_norm_(trainable, max_grad_norm))
                 scaler.step(optimizer)
                 scaler.update()
                 scheduler.step()
@@ -681,20 +724,22 @@ def run_training(config_path: Path, run_dir_override: Path | None = None, resume
                     avg_loss = running_loss / max(1, running_count)
                     current_lr = scheduler.get_last_lr()[0]
                     logging.info(
-                        "step=%s epoch=%.2f loss=%.4f lr=%.2e",
+                        "step=%s epoch=%.2f loss=%.4f grad_norm=%.3f lr=%.2e",
                         global_step,
-                        epoch + (micro_step + 1) / len(train_loader),
+                        fractional_epoch(epoch, micro_step),
                         avg_loss,
+                        last_grad_norm,
                         current_lr,
                     )
                     append_jsonl(
                         metrics_path,
                         {
-                            "timestamp": utc_now(),
-                            "step": global_step,
-                            "epoch": epoch + (micro_step + 1) / len(train_loader),
-                            "loss": avg_loss,
+                            "epoch": fractional_epoch(epoch, micro_step),
+                            "grad_norm": last_grad_norm,
                             "learning_rate": current_lr,
+                            "loss": avg_loss,
+                            "step": global_step,
+                            "timestamp": utc_now(),
                         },
                     )
                     running_loss = 0.0
@@ -702,16 +747,31 @@ def run_training(config_path: Path, run_dir_override: Path | None = None, resume
 
                 if global_step % eval_steps == 0:
                     logging.info("evaluating at step=%s on %s dev examples", global_step, len(eval_items))
-                    eval_metrics = evaluate_wer(
-                        model, eval_items, eval_batch_size, device, sample_rate, eval_max_batch_seconds
+                    eval_metrics = evaluate(model, eval_loader, eval_items, device, fp16)
+                    logging.info(
+                        "eval step=%s loss=%.4f wer=%.4f cer=%.4f runtime=%.1fs",
+                        global_step,
+                        eval_metrics["eval_loss"],
+                        eval_metrics["eval_wer"],
+                        eval_metrics["eval_cer"],
+                        eval_metrics["eval_runtime"],
                     )
-                    logging.info("eval step=%s wer=%.4f cer=%.4f", global_step, eval_metrics["wer"], eval_metrics["cer"])
                     append_jsonl(
                         metrics_path,
-                        {"timestamp": utc_now(), "step": global_step, "epoch": float(epoch), "eval_wer": eval_metrics["wer"], "eval_cer": eval_metrics["cer"]},
+                        {
+                            "epoch": fractional_epoch(epoch, micro_step),
+                            "eval_cer": eval_metrics["eval_cer"],
+                            "eval_loss": eval_metrics["eval_loss"],
+                            "eval_runtime": eval_metrics["eval_runtime"],
+                            "eval_samples_per_second": eval_metrics["eval_samples_per_second"],
+                            "eval_steps_per_second": eval_metrics["eval_steps_per_second"],
+                            "eval_wer": eval_metrics["eval_wer"],
+                            "step": global_step,
+                            "timestamp": utc_now(),
+                        },
                     )
-                    if best_wer is None or eval_metrics["wer"] < best_wer:
-                        best_wer = eval_metrics["wer"]
+                    if best_wer is None or eval_metrics["eval_wer"] < best_wer:
+                        best_wer = eval_metrics["eval_wer"]
                         save_bundle(run_dir / "best.pt", model, save_config, tokenizer_proto)
                         update_status(run_dir, best_wer=best_wer, best_model=str(run_dir / "best.pt"))
                         logging.info("new best wer=%.4f saved best.pt", best_wer)
@@ -731,23 +791,57 @@ def run_training(config_path: Path, run_dir_override: Path | None = None, resume
         save_bundle(final_path, model, save_config, tokenizer_proto)
         logging.info("saved final model=%s", final_path)
 
-        final_metrics = evaluate_wer(model, eval_items, eval_batch_size, device, sample_rate, eval_max_batch_seconds)
-        logging.info("final eval wer=%.4f cer=%.4f", final_metrics["wer"], final_metrics["cer"])
+        final_metrics = evaluate(model, eval_loader, eval_items, device, fp16)
+        logging.info(
+            "final eval loss=%.4f wer=%.4f cer=%.4f",
+            final_metrics["eval_loss"],
+            final_metrics["eval_wer"],
+            final_metrics["eval_cer"],
+        )
         append_jsonl(
             metrics_path,
-            {"timestamp": utc_now(), "step": global_step, "final_eval_wer": final_metrics["wer"], "final_eval_cer": final_metrics["cer"]},
+            {
+                "epoch": float(current_epoch + 1),
+                "eval_cer": final_metrics["eval_cer"],
+                "eval_loss": final_metrics["eval_loss"],
+                "eval_runtime": final_metrics["eval_runtime"],
+                "eval_samples_per_second": final_metrics["eval_samples_per_second"],
+                "eval_steps_per_second": final_metrics["eval_steps_per_second"],
+                "eval_wer": final_metrics["eval_wer"],
+                "step": global_step,
+                "timestamp": utc_now(),
+            },
         )
-        if best_wer is None or final_metrics["wer"] < best_wer:
-            best_wer = final_metrics["wer"]
+        if best_wer is None or final_metrics["eval_wer"] < best_wer:
+            best_wer = final_metrics["eval_wer"]
             save_bundle(run_dir / "best.pt", model, save_config, tokenizer_proto)
+
+        # HF-style end-of-training summary row: mean train loss + throughput.
+        train_runtime = max(time.perf_counter() - train_start, 1e-9)
+        train_loss = epoch_total_loss / max(1, epoch_loss_count)
+        append_jsonl(
+            metrics_path,
+            {
+                "epoch": float(current_epoch + 1),
+                "step": global_step,
+                "timestamp": utc_now(),
+                "train_loss": train_loss,
+                "train_runtime": train_runtime,
+                "train_samples_per_second": samples_seen / train_runtime,
+                "train_steps_per_second": global_step / train_runtime,
+            },
+        )
 
         write_json(
             run_dir / "train_summary.json",
             {
                 "created_at": utc_now(),
                 "global_step": global_step,
-                "final_wer": final_metrics["wer"],
-                "final_cer": final_metrics["cer"],
+                "train_loss": train_loss,
+                "train_runtime": train_runtime,
+                "final_loss": final_metrics["eval_loss"],
+                "final_wer": final_metrics["eval_wer"],
+                "final_cer": final_metrics["eval_cer"],
                 "best_wer": best_wer,
                 "final_model": str(final_path),
                 "best_model": str(run_dir / "best.pt"),
@@ -762,7 +856,7 @@ def run_training(config_path: Path, run_dir_override: Path | None = None, resume
             final_model=str(final_path),
             best_model=str(run_dir / "best.pt"),
             best_wer=best_wer,
-            final_wer=final_metrics["wer"],
+            final_wer=final_metrics["eval_wer"],
             error=None,
         )
         logging.info("run completed final_model=%s best_model=%s", final_path, run_dir / "best.pt")
