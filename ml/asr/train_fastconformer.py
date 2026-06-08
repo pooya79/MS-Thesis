@@ -59,6 +59,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "root_dir": "data",
         "datasets": ["cv-corpus-25.0"],
         "sample_rate": 16000,
+        # Drop training/eval clips outside this duration window before batching.
+        # Conformer self-attention memory grows as O(T^2) per layer, so a single
+        # multi-minute utterance in a batch can OOM the GPU even when typical
+        # batches fit comfortably. max_duration_sec: null disables the upper cap.
+        "min_duration_sec": 0.1,
+        "max_duration_sec": 20.0,
     },
     "run": {
         "output_dir": "models/asr/fastconformer/runs",
@@ -129,6 +135,18 @@ def validate_config(config: dict[str, Any]) -> None:
     for key, (section, minimum) in minimums.items():
         if float(section[key]) < minimum:
             raise ValueError(f"{key} must be >= {minimum:g}")
+    min_duration = data.get("min_duration_sec")
+    max_duration = data.get("max_duration_sec")
+    if min_duration is not None and float(min_duration) < 0:
+        raise ValueError("data.min_duration_sec must be >= 0 or null")
+    if max_duration is not None and float(max_duration) <= 0:
+        raise ValueError("data.max_duration_sec must be > 0 or null")
+    if (
+        min_duration is not None
+        and max_duration is not None
+        and float(max_duration) <= float(min_duration)
+    ):
+        raise ValueError("data.max_duration_sec must be greater than data.min_duration_sec")
     if float(training["warmup_steps"]) < 0:
         raise ValueError("warmup_steps must be >= 0")
     if float(training["weight_decay"]) < 0:
@@ -309,6 +327,59 @@ def filter_examples_with_tokens(
             skipped += 1
             continue
         kept.append((example, tokens))
+    return kept, skipped
+
+
+def filter_examples_by_duration(
+    items: list[tuple[WhisperExample, list[int]]],
+    min_duration_sec: float | None,
+    max_duration_sec: float | None,
+    num_workers: int,
+) -> tuple[list[tuple[WhisperExample, list[int]]], int]:
+    """Drop examples whose audio falls outside the configured duration window.
+
+    Conformer self-attention costs O(T^2) memory per layer, so a single very long
+    utterance (common in spontaneous-speech corpora) can OOM the GPU even when
+    typical batches fit. Durations come from the audio header only (``sf.info``),
+    so no samples are decoded; reads are threaded because the cost is I/O-bound.
+    Returns ``(kept, skipped)``; a no-op (returns the input unchanged) when both
+    bounds are unset.
+    """
+    if min_duration_sec is None and max_duration_sec is None:
+        return items, 0
+
+    import soundfile as sf
+
+    lower = float(min_duration_sec) if min_duration_sec is not None else 0.0
+    upper = float(max_duration_sec) if max_duration_sec is not None else float("inf")
+
+    def duration_seconds(example: WhisperExample) -> float:
+        info = sf.info(str(example.audio_path))
+        if not info.samplerate:
+            return 0.0
+        return info.frames / float(info.samplerate)
+
+    total = len(items)
+    logging.info(
+        "filtering %s examples by duration window [%.2f, %s]s",
+        total,
+        lower,
+        f"{upper:.2f}" if upper != float("inf") else "inf",
+    )
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    max_threads = max(4, int(num_workers) * 4)
+    with ThreadPoolExecutor(max_workers=max_threads) as executor:
+        durations = list(executor.map(duration_seconds, (example for example, _ in items)))
+
+    kept: list[tuple[WhisperExample, list[int]]] = []
+    skipped = 0
+    for item, duration in zip(items, durations):
+        if lower <= duration <= upper:
+            kept.append(item)
+        else:
+            skipped += 1
     return kept, skipped
 
 
@@ -510,7 +581,13 @@ def build_dataloader(dataset: Any, batch_size: int, num_workers: int, shuffle: b
 # --------------------------------------------------------------------------- #
 def run_training(config_path: Path, run_dir_override: Path | None = None, resume_override: str | None = None) -> int:
     import math
+    import os
     import time
+
+    # Reduce CUDA allocator fragmentation: lets reserved-but-unallocated blocks be
+    # reused across the variable-length batches this trainer produces. Must be set
+    # before the CUDA context is created (i.e. before model.to(device)).
+    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
     import torch
     from torch.optim import AdamW
@@ -588,6 +665,24 @@ def run_training(config_path: Path, run_dir_override: Path | None = None, resume
         if skipped_train or skipped_eval:
             logging.warning("skipped %s train / %s dev examples with empty token targets", skipped_train, skipped_eval)
 
+        min_duration = data_config.get("min_duration_sec")
+        max_duration = data_config.get("max_duration_sec")
+        num_workers = int(training["num_workers"])
+        train_items, dropped_train = filter_examples_by_duration(train_items, min_duration, max_duration, num_workers)
+        eval_items, dropped_eval = filter_examples_by_duration(eval_items, min_duration, max_duration, num_workers)
+        if not train_items:
+            raise ValueError("no train examples remain after duration filtering; widen data.max_duration_sec")
+        if not eval_items:
+            raise ValueError("no dev examples remain after duration filtering; widen data.max_duration_sec")
+        if dropped_train or dropped_eval:
+            logging.warning(
+                "dropped %s train / %s dev examples outside duration window [%s, %s]s",
+                dropped_train,
+                dropped_eval,
+                min_duration,
+                max_duration,
+            )
+
         logging.info("writing source manifests")
         write_examples_manifest(run_dir / "manifests" / "train.jsonl", [example for example, _ in train_items])
         write_examples_manifest(run_dir / "manifests" / "dev.jsonl", [example for example, _ in eval_items])
@@ -609,7 +704,6 @@ def run_training(config_path: Path, run_dir_override: Path | None = None, resume
         train_batch_size = int(training["per_device_train_batch_size"])
         eval_batch_size = int(training["per_device_eval_batch_size"])
         grad_accum = int(training["gradient_accumulation_steps"])
-        num_workers = int(training["num_workers"])
         train_loader = build_dataloader(
             train_dataset, train_batch_size, num_workers, shuffle=True, generator=generator
         )
@@ -632,7 +726,7 @@ def run_training(config_path: Path, run_dir_override: Path | None = None, resume
             num_warmup_steps=int(training["warmup_steps"]),
             num_training_steps=max_steps,
         )
-        scaler = torch.cuda.amp.GradScaler(enabled=fp16)
+        scaler = torch.amp.GradScaler("cuda", enabled=fp16)
 
         global_step = 0
         start_epoch = 0
@@ -711,9 +805,14 @@ def run_training(config_path: Path, run_dir_override: Path | None = None, resume
 
                 scaler.unscale_(optimizer)
                 last_grad_norm = float(torch.nn.utils.clip_grad_norm_(trainable, max_grad_norm))
+                scale_before = scaler.get_scale()
                 scaler.step(optimizer)
                 scaler.update()
-                scheduler.step()
+                # Only advance the LR schedule when the optimizer actually stepped;
+                # AMP skips the step (and lowers the scale) on inf/nan grads during
+                # early loss-scale calibration.
+                if scaler.get_scale() >= scale_before:
+                    scheduler.step()
                 optimizer.zero_grad(set_to_none=True)
                 global_step += 1
 

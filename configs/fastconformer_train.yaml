@@ -10,6 +10,11 @@ data:
     - data/FarsSpon_train_dev
     - data/fleurs-normalized
   sample_rate: 16000
+  # Drop clips outside this window before batching. Conformer attention is
+  # O(T^2) per layer, so one multi-minute utterance can OOM the GPU even when
+  # typical batches fit. Set max_duration_sec to null to disable the upper cap.
+  min_duration_sec: 0.1
+  max_duration_sec: 20.0
 
 run:
   output_dir: models/asr/fastconformer/runs
