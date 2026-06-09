@@ -121,6 +121,33 @@ sentences are rejected by the Common Voice 25 normalization rules. By default it
 normalizes whichever of `train.tsv`, `dev.tsv`, and `test.tsv` exist, so
 test-only evaluation directories are supported.
 
+## Long-Audio Variant Concatenation
+
+Build a new ASR dataset of long utterances by concatenating short clips, to
+correct the short-utterance length/emission prior that degrades FastConformer on
+audio longer than the training clips. Concatenation happens **independently
+within each split**, so no train/dev/test leakage is introduced:
+
+```bash
+uv run python -m ml.speech_data.concatenate_long_variants \
+  --source-root data/my_dataset \
+  --output-root data/my_dataset-long \
+  --variants-per-split 3000 \
+  --target-min-sec 5.0 \
+  --max-duration-sec 20.0
+```
+
+By default it processes whichever of `train.tsv`, `dev.tsv`, `eval.tsv`, and
+`test.tsv` exist. Each variant joins 2–`--max-clips` short clips (until
+`--target-min-sec` is reached, capped by `--max-duration-sec`), loudness-
+normalizes every segment, inserts a `--gap-sec` silence between them, and joins
+the transcripts. Clips are drawn across speakers by default; pass
+`--speaker-column client_id` to force same-speaker joins. Generation is
+deterministic per `--seed`, with full provenance written to
+`long_variants_manifest.jsonl` and a `generation_report.json` summary. The
+output is a long-only dataset: combine or oversample it alongside the original
+short dataset at train time rather than using it as a replacement.
+
 ## Degradation Asset Download
 
 Download all DEMAND `*_16k.zip` noise archives:

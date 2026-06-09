@@ -18,6 +18,7 @@ SCRIPT_MODULES = [
     "ml.speech_data.scripts.generate_random_degraded_clip",
     "ml.speech_data.generate_degraded_dataset",
     "ml.speech_data.generate_degraded_pairs",
+    "ml.speech_data.concatenate_long_variants",
     "ml.speech_data.inspect_manifest",
     "ml.asr.train_whisper_small",
     "ml.asr.eval_whisper_small",
