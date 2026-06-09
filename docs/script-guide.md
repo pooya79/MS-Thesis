@@ -126,25 +126,32 @@ test-only evaluation directories are supported.
 Build a new ASR dataset of long utterances by concatenating short clips, to
 correct the short-utterance length/emission prior that degrades FastConformer on
 audio longer than the training clips. Concatenation happens **independently
-within each split**, so no train/dev/test leakage is introduced:
+within each split**, so no train/dev/test leakage is introduced. All parameters
+come from a YAML config:
 
 ```bash
 uv run python -m ml.speech_data.concatenate_long_variants \
-  --source-root data/my_dataset \
-  --output-root data/my_dataset-long \
-  --variants-per-split 3000 \
-  --target-min-sec 5.0 \
-  --max-duration-sec 20.0
+  --config configs/long_variants.yaml
 ```
 
-By default it processes whichever of `train.tsv`, `dev.tsv`, `eval.tsv`, and
-`test.tsv` exist. Each variant joins 2–`--max-clips` short clips (until
-`--target-min-sec` is reached, capped by `--max-duration-sec`), loudness-
-normalizes every segment, inserts a `--gap-sec` silence between them, and joins
-the transcripts. Clips are drawn across speakers by default; pass
-`--speaker-column client_id` to force same-speaker joins. Generation is
-deterministic per `--seed`, with full provenance written to
-`long_variants_manifest.jsonl` and a `generation_report.json` summary. The
+`variants_per_split` in the config is a mapping of split name to count, so each
+split gets a **different number** of variants and only the listed splits are
+processed:
+
+```yaml
+variants_per_split:
+  train.tsv: 3000
+  dev.tsv: 300
+  test.tsv: 300
+```
+
+Each variant joins `min_clips`–`max_clips` short clips (until `target_min_sec`
+is reached, capped by `max_duration_sec`), loudness-normalizes every segment,
+inserts a `gap_sec` silence between them, and joins the transcripts. Clips are
+drawn across speakers by default; set `speaker_column: client_id` to force
+same-speaker joins. Generation is deterministic per `seed`, with full provenance
+written to `long_variants_manifest.jsonl` and a `generation_report.json`
+summary. Pass `--overwrite` to write into an existing output directory. The
 output is a long-only dataset: combine or oversample it alongside the original
 short dataset at train time rather than using it as a replacement.
 

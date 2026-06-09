@@ -36,11 +36,13 @@ import argparse
 import csv
 import json
 import sys
+from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
 import numpy as np
+import yaml
 
 from ml.utils.audio import load_audio, resample_audio, save_audio
 from ml.utils.seed import stable_seed
@@ -49,9 +51,49 @@ from ml.utils.seed import stable_seed
 csv.field_size_limit(sys.maxsize)
 
 DEFAULT_SPLITS = ("train.tsv", "dev.tsv", "eval.tsv", "test.tsv")
-DEFAULT_SPLIT_STEMS = tuple(Path(split).stem for split in DEFAULT_SPLITS)
+
+# All generation parameters live in the YAML config; CLI only points at it.
+# ``variants_per_split`` is a mapping of split name -> count, so each split gets
+# its own number of variants and only the listed splits are processed.
+DEFAULT_CONFIG: dict[str, Any] = {
+    "source_root": None,
+    "output_root": None,
+    "seed": 1234,
+    "sample_rate": 16000,
+    "min_clips": 2,
+    "max_clips": 4,
+    "target_min_sec": 5.0,
+    "max_duration_sec": 20.0,
+    "gap_sec": 0.2,
+    "target_rms": 0.05,
+    "speaker_column": None,
+    "overwrite": False,
+    "variants_per_split": {},
+}
 
 FloatArray = np.ndarray
+
+
+def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    merged = deepcopy(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def load_yaml(path: Path) -> dict[str, Any]:
+    with path.open("r", encoding="utf-8") as handle:
+        loaded = yaml.safe_load(handle) or {}
+    if not isinstance(loaded, dict):
+        raise ValueError(f"{path} must contain a YAML mapping")
+    return loaded
+
+
+def load_config(path: Path) -> dict[str, Any]:
+    return deep_merge(DEFAULT_CONFIG, load_yaml(path))
 
 
 @dataclass
@@ -312,23 +354,48 @@ def generate_split(
     return tsv_rows, manifest_rows, audit
 
 
-def concatenate_long_variants(
-    source_root: Path,
-    output_root: Path,
-    *,
-    splits: Iterable[str] | None = None,
-    seed: int = 1234,
-    variants_per_split: int = 2000,
-    sample_rate: int = 16000,
-    min_clips: int = 2,
-    max_clips: int = 4,
-    target_min_sec: float = 5.0,
-    max_duration_sec: float = 20.0,
-    gap_sec: float = 0.2,
-    target_rms: float = 0.05,
-    speaker_column: str | None = None,
-    overwrite: bool = False,
-) -> dict[str, object]:
+def _resolve_variants_per_split(value: Any) -> dict[str, int]:
+    """Normalize the ``variants_per_split`` config into ``{split.tsv: count}``."""
+    if not isinstance(value, dict) or not value:
+        raise ValueError(
+            "config 'variants_per_split' must be a non-empty mapping of split name to count, "
+            "e.g. {train.tsv: 3000, dev.tsv: 300, test.tsv: 300}"
+        )
+    resolved: dict[str, int] = {}
+    for split, count in value.items():
+        if not isinstance(count, int) or isinstance(count, bool) or count < 0:
+            raise ValueError(f"variants_per_split['{split}'] must be a non-negative integer, got {count!r}")
+        resolved[split_name(str(split))] = count
+    return resolved
+
+
+def concatenate_long_variants(config: dict[str, Any]) -> dict[str, object]:
+    """Generate long concatenated variants for an ASR dataset from a merged config dict.
+
+    ``config['variants_per_split']`` is a mapping of split name to the number of
+    variants to generate for that split; only those splits are processed, each
+    with its own count.
+    """
+    merged = deep_merge(DEFAULT_CONFIG, config)
+    if not merged.get("source_root"):
+        raise ValueError("config 'source_root' is required")
+    if not merged.get("output_root"):
+        raise ValueError("config 'output_root' is required")
+
+    source_root = Path(str(merged["source_root"]))
+    output_root = Path(str(merged["output_root"]))
+    seed = int(merged["seed"])
+    sample_rate = int(merged["sample_rate"])
+    min_clips = int(merged["min_clips"])
+    max_clips = int(merged["max_clips"])
+    target_min_sec = float(merged["target_min_sec"])
+    max_duration_sec = float(merged["max_duration_sec"])
+    gap_sec = float(merged["gap_sec"])
+    target_rms = float(merged["target_rms"])
+    speaker_column = merged["speaker_column"]
+    overwrite = bool(merged["overwrite"])
+    variants_per_split = _resolve_variants_per_split(merged["variants_per_split"])
+
     if not source_root.is_dir():
         raise FileNotFoundError(f"source root does not exist or is not a directory: {source_root}")
     validate_output_root(source_root, output_root)
@@ -339,17 +406,9 @@ def concatenate_long_variants(
     if target_min_sec > max_duration_sec:
         raise ValueError("target_min_sec must be <= max_duration_sec")
 
-    if splits is None:
-        resolved_splits = [s for s in DEFAULT_SPLITS if (source_root / s).exists()]
-        if not resolved_splits:
-            raise FileNotFoundError(
-                f"missing split TSV: expected one of {', '.join(DEFAULT_SPLITS)} under {source_root}"
-            )
-    else:
-        resolved_splits = [split_name(s) for s in splits]
-        for s in resolved_splits:
-            if not (source_root / s).exists():
-                raise FileNotFoundError(f"missing split TSV: {source_root / s}")
+    for split in variants_per_split:
+        if not (source_root / split).exists():
+            raise FileNotFoundError(f"missing split TSV: {source_root / split}")
 
     if output_root.exists():
         if not overwrite:
@@ -358,13 +417,13 @@ def concatenate_long_variants(
 
     all_manifest: list[dict[str, object]] = []
     audits: dict[str, SplitAudit] = {}
-    for split in resolved_splits:
+    for split, variants in variants_per_split.items():
         tsv_rows, manifest_rows, audit = generate_split(
             source_root,
             output_root,
             split,
             seed=seed,
-            variants=variants_per_split,
+            variants=variants,
             sample_rate=sample_rate,
             min_clips=min_clips,
             max_clips=max_clips,
@@ -431,84 +490,30 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
             "Create a new ASR dataset of long audio variants by concatenating short clips "
-            "within each split (train.tsv, dev.tsv, eval.tsv, test.tsv). Concatenation never "
+            "within each split. All generation parameters come from a YAML config; "
+            "'variants_per_split' is a mapping of split name to count, so each split gets its own "
+            "number of variants and only the listed splits are processed. Concatenation never "
             "crosses split boundaries, so no train/dev/test leakage is introduced. Segments are "
             "loudness-normalized and separated by a short silence gap; transcripts are joined."
         )
     )
     parser.add_argument(
-        "--source-root",
+        "--config",
         type=Path,
         required=True,
-        help="Input ASR dataset directory with split TSVs (path + sentence columns) and a clips/ dir.",
+        help="Path to the long-variant concatenation YAML config (see configs/long_variants.yaml).",
     )
     parser.add_argument(
-        "--output-root",
-        type=Path,
-        required=True,
-        help="New output dataset directory for the generated long variants (must differ from source).",
+        "--overwrite",
+        action="store_true",
+        help="Override the config and allow writing into an existing output directory.",
     )
-    parser.add_argument(
-        "--splits",
-        nargs="+",
-        choices=DEFAULT_SPLITS + DEFAULT_SPLIT_STEMS,
-        help=(
-            "Split TSV filenames to process. Defaults to whichever of "
-            "train.tsv, dev.tsv, eval.tsv, test.tsv exist in the source."
-        ),
-    )
-    parser.add_argument("--seed", type=int, default=1234, help="Global seed for deterministic variant generation (default: 1234).")
-    parser.add_argument(
-        "--variants-per-split",
-        type=int,
-        default=2000,
-        help="Number of long variants to generate for each processed split (default: 2000).",
-    )
-    parser.add_argument("--sample-rate", type=int, default=16000, help="Output sample rate in Hz; inputs are resampled to match (default: 16000).")
-    parser.add_argument("--min-clips", type=int, default=2, help="Minimum short clips per variant; must be >= 2 (default: 2).")
-    parser.add_argument("--max-clips", type=int, default=4, help="Maximum short clips per variant (default: 4).")
-    parser.add_argument(
-        "--target-min-sec",
-        type=float,
-        default=5.0,
-        help="Keep adding clips until the variant reaches at least this many seconds (default: 5.0).",
-    )
-    parser.add_argument(
-        "--max-duration-sec",
-        type=float,
-        default=20.0,
-        help="Hard upper cap on a variant's duration in seconds (default: 20.0).",
-    )
-    parser.add_argument("--gap-sec", type=float, default=0.2, help="Silence inserted between concatenated clips, in seconds (default: 0.2).")
-    parser.add_argument("--target-rms", type=float, default=0.05, help="Per-segment RMS loudness target before concatenation (default: 0.05).")
-    parser.add_argument(
-        "--speaker-column",
-        type=str,
-        default=None,
-        help=(
-            "Optional TSV column (e.g. client_id) to restrict each variant to a single speaker. "
-            "Omit to concatenate across speakers, which better matches real long-form audio."
-        ),
-    )
-    parser.add_argument("--overwrite", action="store_true", help="Allow writing into an existing output directory.")
     args = parser.parse_args(argv)
 
-    report = concatenate_long_variants(
-        args.source_root,
-        args.output_root,
-        splits=args.splits,
-        seed=args.seed,
-        variants_per_split=args.variants_per_split,
-        sample_rate=args.sample_rate,
-        min_clips=args.min_clips,
-        max_clips=args.max_clips,
-        target_min_sec=args.target_min_sec,
-        max_duration_sec=args.max_duration_sec,
-        gap_sec=args.gap_sec,
-        target_rms=args.target_rms,
-        speaker_column=args.speaker_column,
-        overwrite=args.overwrite,
-    )
+    config = load_config(args.config)
+    if args.overwrite:
+        config["overwrite"] = True
+    report = concatenate_long_variants(config)
     print_report(report)
     return 0
 

@@ -44,29 +44,49 @@ def _read_manifest(output_root: Path) -> list[dict]:
     return [json.loads(line) for line in lines]
 
 
-def test_generates_long_variants_for_each_split(tmp_path: Path) -> None:
+def _config(source: Path, output: Path, variants_per_split: dict[str, int], **overrides) -> dict:
+    config = {
+        "source_root": str(source),
+        "output_root": str(output),
+        "seed": 7,
+        "sample_rate": SAMPLE_RATE,
+        "min_clips": 2,
+        "max_clips": 4,
+        "target_min_sec": 3.0,
+        "max_duration_sec": 10.0,
+        "gap_sec": 0.1,
+        "variants_per_split": variants_per_split,
+    }
+    config.update(overrides)
+    return config
+
+
+def test_generates_per_split_variant_counts(tmp_path: Path) -> None:
     source = tmp_path / "src"
-    paths_by_split = _build_dataset(source, {"train.tsv": 8, "dev.tsv": 6, "test.tsv": 5})
+    _build_dataset(source, {"train.tsv": 8, "dev.tsv": 6, "test.tsv": 5})
     output = tmp_path / "out"
 
-    report = concatenate_long_variants(
-        source,
-        output,
-        seed=7,
-        variants_per_split=5,
-        sample_rate=SAMPLE_RATE,
-        min_clips=2,
-        max_clips=4,
-        target_min_sec=3.0,
-        max_duration_sec=10.0,
-        gap_sec=0.1,
-    )
+    # Each split gets its own count.
+    counts = {"train.tsv": 5, "dev.tsv": 3, "test.tsv": 2}
+    report = concatenate_long_variants(_config(source, output, counts))
 
-    for split in ("train.tsv", "dev.tsv", "test.tsv"):
+    for split, expected in counts.items():
         assert (output / split).exists(), f"missing output split {split}"
-        assert report["splits"][split]["variants_written"] == 5
+        assert report["splits"][split]["variants_written"] == expected
         # Every variant clears the target minimum duration.
         assert report["splits"][split]["min_duration_sec"] >= 3.0
+
+
+def test_only_listed_splits_are_processed(tmp_path: Path) -> None:
+    source = tmp_path / "src"
+    _build_dataset(source, {"train.tsv": 8, "dev.tsv": 6, "test.tsv": 5})
+    output = tmp_path / "out"
+
+    # dev.tsv is omitted from variants_per_split, so it must not be produced.
+    report = concatenate_long_variants(_config(source, output, {"train.tsv": 4, "test.tsv": 2}))
+
+    assert set(report["splits"]) == {"train.tsv", "test.tsv"}
+    assert not (output / "dev.tsv").exists()
 
 
 def test_concatenation_stays_within_each_split(tmp_path: Path) -> None:
@@ -75,16 +95,7 @@ def test_concatenation_stays_within_each_split(tmp_path: Path) -> None:
     output = tmp_path / "out"
 
     concatenate_long_variants(
-        source,
-        output,
-        seed=7,
-        variants_per_split=5,
-        sample_rate=SAMPLE_RATE,
-        min_clips=2,
-        max_clips=4,
-        target_min_sec=3.0,
-        max_duration_sec=10.0,
-        gap_sec=0.1,
+        _config(source, output, {"train.tsv": 5, "dev.tsv": 5, "test.tsv": 5})
     )
 
     for entry in _read_manifest(output):
@@ -101,18 +112,8 @@ def test_deterministic_for_same_seed(tmp_path: Path) -> None:
 
     out_a = tmp_path / "a"
     out_b = tmp_path / "b"
-    common = dict(
-        seed=42,
-        variants_per_split=4,
-        sample_rate=SAMPLE_RATE,
-        min_clips=2,
-        max_clips=4,
-        target_min_sec=3.0,
-        max_duration_sec=10.0,
-        gap_sec=0.1,
-    )
-    concatenate_long_variants(source, out_a, **common)
-    concatenate_long_variants(source, out_b, **common)
+    concatenate_long_variants(_config(source, out_a, {"train.tsv": 4}, seed=42))
+    concatenate_long_variants(_config(source, out_b, {"train.tsv": 4}, seed=42))
 
     man_a = [{k: v for k, v in row.items() if k != "seed"} for row in _read_manifest(out_a)]
     man_b = [{k: v for k, v in row.items() if k != "seed"} for row in _read_manifest(out_b)]

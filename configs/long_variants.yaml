@@ -1,0 +1,38 @@
+# Long-audio variant concatenation.
+#
+# Builds a new ASR dataset of long utterances by concatenating short clips
+# within each split, to correct the short-utterance length/emission prior that
+# degrades FastConformer on audio longer than the training clips. Concatenation
+# happens independently within each split, so no train/dev/test leakage occurs.
+#
+# Run: uv run python -m ml.speech_data.concatenate_long_variants --config configs/long_variants.yaml
+
+source_root: data/my_dataset
+output_root: data/my_dataset-long
+
+# Per-split variant counts. Each key is a split TSV (".tsv" optional); only the
+# splits listed here are processed, each with its own number of variants.
+variants_per_split:
+  train.tsv: 3000
+  dev.tsv: 300
+  test.tsv: 300
+
+seed: 1234
+sample_rate: 16000
+
+# Each variant joins between min_clips and max_clips short clips, growing until
+# it reaches target_min_sec, never exceeding max_duration_sec.
+min_clips: 2
+max_clips: 4
+target_min_sec: 5.0
+max_duration_sec: 20.0
+
+# Silence inserted at each join, and per-segment RMS loudness target.
+gap_sec: 0.2
+target_rms: 0.05
+
+# Set to a TSV column (e.g. client_id) to force same-speaker joins; leave null
+# to concatenate across speakers, which better matches real long-form audio.
+speaker_column: null
+
+overwrite: false
