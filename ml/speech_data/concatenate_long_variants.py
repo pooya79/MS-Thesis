@@ -36,8 +36,10 @@ import argparse
 import csv
 import json
 import sys
+from concurrent.futures import ProcessPoolExecutor
 from copy import deepcopy
 from dataclasses import dataclass, field
+from multiprocessing import get_context
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -69,6 +71,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "target_rms": 0.05,
     "speaker_column": None,
     "overwrite": False,
+    "workers": 1,
     "variants_per_split": {},
 }
 
@@ -277,6 +280,85 @@ def joined_sentence(rows: list[dict[str, str]]) -> str:
     return " ".join(" ".join(row.get("sentence", "").split()) for row in rows).strip()
 
 
+@dataclass(frozen=True)
+class _VariantContext:
+    """Read-only state needed to build one variant; shared with worker processes."""
+
+    source_root: Path
+    output_clips: Path
+    rows: list[dict[str, str]]
+    groups: list[list[int]]
+    seed: int
+    stem: str
+    speaker_column: str | None
+    sample_rate: int
+    min_clips: int
+    max_clips: int
+    target_min_sec: float
+    max_duration_sec: float
+    gap_sec: float
+    target_rms: float
+
+
+def build_variant_record(ctx: _VariantContext, variant_index: int) -> dict[str, object] | None:
+    """Build, save, and describe one variant. Returns ``None`` if it was skipped.
+
+    Deterministic in ``variant_index`` alone (via ``stable_seed``), so variants
+    can be generated in any order or in parallel without changing the output.
+    """
+    variant_seed = stable_seed(ctx.seed, ctx.stem, "concat", variant_index)
+    rng = np.random.RandomState(variant_seed)
+    if not ctx.groups:
+        return None
+    group = ctx.groups[rng.randint(0, len(ctx.groups))]
+    plan = build_variant(
+        rng,
+        ctx.rows,
+        group,
+        ctx.source_root,
+        sample_rate=ctx.sample_rate,
+        min_clips=ctx.min_clips,
+        max_clips=ctx.max_clips,
+        target_min_sec=ctx.target_min_sec,
+        max_duration_sec=ctx.max_duration_sec,
+        gap_sec=ctx.gap_sec,
+        target_rms=ctx.target_rms,
+    )
+    if plan is None:
+        return None
+
+    rel_path = f"long_{ctx.stem}_{variant_index:06d}.wav"
+    save_audio(ctx.output_clips / rel_path, plan.audio, ctx.sample_rate)
+    return {
+        "split": ctx.stem,
+        "variant_index": variant_index,
+        "output_path": rel_path,
+        "sentence": joined_sentence(plan.sources),
+        "num_source_clips": len(plan.sources),
+        "source_paths": [row["path"] for row in plan.sources],
+        "duration_sec": round(plan.duration_sec, 4),
+        "sample_rate": ctx.sample_rate,
+        "gap_sec": ctx.gap_sec,
+        "speaker_column": ctx.speaker_column,
+        "seed": variant_seed,
+    }
+
+
+# Per-worker handle to the (large, read-only) variant context, set once by the
+# pool initializer so the rows list is pickled once per worker, not per task.
+_WORKER_CTX: _VariantContext | None = None
+
+
+def _init_worker(ctx: _VariantContext) -> None:
+    global _WORKER_CTX
+    _WORKER_CTX = ctx
+
+
+def _worker_build(variant_index: int) -> dict[str, object] | None:
+    assert _WORKER_CTX is not None, "worker context not initialized"
+    return build_variant_record(_WORKER_CTX, variant_index)
+
+
 def generate_split(
     source_root: Path,
     output_root: Path,
@@ -292,60 +374,66 @@ def generate_split(
     gap_sec: float,
     target_rms: float,
     speaker_column: str | None,
+    workers: int = 1,
 ) -> tuple[list[dict[str, str]], list[dict[str, object]], SplitAudit]:
     stem = Path(split).stem
     rows = read_split_rows(source_root / split)
     audit = SplitAudit(input_rows=len(rows))
     groups = _candidate_groups(rows, speaker_column, min_clips)
+    output_clips = output_root / "clips"
+    output_clips.mkdir(parents=True, exist_ok=True)
+
+    ctx = _VariantContext(
+        source_root=source_root,
+        output_clips=output_clips,
+        rows=rows,
+        groups=groups,
+        seed=seed,
+        stem=stem,
+        speaker_column=speaker_column,
+        sample_rate=sample_rate,
+        min_clips=min_clips,
+        max_clips=max_clips,
+        target_min_sec=target_min_sec,
+        max_duration_sec=max_duration_sec,
+        gap_sec=gap_sec,
+        target_rms=target_rms,
+    )
+
+    desc = f"{split} variants"
+    # executor.map preserves input order, so results align with variant_index
+    # regardless of worker scheduling -> output stays deterministic.
+    records: list[dict[str, object] | None]
+    if workers <= 1:
+        records = [
+            build_variant_record(ctx, i)
+            for i in tqdm(range(variants), desc=desc, unit="clip")
+        ]
+    else:
+        with ProcessPoolExecutor(
+            max_workers=workers,
+            mp_context=get_context("spawn"),
+            initializer=_init_worker,
+            initargs=(ctx,),
+        ) as executor:
+            records = list(
+                tqdm(
+                    executor.map(_worker_build, range(variants)),
+                    total=variants,
+                    desc=desc,
+                    unit="clip",
+                )
+            )
 
     tsv_rows: list[dict[str, str]] = []
     manifest_rows: list[dict[str, object]] = []
-    output_clips = output_root / "clips"
-
-    for variant_index in tqdm(range(variants), desc=f"{split} variants", unit="clip"):
-        variant_seed = stable_seed(seed, stem, "concat", variant_index)
-        rng = np.random.RandomState(variant_seed)
-        if not groups:
+    for record in records:
+        if record is None:
             audit.variants_skipped += 1
             continue
-        group = groups[rng.randint(0, len(groups))]
-        plan = build_variant(
-            rng,
-            rows,
-            group,
-            source_root,
-            sample_rate=sample_rate,
-            min_clips=min_clips,
-            max_clips=max_clips,
-            target_min_sec=target_min_sec,
-            max_duration_sec=max_duration_sec,
-            gap_sec=gap_sec,
-            target_rms=target_rms,
-        )
-        if plan is None:
-            audit.variants_skipped += 1
-            continue
-
-        rel_path = f"long_{stem}_{variant_index:06d}.wav"
-        save_audio(output_clips / rel_path, plan.audio, sample_rate)
-        sentence = joined_sentence(plan.sources)
-        tsv_rows.append({"path": rel_path, "sentence": sentence})
-        manifest_rows.append(
-            {
-                "split": stem,
-                "variant_index": variant_index,
-                "output_path": rel_path,
-                "sentence": sentence,
-                "num_source_clips": len(plan.sources),
-                "source_paths": [row["path"] for row in plan.sources],
-                "duration_sec": round(plan.duration_sec, 4),
-                "sample_rate": sample_rate,
-                "gap_sec": gap_sec,
-                "speaker_column": speaker_column,
-                "seed": variant_seed,
-            }
-        )
-        audit.durations.append(plan.duration_sec)
+        tsv_rows.append({"path": str(record["output_path"]), "sentence": str(record["sentence"])})
+        manifest_rows.append(record)
+        audit.durations.append(float(record["duration_sec"]))
         audit.variants_written += 1
 
     if audit.durations:
@@ -395,6 +483,7 @@ def concatenate_long_variants(config: dict[str, Any]) -> dict[str, object]:
     target_rms = float(merged["target_rms"])
     speaker_column = merged["speaker_column"]
     overwrite = bool(merged["overwrite"])
+    workers = int(merged["workers"])
     variants_per_split = _resolve_variants_per_split(merged["variants_per_split"])
 
     if not source_root.is_dir():
@@ -406,6 +495,8 @@ def concatenate_long_variants(config: dict[str, Any]) -> dict[str, object]:
         raise ValueError("max_clips must be >= min_clips")
     if target_min_sec > max_duration_sec:
         raise ValueError("target_min_sec must be <= max_duration_sec")
+    if workers < 1:
+        raise ValueError("workers must be >= 1")
 
     for split in variants_per_split:
         if not (source_root / split).exists():
@@ -433,6 +524,7 @@ def concatenate_long_variants(config: dict[str, Any]) -> dict[str, object]:
             gap_sec=gap_sec,
             target_rms=target_rms,
             speaker_column=speaker_column,
+            workers=workers,
         )
         write_tsv(output_root / split, tsv_rows)
         all_manifest.extend(manifest_rows)
@@ -453,6 +545,7 @@ def concatenate_long_variants(config: dict[str, Any]) -> dict[str, object]:
             "gap_sec": gap_sec,
             "target_rms": target_rms,
             "speaker_column": speaker_column,
+            "workers": workers,
         },
         "splits": {
             split: {
@@ -509,11 +602,19 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Override the config and allow writing into an existing output directory.",
     )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help="Number of parallel worker processes. Overrides the config 'workers' value when provided.",
+    )
     args = parser.parse_args(argv)
 
     config = load_config(args.config)
     if args.overwrite:
         config["overwrite"] = True
+    if args.workers is not None:
+        config["workers"] = args.workers
     report = concatenate_long_variants(config)
     print_report(report)
     return 0

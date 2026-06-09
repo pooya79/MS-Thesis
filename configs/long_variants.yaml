@@ -20,6 +20,10 @@ variants_per_split:
 seed: 1234
 sample_rate: 16000
 
+# Parallel worker processes for variant generation (1 = sequential). Output is
+# deterministic regardless of worker count. Override at the CLI with --workers.
+workers: 4
+
 # Each variant joins between min_clips and max_clips short clips, growing until
 # it reaches target_min_sec, never exceeding max_duration_sec.
 min_clips: 2

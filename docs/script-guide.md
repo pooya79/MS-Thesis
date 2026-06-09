@@ -155,6 +155,11 @@ summary. Pass `--overwrite` to write into an existing output directory. The
 output is a long-only dataset: combine or oversample it alongside the original
 short dataset at train time rather than using it as a replacement.
 
+Generation is parallelizable: set `workers` in the config (or `--workers N` to
+override) to fan variant generation across processes. Output is byte-identical
+regardless of worker count, since each variant is seeded independently by its
+index. A per-split progress bar reports throughput.
+
 ## Degradation Asset Download
 
 Download all DEMAND `*_16k.zip` noise archives:

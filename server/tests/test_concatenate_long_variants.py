@@ -124,3 +124,21 @@ def test_deterministic_for_same_seed(tmp_path: Path) -> None:
         a, _ = sf.read(str(clip))
         b, _ = sf.read(str(out_b / "clips" / clip.name))
         assert np.array_equal(a, b)
+
+
+def test_multiple_workers_match_single_worker(tmp_path: Path) -> None:
+    source = tmp_path / "src"
+    _build_dataset(source, {"train.tsv": 10, "test.tsv": 6})
+
+    out_seq = tmp_path / "seq"
+    out_par = tmp_path / "par"
+    counts = {"train.tsv": 6, "test.tsv": 3}
+    concatenate_long_variants(_config(source, out_seq, counts, workers=1))
+    concatenate_long_variants(_config(source, out_par, counts, workers=3))
+
+    # Same manifest (order + content) and identical audio regardless of worker count.
+    assert _read_manifest(out_seq) == _read_manifest(out_par)
+    for clip in (out_seq / "clips").glob("*.wav"):
+        a, _ = sf.read(str(clip))
+        b, _ = sf.read(str(out_par / "clips" / clip.name))
+        assert np.array_equal(a, b)
