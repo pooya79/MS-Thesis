@@ -43,6 +43,7 @@ from typing import Any, Iterable
 
 import numpy as np
 import yaml
+from tqdm import tqdm
 
 from ml.utils.audio import load_audio, resample_audio, save_audio
 from ml.utils.seed import stable_seed
@@ -301,7 +302,7 @@ def generate_split(
     manifest_rows: list[dict[str, object]] = []
     output_clips = output_root / "clips"
 
-    for variant_index in range(variants):
+    for variant_index in tqdm(range(variants), desc=f"{split} variants", unit="clip"):
         variant_seed = stable_seed(seed, stem, "concat", variant_index)
         rng = np.random.RandomState(variant_seed)
         if not groups:
