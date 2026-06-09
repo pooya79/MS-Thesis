@@ -501,8 +501,11 @@ def evaluate(
 
     Returns HF-style ``eval_*`` fields (``eval_loss``, ``eval_wer``,
     ``eval_cer``, ``eval_runtime``, ``eval_samples_per_second``,
-    ``eval_steps_per_second``). The loader must be unshuffled so that decoded
-    hypotheses line up with ``eval_items`` in order.
+    ``eval_steps_per_second``) computed over all datasets combined, plus
+    ``eval_per_dataset``: a ``{dataset_name: {wer, cer, num_examples}}`` mapping
+    so WER/CER can be reported for each source dataset as well as overall. The
+    loader must be unshuffled so that decoded hypotheses line up with
+    ``eval_items`` in order.
     """
     import time
 
@@ -515,6 +518,7 @@ def evaluate(
     num_batches = 0
     references: list[str] = []
     hypotheses: list[str] = []
+    dataset_names: list[str] = []
     offset = 0
     progress = make_progress_bar(eval_loader, desc="eval", total=len(eval_loader))
     try:
@@ -530,12 +534,27 @@ def evaluate(
                     example, _tokens = eval_items[offset + local_index]
                     references.append(example.transcript)
                     hypotheses.append(model.tokenizer.DecodeIds(ids))
+                    dataset_names.append(example.dataset_dir.name if example.dataset_dir else "unknown")
                 offset += len(id_seqs)
     finally:
         if was_training:
             model.train()
     runtime = max(time.perf_counter() - start, 1e-9)
     num_examples = len(hypotheses)
+
+    # Per-dataset WER/CER, grouped by dataset directory name, preserving the
+    # order datasets first appear in the eval set.
+    per_dataset: dict[str, dict[str, float]] = {}
+    for name in dataset_names:
+        if name not in per_dataset:
+            refs = [r for r, n in zip(references, dataset_names) if n == name]
+            hyps = [h for h, n in zip(hypotheses, dataset_names) if n == name]
+            per_dataset[name] = {
+                "wer": word_error_rate(refs, hyps),
+                "cer": character_error_rate(refs, hyps),
+                "num_examples": len(refs),
+            }
+
     return {
         "eval_loss": total_loss / max(1, num_batches),
         "eval_wer": word_error_rate(references, hypotheses),
@@ -543,7 +562,23 @@ def evaluate(
         "eval_runtime": runtime,
         "eval_samples_per_second": num_examples / runtime,
         "eval_steps_per_second": num_batches / runtime,
+        "eval_per_dataset": per_dataset,
     }
+
+
+def log_per_dataset_metrics(per_dataset: dict[str, dict[str, float]], prefix: str = "eval") -> None:
+    """Log one WER/CER line per source dataset (skipped when only one dataset)."""
+    if len(per_dataset) <= 1:
+        return
+    for name, scores in per_dataset.items():
+        logging.info(
+            "%s dataset=%s wer=%.4f cer=%.4f n=%d",
+            prefix,
+            name,
+            scores["wer"],
+            scores["cer"],
+            int(scores["num_examples"]),
+        )
 
 
 def make_progress_bar(iterable: Any, desc: str, total: int) -> Any:
@@ -848,13 +883,14 @@ def run_training(config_path: Path, run_dir_override: Path | None = None, resume
                     logging.info("evaluating at step=%s on %s dev examples", global_step, len(eval_items))
                     eval_metrics = evaluate(model, eval_loader, eval_items, device, fp16)
                     logging.info(
-                        "eval step=%s loss=%.4f wer=%.4f cer=%.4f runtime=%.1fs",
+                        "eval step=%s loss=%.4f wer=%.4f cer=%.4f runtime=%.1fs (overall)",
                         global_step,
                         eval_metrics["eval_loss"],
                         eval_metrics["eval_wer"],
                         eval_metrics["eval_cer"],
                         eval_metrics["eval_runtime"],
                     )
+                    log_per_dataset_metrics(eval_metrics["eval_per_dataset"])
                     append_jsonl(
                         metrics_path,
                         {
@@ -865,6 +901,7 @@ def run_training(config_path: Path, run_dir_override: Path | None = None, resume
                             "eval_samples_per_second": eval_metrics["eval_samples_per_second"],
                             "eval_steps_per_second": eval_metrics["eval_steps_per_second"],
                             "eval_wer": eval_metrics["eval_wer"],
+                            "eval_per_dataset": eval_metrics["eval_per_dataset"],
                             "step": global_step,
                             "timestamp": utc_now(),
                         },
@@ -892,11 +929,12 @@ def run_training(config_path: Path, run_dir_override: Path | None = None, resume
 
         final_metrics = evaluate(model, eval_loader, eval_items, device, fp16)
         logging.info(
-            "final eval loss=%.4f wer=%.4f cer=%.4f",
+            "final eval loss=%.4f wer=%.4f cer=%.4f (overall)",
             final_metrics["eval_loss"],
             final_metrics["eval_wer"],
             final_metrics["eval_cer"],
         )
+        log_per_dataset_metrics(final_metrics["eval_per_dataset"], prefix="final eval")
         append_jsonl(
             metrics_path,
             {
@@ -907,6 +945,7 @@ def run_training(config_path: Path, run_dir_override: Path | None = None, resume
                 "eval_samples_per_second": final_metrics["eval_samples_per_second"],
                 "eval_steps_per_second": final_metrics["eval_steps_per_second"],
                 "eval_wer": final_metrics["eval_wer"],
+                "eval_per_dataset": final_metrics["eval_per_dataset"],
                 "step": global_step,
                 "timestamp": utc_now(),
             },
@@ -941,6 +980,7 @@ def run_training(config_path: Path, run_dir_override: Path | None = None, resume
                 "final_loss": final_metrics["eval_loss"],
                 "final_wer": final_metrics["eval_wer"],
                 "final_cer": final_metrics["eval_cer"],
+                "final_per_dataset": final_metrics["eval_per_dataset"],
                 "best_wer": best_wer,
                 "final_model": str(final_path),
                 "best_model": str(run_dir / "best.pt"),
