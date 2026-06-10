@@ -60,6 +60,8 @@ OPUS_APPLICATION_VOIP = 2048
 OPUS_OK = 0
 OPUS_SET_BITRATE_REQUEST = 4002
 MAX_OPUS_PACKET_BYTES = 4000
+PRE_CODEC_GUARD_PEAK = 0.99
+SUPPORTED_NORMALIZATION_MODES = {"shared_pair_peak_safety"}
 
 
 @dataclass(frozen=True)
@@ -297,6 +299,20 @@ def pair_peak_safety_normalize(
     return (clean_arr * scale).astype(np.float32), (degraded_arr * scale).astype(np.float32), float(scale)
 
 
+def pre_codec_peak_guard(
+    audio: np.ndarray,
+    peak: float = PRE_CODEC_GUARD_PEAK,
+) -> tuple[np.ndarray, float, float]:
+    if not 0 < peak <= 1:
+        raise ValueError("peak must be in (0, 1]")
+    arr = np.nan_to_num(np.asarray(audio, dtype=np.float32), nan=0.0, posinf=peak, neginf=-peak)
+    max_abs = float(np.max(np.abs(arr))) if arr.size else 0.0
+    if max_abs <= peak:
+        return arr, 1.0, max_abs
+    scale = peak / max_abs
+    return (arr * scale).astype(np.float32), float(scale), max_abs
+
+
 def channel_path_for_codec(codec: str) -> str | None:
     if codec not in CODECS:
         raise ValueError(f"unsupported codec name: {codec}")
@@ -312,9 +328,14 @@ def codec_roundtrip(
     frame_duration_ms: int | None = None,
 ) -> np.ndarray:
     spec = CODECS[codec]
+    if not ffmpeg_encoder_candidates(codec):
+        return np.asarray(audio, dtype=np.float32)
     encoder = resolve_ffmpeg_encoder(codec)
     if encoder is None:
-        return np.asarray(audio, dtype=np.float32)
+        raise RuntimeError(
+            f"no ffmpeg encoder available for codec {codec!r} "
+            f"(tried: {', '.join(ffmpeg_encoder_candidates(codec))})"
+        )
     with tempfile.TemporaryDirectory(prefix="degrade_codec_") as tmp:
         tmp_path = Path(tmp)
         input_path = tmp_path / "input.wav"
@@ -410,7 +431,7 @@ def sample_burst_loss_mask(
         return mask
     bad_to_good = min(1.0, 1.0 / max(1, burst_length))
     good_to_bad = min(1.0, (target_loss_rate * bad_to_good) / max(1e-6, 1.0 - target_loss_rate))
-    in_bad_state = False
+    in_bad_state = bool(rng.random() < target_loss_rate)
     for frame in range(frame_count):
         if in_bad_state:
             mask[frame] = True
@@ -593,7 +614,9 @@ def degrade_item(
 
     noise_cfg = degradation_config["noise"]
     metadata.update({"noise_scenes": [], "noise_ids": [], "snr_db": None})
-    if noise_assets and rng.random() < float(noise_cfg["probability"]):
+    # Draw unconditionally so the RNG stream does not depend on noise-asset availability.
+    noise_draw = rng.random()
+    if noise_assets and noise_draw < float(noise_cfg["probability"]):
         scene_count = 2 if rng.random() < float(noise_cfg["second_scene_probability"]) else 1
         snr_bucket = noise_cfg["snr_buckets"][int(rng.integers(0, len(noise_cfg["snr_buckets"])))]
         snr_db = sample_uniform(rng, snr_bucket)
@@ -615,11 +638,17 @@ def degrade_item(
     metadata["gain_db"] = gain_db
     clipping_cfg = level_cfg.get("clipping", {})
     clipping_enabled = bool(clipping_cfg.get("enabled", False)) and rng.random() < float(clipping_cfg.get("probability", 0))
-    metadata["clipping"] = {"enabled": clipping_enabled, "mode": None, "threshold": None}
+    metadata["clipping"] = {"enabled": clipping_enabled, "mode": None, "threshold": None, "clipped_fraction": None}
     if clipping_enabled:
         threshold = sample_uniform(rng, clipping_cfg.get("threshold", [0.8, 0.98]))
+        clipped_fraction = float(np.mean(np.abs(degraded) > threshold)) if degraded.size else 0.0
         degraded = np.clip(degraded, -threshold, threshold).astype(np.float32)
-        metadata["clipping"] = {"enabled": True, "mode": clipping_cfg.get("mode", "hard"), "threshold": threshold}
+        metadata["clipping"] = {
+            "enabled": True,
+            "mode": clipping_cfg.get("mode", "hard"),
+            "threshold": threshold,
+            "clipped_fraction": clipped_fraction,
+        }
     metadata["agc"] = {"enabled": bool(level_cfg.get("agc", {}).get("enabled", False))}
 
     codec_entry = weighted_choice(rng, degradation_config["codec_distribution"])
@@ -656,6 +685,9 @@ def degrade_item(
 
     pre_codec_channel = resample_audio(degraded, working_rate, channel_rate)
     pre_codec_channel = bandpass_filter(pre_codec_channel, channel_rate, float(bandpass_hz[0]), float(bandpass_hz[1]))
+    # Guard against unrecorded hard clipping at the PCM_16 codec input; both the ffmpeg
+    # round-trip and the Opus PLC path receive the same guarded waveform.
+    pre_codec_channel, pre_codec_guard_scale, pre_codec_peak = pre_codec_peak_guard(pre_codec_channel)
     if network_enabled:
         loss_bucket = network_cfg["loss_rate_buckets"][int(rng.integers(0, len(network_cfg["loss_rate_buckets"])))]
         loss_rate = sample_uniform(rng, loss_bucket)
@@ -747,6 +779,8 @@ def degrade_item(
             "codec_bitrate": codec_bitrate,
             "codec_frame_duration_ms": codec_frame_duration_ms,
             "codec_alignment_lag_samples": codec_alignment_lag_samples,
+            "pre_codec_peak": pre_codec_peak,
+            "pre_codec_guard_scale": pre_codec_guard_scale,
             "network_impairment": network_metadata,
             "normalization": degradation_config["normalization"]["mode"],
             "normalization_scale": normalization_scale,
@@ -800,6 +834,12 @@ def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]
 
 def validate_config(config: dict[str, Any]) -> None:
     validate_codec_channel_paths()
+    normalization_mode = config["normalization"]["mode"]
+    if normalization_mode not in SUPPORTED_NORMALIZATION_MODES:
+        raise ValueError(
+            f"unsupported normalization mode {normalization_mode!r}; "
+            f"supported: {sorted(SUPPORTED_NORMALIZATION_MODES)}"
+        )
     manifests = config["manifests"]
     for split in ("train", "valid"):
         if split not in manifests:

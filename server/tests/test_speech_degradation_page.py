@@ -90,7 +90,7 @@ def test_speech_degradation_generation_creates_session_files(tmp_path: Path, mon
         metadata = json.loads(metadata_files[0].read_text(encoding="utf-8"))
         assert metadata["channel_path"] == "wideband"
         assert metadata["codec"] == "pass_through"
-        assert metadata["normalization"] == "peak_safety"
+        assert metadata["normalization"] == "shared_pair_peak_safety"
         assert metadata["seed"] is not None
         assert Path(metadata["clean_path"]).exists()
         assert Path(metadata["degraded_path"]).exists()

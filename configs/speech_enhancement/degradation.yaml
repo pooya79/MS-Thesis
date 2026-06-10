@@ -140,5 +140,5 @@ network_impairment:
   frame_ms: 20
 
 normalization:
-  mode: peak_safety
+  mode: shared_pair_peak_safety
   peak: 0.99

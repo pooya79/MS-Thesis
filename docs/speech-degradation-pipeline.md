@@ -69,7 +69,12 @@ Every generated variant is seeded from:
 
 This means the same config and input manifests produce the same random choices for each
 pair. The output manifest records the selected random choices so each degradation can be
-audited later.
+audited later. The noise-probability draw is consumed even when no noise index is
+configured, so adding or removing a noise index does not perturb the other random
+choices.
+
+Datasets generated before the June 2026 correctness fixes are not sample-identical to
+regenerated ones — see `docs/degradation-pipeline-fixes-2026-06.md`.
 
 ## Profile-Based Generation
 
@@ -112,15 +117,17 @@ For each clean clip and variant, the generator applies these stages:
 5. Apply level variation and optional clipping.
 6. Select channel path and codec.
 7. Resample and band-limit for narrowband or wideband channel simulation.
-8. Apply an ffmpeg codec round-trip.
-9. Cross-correlate against the pre-codec channel waveform and compensate codec delay.
-10. Optionally apply packet loss during Opus encode/decode so decoder PLC handles
+8. Apply a peak guard so the codec input never hard-clips; the measured peak and any
+   applied scale are recorded as `pre_codec_peak` / `pre_codec_guard_scale`.
+9. Apply an ffmpeg codec round-trip.
+10. Cross-correlate against the pre-codec channel waveform and compensate codec delay.
+11. Optionally apply packet loss during Opus encode/decode so decoder PLC handles
     missing packets. Non-Opus codecs receive a clearly labeled decoded-waveform fallback
     impairment.
-11. Resample degraded input to the model sample rate.
-12. Create the clean target, with bandwidth alignment for narrowband and default wideband samples.
-13. Apply one shared peak-safety scale to the clean/degraded pair.
-14. Write WAV files and JSONL metadata.
+12. Resample degraded input to the model sample rate.
+13. Create the clean target, with bandwidth alignment for narrowband and default wideband samples.
+14. Apply one shared peak-safety scale to the clean/degraded pair.
+15. Write WAV files and JSONL metadata.
 
 ## Noise Stage
 
@@ -145,7 +152,8 @@ training set while still exposing the model to realistic call backgrounds.
 The level stage currently supports:
 
 - Random gain in dB.
-- Optional hard clipping.
+- Optional hard clipping. When the stage fires, the manifest records the fraction of
+  samples that actually exceeded the threshold as `clipping.clipped_fraction`.
 - AGC metadata placeholder.
 
 These effects run after optional noise and before channel simulation. That order treats
@@ -221,7 +229,9 @@ packet-loss robustness. The checked-in `voip_lossy` profile is Opus-only so pack
 examples use decoder PLC by default. Explicit ablations can also request
 `mode: decoded_waveform_dropout`, which uses the same waveform dropout model.
 
-Both modes use a two-state frame process:
+Both modes use a two-state frame process whose initial state is sampled from the
+stationary distribution, so short clips are not biased toward under-shooting the target
+loss rate:
 
 - Good state: frames pass through.
 - Bad state: encoded Opus packets are dropped, or fallback waveform frames are zeroed.
@@ -280,6 +290,8 @@ Each output row records the important choices:
   "codec_bitrate": null,
   "codec_frame_duration_ms": null,
   "codec_alignment_lag_samples": 0,
+  "pre_codec_peak": 0.41,
+  "pre_codec_guard_scale": 1.0,
   "network_impairment": {
     "enabled": false,
     "mode": null,

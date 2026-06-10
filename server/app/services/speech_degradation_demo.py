@@ -190,7 +190,7 @@ def build_demo_config(form: dict[str, Any], output_dir: Path) -> tuple[dict[str,
                 "burst_length": [2, 4],
                 "frame_ms": 20,
             },
-            "normalization": {"mode": "peak_safety", "peak": 0.99},
+            "normalization": {"mode": "shared_pair_peak_safety", "peak": 0.99},
             "noise_index": base_config.get("noise_index"),
         }
     )
