@@ -596,13 +596,54 @@ def make_progress_bar(iterable: Any, desc: str, total: int) -> Any:
         return iterable
 
 
-def build_dataloader(dataset: Any, batch_size: int, num_workers: int, shuffle: bool, generator: Any) -> Any:
+class ResumableRandomSampler:
+    """Deterministic per-epoch shuffle that can skip a leading prefix on resume.
+
+    Each epoch's permutation depends only on ``(seed, epoch)`` — not on how many
+    epochs ran before it — so a resumed run reproduces the exact order the
+    crashed run was iterating and can drop the batches it already trained on by
+    setting ``skip`` (a count of *samples*, i.e. ``batches_done * batch_size``).
+    Call :meth:`set_epoch` before each epoch's iteration. A plain ``__iter__`` /
+    ``__len__`` object qualifies as a DataLoader ``sampler`` (it is ``Iterable``).
+    """
+
+    def __init__(self, num_samples: int, seed: int) -> None:
+        self.num_samples = num_samples
+        self.seed = seed
+        self.epoch = 0
+        self.skip = 0
+
+    def set_epoch(self, epoch: int, skip: int = 0) -> None:
+        self.epoch = epoch
+        self.skip = max(0, min(int(skip), self.num_samples))
+
+    def __iter__(self):
+        import torch
+
+        generator = torch.Generator()
+        generator.manual_seed(self.seed + self.epoch)
+        order = torch.randperm(self.num_samples, generator=generator).tolist()
+        return iter(order[self.skip :])
+
+    def __len__(self) -> int:
+        return self.num_samples - self.skip
+
+
+def build_dataloader(
+    dataset: Any,
+    batch_size: int,
+    num_workers: int,
+    shuffle: bool,
+    generator: Any,
+    sampler: Any = None,
+) -> Any:
     from torch.utils.data import DataLoader
 
     return DataLoader(
         dataset,
         batch_size=batch_size,
-        shuffle=shuffle,
+        shuffle=shuffle if sampler is None else False,
+        sampler=sampler,
         num_workers=num_workers,
         collate_fn=FastConformerCollator(),
         drop_last=False,
@@ -739,13 +780,20 @@ def run_training(config_path: Path, run_dir_override: Path | None = None, resume
         train_batch_size = int(training["per_device_train_batch_size"])
         eval_batch_size = int(training["per_device_eval_batch_size"])
         grad_accum = int(training["gradient_accumulation_steps"])
+        # Resumable shuffle: lets a resumed run replay the exact epoch order and
+        # skip the batches already trained on (see ResumableRandomSampler).
+        train_sampler = ResumableRandomSampler(len(train_dataset), int(training["seed"]))
         train_loader = build_dataloader(
-            train_dataset, train_batch_size, num_workers, shuffle=True, generator=generator
+            train_dataset, train_batch_size, num_workers, shuffle=True, generator=generator, sampler=train_sampler
         )
         # Unshuffled so decoded hypotheses line up with eval_items order in evaluate().
         eval_loader = build_dataloader(eval_dataset, eval_batch_size, num_workers, shuffle=False, generator=generator)
 
-        steps_per_epoch = max(1, math.ceil(len(train_loader) / grad_accum))
+        # Captured with skip=0, so this is the full per-epoch batch count and stays
+        # the fractional-epoch / accumulation-boundary denominator even when a
+        # resumed first epoch iterates fewer batches.
+        batches_per_epoch = len(train_loader)
+        steps_per_epoch = max(1, math.ceil(batches_per_epoch / grad_accum))
         # honour fractional epochs for the optimizer-step budget
         max_steps = max(1, int(steps_per_epoch * float(training["num_train_epochs"])))
         logging.info("steps_per_epoch=%s max_optimizer_steps=%s", steps_per_epoch, max_steps)
@@ -765,6 +813,7 @@ def run_training(config_path: Path, run_dir_override: Path | None = None, resume
 
         global_step = 0
         start_epoch = 0
+        resume_batch_offset = 0  # batches already consumed in start_epoch before the crash
         best_wer: float | None = None
         if resume_checkpoint is not None:
             resume_state = torch.load(str(resume_checkpoint), map_location="cpu", weights_only=False).get("training_state")
@@ -775,8 +824,21 @@ def run_training(config_path: Path, run_dir_override: Path | None = None, resume
                     scaler.load_state_dict(resume_state["scaler"])
                 global_step = int(resume_state.get("global_step", 0))
                 start_epoch = int(resume_state.get("epoch", 0))
+                resume_batch_offset = int(resume_state.get("batch_in_epoch", 0))
                 best_wer = resume_state.get("best_wer")
-                logging.info("resumed at global_step=%s epoch=%s best_wer=%s", global_step, start_epoch, best_wer)
+                # A checkpoint taken at the last batch of an epoch (or an older
+                # bundle without batch_in_epoch resolving past the count) means the
+                # epoch is finished: advance to the next one and start from batch 0.
+                if resume_batch_offset >= batches_per_epoch:
+                    start_epoch += 1
+                    resume_batch_offset = 0
+                logging.info(
+                    "resumed at global_step=%s epoch=%s batch_in_epoch=%s best_wer=%s",
+                    global_step,
+                    start_epoch,
+                    resume_batch_offset,
+                    best_wer,
+                )
 
         save_total_limit = int(training["save_total_limit"])
         logging_steps = int(training["logging_steps"])
@@ -791,6 +853,9 @@ def run_training(config_path: Path, run_dir_override: Path | None = None, resume
                 "scaler": scaler.state_dict() if fp16 else None,
                 "global_step": global_step,
                 "epoch": current_epoch,
+                # Batches consumed in current_epoch so resume can skip them. Saved
+                # only at update-step boundaries, so it lands on a grad-accum edge.
+                "batch_in_epoch": batch_in_epoch,
                 "best_wer": best_wer,
             }
 
@@ -812,18 +877,34 @@ def run_training(config_path: Path, run_dir_override: Path | None = None, resume
         samples_seen = 0
         last_grad_norm = 0.0
         current_epoch = start_epoch
-        stop = False
+        batch_in_epoch = resume_batch_offset
+        stop = global_step >= max_steps  # resumed run already finished its step budget
         train_start = time.perf_counter()
 
         def fractional_epoch(epoch: int, micro_step: int) -> float:
-            return epoch + (micro_step + 1) / max(1, len(train_loader))
+            return epoch + (micro_step + 1) / max(1, batches_per_epoch)
 
+        if stop:
+            logging.info("resumed run already reached max_steps=%s; skipping training loop", max_steps)
         logging.info("starting training global_step=%s -> max_steps=%s", global_step, max_steps)
         for epoch in range(start_epoch, num_epochs):
+            if stop:
+                break
             current_epoch = epoch
-            progress = make_progress_bar(train_loader, desc=f"epoch {epoch + 1}/{num_epochs}", total=len(train_loader))
+            # Skip the prefix already trained on, but only for the epoch we resumed
+            # into; later epochs start fresh from batch 0.
+            base_batch = resume_batch_offset if epoch == start_epoch else 0
+            train_sampler.set_epoch(epoch, skip=base_batch * train_batch_size)
+            remaining_batches = batches_per_epoch - base_batch
+            progress = make_progress_bar(
+                train_loader, desc=f"epoch {epoch + 1}/{num_epochs}", total=remaining_batches
+            )
             set_postfix = getattr(progress, "set_postfix", None)
-            for micro_step, batch in enumerate(progress):
+            for local_step, batch in enumerate(progress):
+                # Absolute batch index within the epoch (loop restarts at 0 after a
+                # resume skip, so add the skipped prefix back for all bookkeeping).
+                micro_step = base_batch + local_step
+                batch_in_epoch = micro_step + 1
                 with torch.autocast(device_type="cuda" if device == "cuda" else "cpu", enabled=fp16):
                     loss = ctc_loss_step(model, batch, device)
                 loss_value = float(loss.detach().item())
@@ -834,7 +915,7 @@ def run_training(config_path: Path, run_dir_override: Path | None = None, resume
                 samples_seen += int(batch["wave_lengths"].numel())
                 scaler.scale(loss / grad_accum).backward()
 
-                is_update_step = (micro_step + 1) % grad_accum == 0 or (micro_step + 1) == len(train_loader)
+                is_update_step = (micro_step + 1) % grad_accum == 0 or (micro_step + 1) == batches_per_epoch
                 if not is_update_step:
                     continue
 

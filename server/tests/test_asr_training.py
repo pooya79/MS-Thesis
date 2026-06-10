@@ -430,3 +430,43 @@ def test_load_training_config_validates_load_best_model_flag(tmp_path: Path) -> 
 
     with pytest.raises(ValueError, match="load_best_model_at_end"):
         load_training_config(config_path)
+
+
+def test_resumable_sampler_order_depends_only_on_seed_and_epoch() -> None:
+    from ml.asr.train_fastconformer import ResumableRandomSampler
+
+    sampler = ResumableRandomSampler(num_samples=20, seed=1337)
+
+    sampler.set_epoch(0)
+    epoch0 = list(sampler)
+    sampler.set_epoch(1)
+    epoch1 = list(sampler)
+
+    # A full permutation each epoch, and consecutive epochs differ in order.
+    assert sorted(epoch0) == list(range(20))
+    assert sorted(epoch1) == list(range(20))
+    assert epoch0 != epoch1
+
+    # Re-deriving the same epoch reproduces the exact order — this is what lets a
+    # resumed run replay the order the crashed run was iterating.
+    other = ResumableRandomSampler(num_samples=20, seed=1337)
+    other.set_epoch(0)
+    assert list(other) == epoch0
+
+
+def test_resumable_sampler_skip_drops_already_seen_prefix() -> None:
+    from ml.asr.train_fastconformer import ResumableRandomSampler
+
+    sampler = ResumableRandomSampler(num_samples=20, seed=7)
+    sampler.set_epoch(3)
+    full = list(sampler)
+
+    # Resuming after 5 samples skips exactly that prefix; the tail is identical.
+    sampler.set_epoch(3, skip=5)
+    assert list(sampler) == full[5:]
+    assert len(sampler) == 15
+
+    # Skip is clamped so an over-large offset just yields an empty (finished) epoch.
+    sampler.set_epoch(3, skip=999)
+    assert list(sampler) == []
+    assert len(sampler) == 0
