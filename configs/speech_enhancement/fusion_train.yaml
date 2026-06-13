@@ -1,11 +1,24 @@
 # Single config driving the 3-stage enhancement+fusion curriculum (D8/D10).
-# Consumes a degraded dataset produced by ml.speech_data.generate_degraded_dataset.
 run_dir: artifacts/speech_enhancement/fusion/run_001
 
 # Fine-tuned Persian Whisper-small checkpoint (Phase 1); used to init Stages 1-2.
 base_asr_checkpoint: models/asr/whisper-small/runs/best
 
+# Training datasets. Each entry is a path string (kind auto-detected) or a
+# {path, kind} mapping with kind in {degraded, clean}.
+#   - degraded: a ml.speech_data.generate_degraded_dataset directory
+#     (degraded_to_clean.jsonl). Drives every stage. At least one is required.
+#   - clean: a plain ASR dataset (train.tsv/dev.tsv + clips/, the project ASR
+#     contract). Folded into the joint stage only, so its undegraded audio keeps
+#     the full stack strong on clean speech.
+datasets:
+  - data/cv-corpus-25.0-degraded            # degraded (all stages)
+  # - data/cv-corpus-25.0                    # clean (joint-stage fine-tune only)
+
+# Legacy single-dataset field; used as one degraded dataset only when `datasets`
+# is null. Prefer `datasets` above.
 dataset_dir: data/cv-corpus-25.0-degraded
+sample_rate: 16000                 # clean-dataset audio is resampled to this
 train_split: train
 valid_split: dev
 clean_target: bandwidth_aligned   # bandwidth_aligned | full_band (D5)

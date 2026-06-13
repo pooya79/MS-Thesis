@@ -9,8 +9,15 @@ run directory:
 | 1     | fusion| E + fusion (Whisper frozen) | L_ASR + lambda*L_enh |
 | 2     | joint | E + fusion + Whisper        | L_ASR + lambda*L_enh |
 
-It consumes a degraded-dataset directory produced by
-``ml.speech_data.generate_degraded_dataset`` (see ``ml.enhancement.dataset``).
+It consumes one or more datasets listed under ``datasets`` (see
+``ml.enhancement.dataset``). Each entry is classified automatically: a
+*degraded* dataset (a ``ml.speech_data.generate_degraded_dataset`` output with a
+``degraded_to_clean.jsonl`` mapping) drives every stage, while a *clean*
+(non-degraded) ASR dataset — the project split-TSV + ``clips/`` contract — is
+folded into the **joint stage only**, where its undegraded audio keeps the full
+stack from regressing on clean speech (the enhancer/fusion see clean input
+against an identity target). At least one degraded dataset is required. The
+legacy single ``dataset_dir`` is still accepted as one degraded dataset.
 
 All three stages are implemented. Stage 0 trains the enhancer alone on ``L_enh``.
 Stages 1-2 build the encoder-feature-space fusion model (``ml/fusion/model.py``)
@@ -47,7 +54,13 @@ from typing import Any
 import yaml
 
 from ml.asr.train_whisper_small import character_error_rate, word_error_rate
-from ml.enhancement.dataset import DegradedMelDataset, collate_mels
+from ml.asr.whisper_features import WHISPER_SAMPLE_RATE
+from ml.enhancement.dataset import (
+    CleanMelDataset,
+    DegradedMelDataset,
+    collate_mels,
+    detect_dataset_kind,
+)
 from ml.enhancement.enhancer import build_enhancer, enhancement_l1_loss
 from ml.fusion.model import build_fusion_model
 
@@ -57,7 +70,12 @@ STAGE_DIRS = {"warmup": "stage0_warmup", "fusion": "stage1_fusion", "joint": "st
 DEFAULT_CONFIG: dict[str, Any] = {
     "run_dir": "artifacts/speech_enhancement/fusion/run_001",
     "base_asr_checkpoint": None,
+    # `datasets` is the multi-dataset list (each: a path string, or {path, kind}
+    # with kind in {degraded, clean}; kind auto-detected when omitted). When left
+    # null the legacy single `dataset_dir` is used as one degraded dataset.
+    "datasets": None,
     "dataset_dir": "data/cv-corpus-25.0-degraded",
+    "sample_rate": WHISPER_SAMPLE_RATE,
     "train_split": "train",
     "valid_split": "dev",
     "clean_target": "bandwidth_aligned",
@@ -134,8 +152,18 @@ def load_fusion_config(config_path: Path) -> dict[str, Any]:
 
 
 def validate_fusion_config(config: dict[str, Any]) -> None:
-    if not str(config.get("dataset_dir", "")).strip():
-        raise ValueError("dataset_dir must be set to a degraded-dataset directory")
+    datasets = config.get("datasets")
+    if datasets is not None:
+        if not isinstance(datasets, list) or not datasets:
+            raise ValueError("datasets must be a non-empty list when set")
+        for entry in datasets:
+            path, kind = _dataset_entry_fields(entry)
+            if not path:
+                raise ValueError(f"each datasets entry needs a non-empty path; got {entry!r}")
+            if kind is not None and kind not in {"degraded", "clean"}:
+                raise ValueError(f"datasets entry kind must be 'degraded' or 'clean'; got {kind!r}")
+    elif not str(config.get("dataset_dir", "")).strip():
+        raise ValueError("set datasets (or the legacy dataset_dir) to at least one dataset directory")
     if config["clean_target"] not in {"bandwidth_aligned", "full_band"}:
         raise ValueError("clean_target must be 'bandwidth_aligned' or 'full_band'")
     resume = config.get("resume_from_stage")
@@ -148,6 +176,43 @@ def validate_fusion_config(config: dict[str, Any]) -> None:
             raise ValueError(f"stage {name}.max_steps must be >= 1")
         if int(stage.get("batch_size", 0)) < 1:
             raise ValueError(f"stage {name}.batch_size must be >= 1")
+
+
+def _dataset_entry_fields(entry: Any) -> tuple[str, str | None]:
+    """Pull ``(path, kind)`` out of a ``datasets`` entry (string or mapping)."""
+    if isinstance(entry, str):
+        return entry.strip(), None
+    if isinstance(entry, dict):
+        path = str(entry.get("path", "")).strip()
+        kind = entry.get("kind")
+        return path, (str(kind).strip() if kind is not None else None)
+    raise ValueError(f"datasets entry must be a path string or a mapping; got {entry!r}")
+
+
+def resolve_dataset_specs(config: dict[str, Any]) -> list[tuple[Path, str]]:
+    """Normalise the config into ``[(path, kind), ...]`` with kinds resolved.
+
+    Honours an explicit ``kind`` and otherwise auto-detects it from the directory
+    (:func:`detect_dataset_kind`). Falls back to the legacy single ``dataset_dir``
+    (always degraded) when ``datasets`` is unset.
+    """
+    datasets = config.get("datasets")
+    if not datasets:
+        return [(Path(str(config["dataset_dir"])), "degraded")]
+    specs: list[tuple[Path, str]] = []
+    for entry in datasets:
+        raw_path, kind = _dataset_entry_fields(entry)
+        path = Path(raw_path)
+        specs.append((path, kind or detect_dataset_kind(path)))
+    return specs
+
+
+def degraded_dataset_dirs(config: dict[str, Any]) -> list[Path]:
+    return [path for path, kind in resolve_dataset_specs(config) if kind == "degraded"]
+
+
+def clean_dataset_dirs(config: dict[str, Any]) -> list[Path]:
+    return [path for path, kind in resolve_dataset_specs(config) if kind == "clean"]
 
 
 def require_base_checkpoint(config: dict[str, Any]) -> None:
@@ -203,15 +268,18 @@ def git_commit() -> str | None:
     return result.stdout.strip() or None
 
 
-def manifest_hashes(dataset_dir: Path) -> dict[str, str]:
+def manifest_hashes(dataset_dirs: list[Path]) -> dict[str, str]:
+    """SHA-256 of each degraded dataset's mapping, keyed by ``<dir>/<mapping>``."""
     hashes: dict[str, str] = {}
-    mapping = dataset_dir / "degraded_to_clean.jsonl"
-    if mapping.is_file():
+    for dataset_dir in dataset_dirs:
+        mapping = dataset_dir / "degraded_to_clean.jsonl"
+        if not mapping.is_file():
+            continue
         digest = hashlib.sha256()
         with mapping.open("rb") as handle:
             for chunk in iter(lambda: handle.read(1 << 20), b""):
                 digest.update(chunk)
-        hashes[mapping.name] = digest.hexdigest()
+        hashes[f"{dataset_dir.name}/{mapping.name}"] = digest.hexdigest()
     return hashes
 
 
@@ -284,6 +352,64 @@ def make_dataloader(
     )
 
 
+def concat_datasets(datasets: list[Any]) -> Any | None:
+    """Return the single dataset, a ``ConcatDataset`` of several, or ``None``."""
+    from torch.utils.data import ConcatDataset
+
+    if not datasets:
+        return None
+    return datasets[0] if len(datasets) == 1 else ConcatDataset(datasets)
+
+
+def build_train_dataset(
+    config: dict[str, Any],
+    *,
+    segment_seconds: float | None,
+    return_labels: bool,
+    tokenizer: Any,
+    include_clean: bool,
+) -> Any:
+    """Combined training dataset for one stage.
+
+    Degraded datasets always participate; clean ASR datasets join only when
+    ``include_clean`` (the joint stage), where their undegraded audio fine-tunes
+    the full stack on clean speech. Raises when no degraded dataset is configured,
+    since every stage's enhancement objective needs degraded/clean pairs.
+    """
+    degraded_dirs = degraded_dataset_dirs(config)
+    if not degraded_dirs:
+        raise ValueError(
+            "no degraded dataset configured; the curriculum needs at least one "
+            "generate_degraded_dataset directory (set datasets or dataset_dir)"
+        )
+    datasets = [
+        DegradedMelDataset(
+            dataset_dir,
+            split=config["train_split"],
+            clean_target=config["clean_target"],
+            segment_seconds=segment_seconds,
+            model_name=config["model_name"],
+            return_labels=return_labels,
+            tokenizer=tokenizer,
+            seed=int(config["seed"]),
+        )
+        for dataset_dir in degraded_dirs
+    ]
+    if include_clean:
+        for dataset_dir in clean_dataset_dirs(config):
+            datasets.append(
+                CleanMelDataset(
+                    dataset_dir,
+                    split=config["train_split"],
+                    model_name=config["model_name"],
+                    return_labels=return_labels,
+                    tokenizer=tokenizer,
+                    sample_rate=int(config.get("sample_rate", WHISPER_SAMPLE_RATE)),
+                )
+            )
+    return concat_datasets(datasets)
+
+
 def build_dev_loader(
     config: dict[str, Any],
     stage: dict[str, Any],
@@ -293,26 +419,72 @@ def build_dev_loader(
 ) -> Any | None:
     """Build a dev-split loader, or ``None`` when no usable validation split exists.
 
+    Best-checkpoint selection is measured on the **degraded** datasets — that
+    degraded WER is the metric the fusion system must beat. The joint stage
+    additionally reports clean-dataset dev metrics (see ``build_clean_dev_loader``)
+    so clean-speech regression is visible, but does not select on them.
     Returning ``None`` (rather than raising) lets a run proceed without a ``dev``
-    split — periodic eval and best-checkpoint selection are simply skipped, which
-    keeps small/smoke datasets usable.
+    split — periodic eval is simply skipped, keeping small/smoke datasets usable.
     """
     valid_split = config.get("valid_split")
     if not valid_split:
         return None
-    try:
-        dev_dataset = DegradedMelDataset(
-            config["dataset_dir"],
-            split=str(valid_split),
-            clean_target=config["clean_target"],
-            segment_seconds=None,
-            model_name=config["model_name"],
-            return_labels=return_labels,
-            tokenizer=tokenizer,
-            seed=int(config["seed"]),
-        )
-    except (FileNotFoundError, ValueError) as exc:
-        logging.warning("no dev eval: %s", exc)
+    dev_datasets: list[Any] = []
+    for dataset_dir in degraded_dataset_dirs(config):
+        try:
+            dev_datasets.append(
+                DegradedMelDataset(
+                    dataset_dir,
+                    split=str(valid_split),
+                    clean_target=config["clean_target"],
+                    segment_seconds=None,
+                    model_name=config["model_name"],
+                    return_labels=return_labels,
+                    tokenizer=tokenizer,
+                    seed=int(config["seed"]),
+                )
+            )
+        except (FileNotFoundError, ValueError) as exc:
+            logging.warning("no dev eval for %s: %s", dataset_dir, exc)
+    dev_dataset = concat_datasets(dev_datasets)
+    if dev_dataset is None:
+        return None
+    return make_dataloader(
+        dev_dataset,
+        batch_size=int(stage.get("eval_batch_size", stage["batch_size"])),
+        shuffle=False,
+        num_workers=int(stage.get("num_workers", 0)),
+        seed=int(config["seed"]),
+    )
+
+
+def build_clean_dev_loader(config: dict[str, Any], stage: dict[str, Any], *, tokenizer: Any) -> Any | None:
+    """Dev loader over the clean datasets' ``valid_split`` (joint-stage clean eval).
+
+    Clean datasets carry no degradation, so this reports WER/CER on undegraded
+    speech — how the joint fine-tune holds up on clean audio. ``None`` when no
+    clean dataset has a usable validation split.
+    """
+    valid_split = config.get("valid_split")
+    if not valid_split:
+        return None
+    dev_datasets: list[Any] = []
+    for dataset_dir in clean_dataset_dirs(config):
+        try:
+            dev_datasets.append(
+                CleanMelDataset(
+                    dataset_dir,
+                    split=str(valid_split),
+                    model_name=config["model_name"],
+                    return_labels=True,
+                    tokenizer=tokenizer,
+                    sample_rate=int(config.get("sample_rate", WHISPER_SAMPLE_RATE)),
+                )
+            )
+        except (FileNotFoundError, ValueError) as exc:
+            logging.warning("no clean dev eval for %s: %s", dataset_dir, exc)
+    dev_dataset = concat_datasets(dev_datasets)
+    if dev_dataset is None:
         return None
     return make_dataloader(
         dev_dataset,
@@ -449,13 +621,12 @@ def run_stage_warmup(
     eval_path = run_dir / "logs" / "eval_metrics.jsonl"
     checkpoint_dir = run_dir / "checkpoints" / STAGE_DIRS["warmup"]
 
-    train_dataset = DegradedMelDataset(
-        config["dataset_dir"],
-        split=config["train_split"],
-        clean_target=config["clean_target"],
+    train_dataset = build_train_dataset(
+        config,
         segment_seconds=stage.get("segment_seconds"),
-        model_name=config["model_name"],
-        seed=int(config["seed"]),
+        return_labels=False,
+        tokenizer=None,
+        include_clean=False,  # warm-up trains the enhancer on degraded/clean pairs only
     )
     loader = make_dataloader(
         train_dataset,
@@ -647,15 +818,14 @@ def _run_fusion_stage(
     checkpoint_dir = run_dir / "checkpoints" / STAGE_DIRS[stage_name]
 
     tokenizer = load_tokenizer(config)
-    train_dataset = DegradedMelDataset(
-        config["dataset_dir"],
-        split=config["train_split"],
-        clean_target=config["clean_target"],
+    # Stage 2 (joint) folds in any clean ASR datasets so the end-to-end fine-tune
+    # also sees undegraded speech; Stage 1 stays degraded-only.
+    train_dataset = build_train_dataset(
+        config,
         segment_seconds=None,  # full [80, 3000] window — the fused result feeds Whisper
-        model_name=config["model_name"],
         return_labels=True,
         tokenizer=tokenizer,
-        seed=int(config["seed"]),
+        include_clean=(stage_name == "joint"),
     )
     loader = make_dataloader(
         train_dataset,
@@ -665,6 +835,11 @@ def _run_fusion_stage(
         seed=int(config["seed"]),
     )
     dev_loader = build_dev_loader(config, stage, return_labels=True, tokenizer=tokenizer)
+    # The joint (final) stage also reports dev metrics on the clean datasets, so
+    # clean-speech regression is visible alongside the degraded WER it selects on.
+    clean_dev_loader = (
+        build_clean_dev_loader(config, stage, tokenizer=tokenizer) if stage_name == "joint" else None
+    )
 
     model = build_fusion_model(config, enhancer=enhancer)
     prior_ckpt = run_dir / "checkpoints" / STAGE_DIRS["fusion"] / "fusion_model.pt"
@@ -737,14 +912,29 @@ def _run_fusion_stage(
                     "timestamp": utc_now(), "stage": stage_name, "step": step,
                     "loss": float(loss.detach()), "L_ASR": float(l_asr.detach()), "L_enh": float(l_enh.detach()),
                 })
-            if dev_loader is not None and eval_every and (step % eval_every == 0 or step == max_steps):
-                metrics = evaluate_fusion(
-                    model, dev_loader, tokenizer, device, amp_enabled,
-                    config=config, max_batches=eval_max_batches,
-                )
-                logging.info("%s eval step=%s wer=%.4f cer=%.4f loss=%.4f", stage_name, step, metrics["wer"], metrics["cer"], metrics["loss"])
-                append_jsonl(eval_path, {"timestamp": utc_now(), "stage": stage_name, "step": step, **metrics})
-                score = eval_score(stage_name, metrics)
+            should_eval = bool(eval_every) and (step % eval_every == 0 or step == max_steps)
+            if should_eval and (dev_loader is not None or clean_dev_loader is not None):
+                record = {"timestamp": utc_now(), "stage": stage_name, "step": step}
+                degraded_metrics = None
+                if dev_loader is not None:
+                    degraded_metrics = evaluate_fusion(
+                        model, dev_loader, tokenizer, device, amp_enabled,
+                        config=config, max_batches=eval_max_batches,
+                    )
+                    record.update(degraded_metrics)
+                    logging.info("%s eval step=%s wer=%.4f cer=%.4f loss=%.4f", stage_name, step, degraded_metrics["wer"], degraded_metrics["cer"], degraded_metrics["loss"])
+                clean_metrics = None
+                if clean_dev_loader is not None:
+                    clean_metrics = evaluate_fusion(
+                        model, clean_dev_loader, tokenizer, device, amp_enabled,
+                        config=config, max_batches=eval_max_batches,
+                    )
+                    record.update({f"clean_{key}": value for key, value in clean_metrics.items()})
+                    logging.info("%s clean eval step=%s wer=%.4f cer=%.4f loss=%.4f", stage_name, step, clean_metrics["wer"], clean_metrics["cer"], clean_metrics["loss"])
+                append_jsonl(eval_path, record)
+                # Select on degraded WER (the metric to beat); fall back to clean
+                # only when no degraded dev split exists.
+                score = eval_score(stage_name, degraded_metrics if degraded_metrics is not None else clean_metrics)
                 if score < best_score:
                     best_score = score
                     save_fusion_checkpoint(checkpoint_dir / "best.pt", model, config, step)
@@ -801,7 +991,7 @@ def run_training(config_path: Path, run_dir_override: Path | None = None, resume
     (run_dir / "config" / "training_config.yaml").write_text(
         yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8"
     )
-    write_json(run_dir / "config" / "manifest_hashes.json", manifest_hashes(Path(str(config["dataset_dir"]))))
+    write_json(run_dir / "config" / "manifest_hashes.json", manifest_hashes(degraded_dataset_dirs(config)))
     (run_dir / "config" / "git_commit.txt").write_text((git_commit() or "unknown") + "\n", encoding="utf-8")
 
     device = resolve_device(str(config["device"]))

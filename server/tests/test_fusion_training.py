@@ -10,16 +10,22 @@ import soundfile as sf
 import yaml
 
 from ml.enhancement.dataset import (
+    CleanMelDataset,
     DegradedMelDataset,
     collate_mels,
+    detect_dataset_kind,
     read_mapping,
     reconstruct_clean_target,
 )
 from ml.fusion.train_fusion import (
     build_enhancer,
+    build_train_dataset,
+    clean_dataset_dirs,
+    degraded_dataset_dirs,
     eval_score,
     load_fusion_config,
     main,
+    resolve_dataset_specs,
     resolve_start_index,
     run_stage_warmup,
     run_training,
@@ -65,6 +71,19 @@ def _make_degraded_dataset(root: Path, n: int = 2, splits: tuple[str, ...] = ("t
             )
     mapping = root / "degraded_to_clean.jsonl"
     mapping.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n", encoding="utf-8")
+    return root
+
+
+def _make_clean_dataset(root: Path, n: int = 2, splits: tuple[str, ...] = ("train",)) -> Path:
+    """Build a minimal clean ASR dataset (split TSVs + clips/) following the project contract."""
+    clips_dir = root / "clips"
+    for split in splits:
+        rows = ["path\tsentence"]
+        for i in range(n):
+            name = f"{split}_clean{i}.wav"
+            _write_wav(clips_dir / name, seed=200 + i)
+            rows.append(f"{name}\tسلام دنیا")
+        (root / f"{split}.tsv").write_text("\n".join(rows) + "\n", encoding="utf-8")
     return root
 
 
@@ -394,6 +413,149 @@ def test_fusion_stage_runs_dev_eval_and_saves_best(tmp_path: Path, monkeypatch: 
     records = [json.loads(line) for line in eval_lines]
     assert records and all({"wer", "cer", "loss"} <= rec.keys() for rec in records)
     assert (run_dir / "checkpoints" / "stage1_fusion" / "best.pt").is_file()
+
+
+def test_detect_dataset_kind(tmp_path: Path) -> None:
+    degraded = _make_degraded_dataset(tmp_path / "deg")
+    clean = _make_clean_dataset(tmp_path / "clean")
+    assert detect_dataset_kind(degraded) == "degraded"
+    assert detect_dataset_kind(clean) == "clean"
+    (tmp_path / "empty").mkdir()
+    with pytest.raises(FileNotFoundError):
+        detect_dataset_kind(tmp_path / "empty")
+
+
+def test_clean_mel_dataset_yields_identical_views(tmp_path: Path) -> None:
+    import torch
+
+    root = _make_clean_dataset(tmp_path / "clean")
+    dataset = CleanMelDataset(root, split="train", return_labels=True, tokenizer=_FakeTokenizer())
+    item = dataset[0]
+    assert item["noisy_mel"].shape == (80, 3000)
+    assert torch.equal(item["noisy_mel"], item["clean_mel"])  # no degradation -> same view
+    assert item["labels"] == [1, 5, 7, 2]
+
+
+def test_resolve_dataset_specs_autodetects_and_partitions(tmp_path: Path) -> None:
+    degraded = _make_degraded_dataset(tmp_path / "deg")
+    clean = _make_clean_dataset(tmp_path / "clean")
+    config = {"datasets": [str(degraded), {"path": str(clean)}], "dataset_dir": ""}
+    specs = resolve_dataset_specs(config)
+    assert {kind for _, kind in specs} == {"degraded", "clean"}
+    assert degraded_dataset_dirs(config) == [degraded]
+    assert clean_dataset_dirs(config) == [clean]
+
+
+def test_resolve_dataset_specs_legacy_dataset_dir(tmp_path: Path) -> None:
+    degraded = _make_degraded_dataset(tmp_path / "deg")
+    config = {"datasets": None, "dataset_dir": str(degraded)}
+    assert resolve_dataset_specs(config) == [(degraded, "degraded")]
+
+
+def test_build_train_dataset_includes_clean_only_when_requested(tmp_path: Path) -> None:
+    from torch.utils.data import ConcatDataset
+
+    degraded = _make_degraded_dataset(tmp_path / "deg")
+    clean = _make_clean_dataset(tmp_path / "clean")
+    config = {
+        "datasets": [str(degraded), str(clean)],
+        "dataset_dir": "",
+        "train_split": "train",
+        "clean_target": "bandwidth_aligned",
+        "model_name": "openai/whisper-small",
+        "sample_rate": SR,
+        "seed": 1337,
+    }
+    degraded_only = build_train_dataset(
+        config, segment_seconds=None, return_labels=True, tokenizer=_FakeTokenizer(), include_clean=False
+    )
+    with_clean = build_train_dataset(
+        config, segment_seconds=None, return_labels=True, tokenizer=_FakeTokenizer(), include_clean=True
+    )
+    # Degraded-only sees just the 2 degraded variants; including clean adds 2 more.
+    assert len(degraded_only) == 2
+    assert isinstance(with_clean, ConcatDataset)
+    assert len(with_clean) == 4
+
+
+def test_build_train_dataset_requires_degraded(tmp_path: Path) -> None:
+    clean = _make_clean_dataset(tmp_path / "clean")
+    config = {
+        "datasets": [str(clean)],
+        "dataset_dir": "",
+        "train_split": "train",
+        "clean_target": "bandwidth_aligned",
+        "model_name": "openai/whisper-small",
+        "sample_rate": SR,
+        "seed": 1337,
+    }
+    with pytest.raises(ValueError, match="no degraded dataset"):
+        build_train_dataset(config, segment_seconds=None, return_labels=False, tokenizer=None, include_clean=True)
+
+
+def test_joint_stage_trains_on_clean_dataset(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import ml.fusion.train_fusion as train_fusion
+    from ml.fusion.train_fusion import run_stage_joint
+
+    monkeypatch.setattr(train_fusion, "build_fusion_model", _tiny_dual_view_model)
+    monkeypatch.setattr(train_fusion, "load_tokenizer", lambda config: _FakeTokenizer())
+
+    degraded = _make_degraded_dataset(tmp_path / "deg")
+    clean = _make_clean_dataset(tmp_path / "clean")
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    overrides = {
+        "run_dir": str(run_dir),
+        "datasets": [str(degraded), str(clean)],
+        "base_asr_checkpoint": str(degraded),
+        "valid_split": None,
+        "device": "cpu",
+        "mixed_precision": "false",
+        "enhancer": {"type": "residual_unet", "base_channels": 8, "depth": 2},
+        "stages": {"joint": {"max_steps": 3, "batch_size": 2, "lr_frontend": 1e-3, "lr_whisper": 1e-4, "num_workers": 0, "log_every": 1, "save_every": 0, "grad_clip": 1.0}},
+    }
+    config_path = run_dir.parent / "fusion.yaml"
+    config_path.write_text(yaml.safe_dump(overrides), encoding="utf-8")
+    config = load_fusion_config(config_path)
+    enhancer = build_enhancer(config["enhancer"])
+    run_stage_joint(config, run_dir, enhancer, "cpu")
+
+    assert (run_dir / "checkpoints" / "stage2_joint" / "fusion_model.pt").is_file()
+    stages = {json.loads(line)["stage"] for line in (run_dir / "logs" / "train_metrics.jsonl").read_text().splitlines()}
+    assert "joint" in stages
+
+
+def test_joint_stage_reports_clean_dev_metrics(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import ml.fusion.train_fusion as train_fusion
+    from ml.fusion.train_fusion import run_stage_joint
+
+    monkeypatch.setattr(train_fusion, "build_fusion_model", _tiny_dual_view_model)
+    monkeypatch.setattr(train_fusion, "load_tokenizer", lambda config: _FakeTokenizer())
+
+    degraded = _make_degraded_dataset(tmp_path / "deg", splits=("train", "dev"))
+    clean = _make_clean_dataset(tmp_path / "clean", splits=("train", "dev"))
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    overrides = {
+        "run_dir": str(run_dir),
+        "datasets": [str(degraded), str(clean)],
+        "base_asr_checkpoint": str(degraded),
+        "valid_split": "dev",
+        "device": "cpu",
+        "mixed_precision": "false",
+        "generation_max_length": 16,  # tiny test backbone has max_target_positions=64
+        "enhancer": {"type": "residual_unet", "base_channels": 8, "depth": 2},
+        "stages": {"joint": {"max_steps": 1, "batch_size": 1, "lr_frontend": 1e-3, "lr_whisper": 1e-4, "num_workers": 0, "log_every": 1, "eval_every": 1, "save_every": 0, "eval_max_batches": 1, "grad_clip": 1.0}},
+    }
+    config_path = run_dir.parent / "fusion.yaml"
+    config_path.write_text(yaml.safe_dump(overrides), encoding="utf-8")
+    config = load_fusion_config(config_path)
+    enhancer = build_enhancer(config["enhancer"])
+    run_stage_joint(config, run_dir, enhancer, "cpu")
+
+    records = [json.loads(line) for line in (run_dir / "logs" / "eval_metrics.jsonl").read_text().splitlines()]
+    # Both the degraded WER it selects on and the clean-dataset WER are reported.
+    assert records and all({"wer", "clean_wer", "clean_cer"} <= rec.keys() for rec in records)
 
 
 def test_train_fusion_help(capsys: pytest.CaptureFixture[str]) -> None:

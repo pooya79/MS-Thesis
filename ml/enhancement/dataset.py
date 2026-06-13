@@ -11,6 +11,12 @@ This single dataset feeds all three curriculum stages (D8):
 - Stage 0 (enhancer warm-up): needs ``noisy_mel`` + ``clean_mel`` only.
 - Stages 1-2 (fusion / joint): additionally need transcript ``labels``.
 
+A second dataset type, :class:`CleanMelDataset`, reads a plain (non-degraded) ASR
+dataset (the project split-TSV + ``clips/`` contract) and yields the *same*
+item layout with the noisy and clean views set to the same clean log-Mel. It is
+mixed into the joint stage only, to keep the full stack strong on clean speech.
+Use :func:`detect_dataset_kind` to classify a directory as degraded or clean.
+
 **Bandwidth-aligned clean target (D5).** The dataset script only saves degraded
 audio and points back at the full-band clean source, so the bandwidth-aligned
 clean target is *reconstructed* here from the recorded degradation metadata: for
@@ -23,6 +29,7 @@ Set ``clean_target: full_band`` to skip alignment and target the raw clean.
 
 from __future__ import annotations
 
+import csv
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -38,6 +45,27 @@ from ml.utils.audio import bandpass_filter, load_audio, match_length, resample_a
 MAPPING_FILENAME = "degraded_to_clean.jsonl"
 FRAMES_PER_SECOND = 100  # Whisper hop: 160 samples @ 16 kHz
 _BANDWIDTH_ALIGNED = {"narrowband", "wideband_filtered"}
+_CLEAN_SPLITS = ("train", "dev", "test")
+
+
+def detect_dataset_kind(dataset_dir: str | Path) -> str:
+    """Classify a dataset directory as ``"degraded"`` or ``"clean"``.
+
+    A *degraded* dataset is a ``generate_degraded_dataset`` output (it carries a
+    ``degraded_to_clean.jsonl`` mapping). A *clean* dataset is a plain ASR dataset
+    that follows the project contract (split ``*.tsv`` with ``path`` + ``sentence``
+    columns plus a ``clips/`` dir). The degraded mapping is checked first so a
+    directory that happens to hold both is treated as degraded.
+    """
+    path = Path(dataset_dir)
+    if (path / MAPPING_FILENAME).is_file():
+        return "degraded"
+    if any((path / f"{split}.tsv").is_file() for split in _CLEAN_SPLITS):
+        return "clean"
+    raise FileNotFoundError(
+        f"{path} is neither a degraded dataset ({MAPPING_FILENAME}) nor a clean ASR "
+        f"dataset (a {' / '.join(f'{s}.tsv' for s in _CLEAN_SPLITS)})"
+    )
 
 
 @dataclass(frozen=True)
@@ -195,6 +223,104 @@ class DegradedMelDataset(Dataset):
         start = int(self._rng.integers(0, total - self.segment_frames + 1))
         end = start + self.segment_frames
         return noisy_mel[..., start:end], clean_mel[..., start:end]
+
+
+@dataclass(frozen=True)
+class CleanClip:
+    clip_id: str
+    audio_path: Path
+    transcript: str
+
+
+def read_clean_rows(dataset_dir: Path, split: str) -> list[CleanClip]:
+    """Read one split TSV of a clean ASR dataset (project ASR contract).
+
+    The TSV needs at least ``path`` + ``sentence`` columns; audio resolves as
+    ``<dataset>/clips/<path>`` then ``<dataset>/<path>`` (mirroring the ASR
+    trainer). Rows with an empty path or sentence are skipped.
+    """
+    split_path = dataset_dir / f"{split}.tsv"
+    if not split_path.is_file():
+        raise FileNotFoundError(f"{split_path} not found; expected a clean ASR dataset split TSV")
+    with split_path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle, delimiter="\t")
+        if reader.fieldnames is None or not {"path", "sentence"}.issubset(reader.fieldnames):
+            raise ValueError(f"{split_path} must contain path and sentence columns")
+        rows = list(reader)
+    clips: list[CleanClip] = []
+    for line_number, row in enumerate(rows, start=1):
+        raw_path = str(row.get("path", "")).strip()
+        transcript = str(row.get("sentence", "")).strip()
+        if not raw_path or not transcript:
+            continue
+        clips.append(
+            CleanClip(
+                clip_id=f"{split}-{line_number}",
+                audio_path=_resolve_clip(dataset_dir, raw_path),
+                transcript=transcript,
+            )
+        )
+    if not clips:
+        raise ValueError(f"no usable rows found in {split_path}")
+    return clips
+
+
+def _resolve_clip(dataset_dir: Path, value: str) -> Path:
+    raw = Path(value)
+    if raw.is_absolute():
+        return raw
+    clips_candidate = dataset_dir / "clips" / raw
+    return clips_candidate if clips_candidate.exists() else dataset_dir / raw
+
+
+class CleanMelDataset(Dataset):
+    """Yields identical noisy/clean log-Mels (+ optional labels) from a clean ASR dataset.
+
+    A non-degraded ASR dataset has no channel degradation, so the noisy and clean
+    *views* are the same clean log-Mel. This feeds the joint stage only, where it
+    keeps the full enhancement+fusion+Whisper stack strong on clean speech: the
+    enhancer/fusion see clean input against an identity target (``L_enh`` -> 0)
+    while ``L_ASR`` fine-tunes the backbone on undegraded audio. The item layout
+    matches :class:`DegradedMelDataset` so both concatenate into one loader.
+    """
+
+    def __init__(
+        self,
+        dataset_dir: str | Path,
+        *,
+        split: str = "train",
+        model_name: str = "openai/whisper-small",
+        return_labels: bool = False,
+        tokenizer: Any = None,
+        sample_rate: int = WHISPER_SAMPLE_RATE,
+    ) -> None:
+        if return_labels and tokenizer is None:
+            raise ValueError("return_labels=True requires a tokenizer")
+        self.dataset_dir = Path(dataset_dir)
+        self.clips = read_clean_rows(self.dataset_dir, split)
+        self.model_name = model_name
+        self.return_labels = return_labels
+        self.tokenizer = tokenizer
+        self.sample_rate = int(sample_rate)
+
+    def __len__(self) -> int:
+        return len(self.clips)
+
+    def __getitem__(self, index: int) -> dict[str, Any]:
+        clip = self.clips[index]
+        audio, source_rate = load_audio(clip.audio_path)
+        audio = to_mono(np.asarray(audio, dtype=np.float32))
+        if int(source_rate) != self.sample_rate:
+            audio = resample_audio(audio, int(source_rate), self.sample_rate)
+        mel = waveform_to_log_mel(audio, sample_rate=self.sample_rate, model_name=self.model_name)
+        item: dict[str, Any] = {
+            "pair_id": clip.clip_id,
+            "noisy_mel": mel,
+            "clean_mel": mel.clone(),
+        }
+        if self.return_labels:
+            item["labels"] = self.tokenizer(clip.transcript).input_ids
+        return item
 
 
 def collate_mels(batch: list[dict[str, Any]]) -> dict[str, Any]:
