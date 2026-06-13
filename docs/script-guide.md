@@ -19,6 +19,7 @@ uv run python -m ml.asr.train_whisper_small --help
 uv run python -m ml.asr.eval_whisper_small --help
 uv run python -m ml.asr.train_fastconformer --help
 uv run python -m ml.asr.eval_fastconformer --help
+uv run python -m ml.fusion.train_fusion --help
 ```
 
 ## Common Voice Persian Download
@@ -302,3 +303,15 @@ python convert.py /path/to/stt_fa_fastconformer_hybrid_large.nemo models/stt_fa_
 ```
 
 Greedy CTC decoding has no decoder token limit, so there is no `max_label_tokens` skipping. Batching is duration-aware: clips are sorted by length and each batch is capped by both `eval.batch_size` and `eval.max_batch_seconds`, so the heaviest batch costs about one clip of that many seconds and a few long clips cannot exhaust GPU memory. Raise `eval.batch_size` to speed up short-clip throughput; lower `eval.max_batch_seconds` if you still hit out-of-memory on long clips (set it to `null` to disable the cap and use fixed-size batches).
+
+## Enhancement + Fusion Curriculum Training
+
+Run the 3-stage enhancement+fusion curriculum (Stage 0 enhancer warm-up → Stage 1 enhancer+fusion with Whisper frozen → Stage 2 joint end-to-end) from a single YAML config, writing every artifact to one run directory:
+
+```bash
+uv run python -m ml.fusion.train_fusion \
+  --config configs/speech_enhancement/fusion_train.yaml \
+  --resume-from-stage 0
+```
+
+The trainer consumes a degraded-dataset directory produced by `ml.speech_data.generate_degraded_dataset` (`dataset_dir`); it reads `degraded_to_clean.jsonl`, turns each degraded clip into a noisy Whisper log-Mel, and reconstructs the bandwidth-aligned clean log-Mel target from the recorded degradation metadata (`clean_target: bandwidth_aligned`, or `full_band` to target the raw clean). The enhancer architecture is selected by the `enhancer` block (default `residual_unet`, a lightweight residual 2D-conv U-Net that starts as the identity). Stage 0 trains the enhancer alone on the log-Mel L1 loss `L_enh`. Stages 1–2 build the encoder-feature-space fusion model (`ml/fusion/model.py`): the noisy and enhanced log-Mels are each run through the shared Whisper encoder and the two hidden-state streams are blended by a gated fusion block (`fusion` config block, default `gated`) before the decoder, optimising `L_ASR + lambda * L_enh` — Stage 1 with the backbone frozen, Stage 2 end to end (the backbone is initialised from the fine-tuned Persian Whisper at `base_asr_checkpoint`). Each stage writes a checkpoint under `checkpoints/stage{0,1,2}_*/` (`enhancer.pt`, plus `fusion_model.pt` for Stages 1–2), and `--resume-from-stage` (or `resume_from_stage` in the config; `0`/`1`/`2` or `warmup`/`fusion`/`joint`) restarts the curriculum at a later stage by loading the prior stage's checkpoint, so a Stage 2 crash never forces re-running the earlier stages.

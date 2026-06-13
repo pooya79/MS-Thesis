@@ -24,6 +24,7 @@ SCRIPT_MODULES = [
     "ml.asr.eval_whisper_small",
     "ml.asr.train_fastconformer",
     "ml.asr.eval_fastconformer",
+    "ml.fusion.train_fusion",
 ]
 
 
