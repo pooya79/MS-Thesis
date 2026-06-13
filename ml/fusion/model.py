@@ -263,6 +263,23 @@ class DualViewFusionModel(nn.Module):
             "encoder_hidden_states": fused,
         }
 
+    @torch.no_grad()
+    def generate(self, noisy_mel: torch.Tensor, **generate_kwargs: Any) -> torch.Tensor:
+        """Decode token ids from the fused encoder stream (for dev-set WER/CER).
+
+        Runs the enhancer + shared encoder + fusion to build the fused encoder
+        output, then hands it to the Whisper decoder's ``generate`` exactly as the
+        forward pass hands it to the teacher-forced decoder, so generation sees the
+        same representation the training objective optimises.
+        """
+        from transformers.modeling_outputs import BaseModelOutput
+
+        _, fused = self.encode_views(noisy_mel)
+        return self.whisper.generate(
+            encoder_outputs=BaseModelOutput(last_hidden_state=fused),
+            **generate_kwargs,
+        )
+
 
 def load_whisper_backbone(checkpoint: str, model_name: str = "openai/whisper-small") -> Any:
     """Load the fine-tuned Persian Whisper backbone (Phase 1), falling back to base.

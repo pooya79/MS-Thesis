@@ -10,6 +10,9 @@ train_split: train
 valid_split: dev
 clean_target: bandwidth_aligned   # bandwidth_aligned | full_band (D5)
 model_name: openai/whisper-small
+language: Persian                  # Whisper decoder prompt for dev-set generation
+task: transcribe
+generation_max_length: 225        # cap on generated tokens during dev WER eval
 
 mixed_precision: auto             # auto | true | false
 device: auto                      # auto | cuda | cpu
@@ -39,17 +42,26 @@ stages:
     lambda: 1.0
     num_workers: 4
     log_every: 50
-    eval_every: 500
-    save_every: 1000
-  fusion:        # Stage 1 — E + fusion, Whisper frozen (pending ml/fusion/model.py)
+    eval_every: 500            # dev L_enh; best checkpoint -> best.pt
+    save_every: 1000           # rolling last.pt carries optimizer/step for mid-stage resume
+    eval_max_batches: null     # null = whole dev split
+  fusion:        # Stage 1 — E + fusion, Whisper frozen
     max_steps: 20000
     batch_size: 8
     lr_frontend: 0.0002
     lambda: 0.3
-  joint:         # Stage 2 — E + fusion + Whisper, end-to-end (pending ml/fusion/model.py)
+    eval_every: 1000           # dev WER/CER via generation; best -> best.pt
+    save_every: 1000
+    eval_max_batches: 50       # cap dev batches so periodic WER stays cheap
+    grad_clip: 1.0
+  joint:         # Stage 2 — E + fusion + Whisper, end-to-end
     max_steps: 40000
     batch_size: 4
     lr_frontend: 0.0001
     lr_whisper: 0.00001
     lambda: 0.1
     whisper_adaptation: full   # full | lora
+    eval_every: 2000
+    save_every: 1000
+    eval_max_batches: 50
+    grad_clip: 1.0
