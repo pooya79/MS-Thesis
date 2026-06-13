@@ -23,9 +23,12 @@ dev ``L_enh``, Stages 1-2 by dev WER/CER decoded through the fused encoder — a
 keeps the best-scoring weights as ``best.pt`` (dev metrics logged to
 ``logs/eval_metrics.jsonl``). Eval is skipped automatically when no usable dev
 split exists. ``last.pt`` is a rolling checkpoint that carries optimizer/scaler
-state and the step, so a stage resumes mid-way on the next invocation; the final
-``enhancer.pt`` / ``fusion_model.pt`` also hand state to the next stage and the
-stage-boundary ``resume_from_stage`` path. Seeding goes through
+state and the step, so a stage resumes mid-way on the next invocation. At each
+stage boundary the canonical ``enhancer.pt`` / ``fusion_model.pt`` are written
+from the stage's **best dev** weights (``best.pt`` reloaded before the final
+save; falling back to the final-step weights when no dev split produced one), so
+both the next stage and the ``resume_from_stage`` path start from the best model
+rather than the last step. Seeding goes through
 ``transformers.set_seed`` plus seeded dataloaders for run-to-run determinism.
 """
 
@@ -98,7 +101,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "lr_frontend": 1e-4,
             "lr_whisper": 1e-5,
             "lambda": 0.1,
-            "whisper_adaptation": "full",
             "eval_every": 2000,
             "save_every": 1000,
             "eval_max_batches": 50,
@@ -146,6 +148,30 @@ def validate_fusion_config(config: dict[str, Any]) -> None:
             raise ValueError(f"stage {name}.max_steps must be >= 1")
         if int(stage.get("batch_size", 0)) < 1:
             raise ValueError(f"stage {name}.batch_size must be >= 1")
+
+
+def require_base_checkpoint(config: dict[str, Any]) -> None:
+    """Fail loudly, up front, if the fine-tuned Whisper checkpoint is absent.
+
+    Stages 1-2 build on the Persian-fine-tuned backbone at ``base_asr_checkpoint``.
+    Without it the only previous behaviour was a silent fall-back to vanilla
+    Whisper-small, which would quietly invalidate every fusion result. We check
+    before any stage runs so Stage 0 never burns time ahead of an inevitable
+    Stage 1 failure.
+    """
+    checkpoint = str(config.get("base_asr_checkpoint") or "").strip()
+    if not checkpoint:
+        raise FileNotFoundError(
+            "base_asr_checkpoint must be set to the fine-tuned Persian Whisper-small "
+            "checkpoint (e.g. models/asr/whisper-small/runs/best); refusing to train "
+            "fusion on vanilla Whisper."
+        )
+    if not Path(checkpoint).exists():
+        raise FileNotFoundError(
+            f"base_asr_checkpoint does not exist: {checkpoint}. Point it at the "
+            "fine-tuned Persian Whisper-small checkpoint; refusing to fall back to "
+            "vanilla Whisper."
+        )
 
 
 def resolve_start_index(resume_from_stage: Any) -> int:
@@ -329,7 +355,12 @@ def evaluate_fusion(
     """Dev WER/CER (generation) plus teacher-forced ASR loss for Stages 1-2."""
     import torch
 
-    was_training = model.training
+    # Snapshot every submodule's train/eval flag, not just the root's: Stage 1
+    # puts the frozen Whisper backbone in eval() while the enhancer/fusion stay in
+    # train(), so a blanket model.train(root_flag) afterwards would wrongly flip
+    # the frozen backbone back into train mode (re-enabling its dropout). Restore
+    # each module to exactly the mode it had.
+    prior_modes = {name: module.training for name, module in model.named_modules()}
     model.eval()
     references: list[str] = []
     hypotheses: list[str] = []
@@ -363,7 +394,8 @@ def evaluate_fusion(
             label_ids[label_ids == -100] = tokenizer.pad_token_id
             references.extend(tokenizer.batch_decode(label_ids, skip_special_tokens=True))
             count += 1
-    model.train(was_training)
+    for name, module in model.named_modules():
+        module.train(prior_modes[name])
     n = max(1, count)
     return {
         "wer": word_error_rate(references, hypotheses),
@@ -481,6 +513,13 @@ def run_stage_warmup(
             if save_every and step % save_every == 0:
                 save_enhancer_checkpoint(checkpoint_dir / "last.pt", enhancer, config, step, optimizer=optimizer, scaler=scaler)
 
+    # Hand the *best dev* enhancer to the next stage, not the final-step weights:
+    # reload best.pt (when dev eval produced one) into the in-memory enhancer so
+    # both the canonical enhancer.pt and the threaded object carry the best model.
+    best_path = checkpoint_dir / "best.pt"
+    if best_path.is_file():
+        load_enhancer_state(enhancer, best_path)
+        logging.info("stage0 warmup: handing off best dev enhancer from %s", best_path)
     final_path = checkpoint_dir / "enhancer.pt"
     save_enhancer_checkpoint(final_path, enhancer, config, step)
     logging.info("stage0 warmup complete: checkpoint=%s", final_path)
@@ -521,17 +560,21 @@ def load_enhancer_state(enhancer: Any, checkpoint_path: Path) -> None:
 
 
 def load_tokenizer(config: dict[str, Any]) -> Any:
-    """Load the Whisper tokenizer used to turn transcripts into label ids.
+    """Load the fine-tuned checkpoint's Whisper tokenizer (Persian lang/task prefix).
 
-    Prefers the fine-tuned checkpoint's tokenizer (it carries the Persian
-    language/task prefix the backbone was trained with) and falls back to the
-    base model. Factored out as a seam so tests can inject a lightweight stub.
+    Uses the ``base_asr_checkpoint`` tokenizer so labels carry the exact
+    language/task prefix the backbone was trained with; we do not fall back to the
+    base model (see ``require_base_checkpoint``). Factored out as a seam so tests
+    can inject a lightweight stub.
     """
     from transformers import WhisperTokenizer
 
     checkpoint = str(config.get("base_asr_checkpoint") or "")
-    source = checkpoint if (checkpoint and Path(checkpoint).exists()) else str(config.get("model_name", "openai/whisper-small"))
-    return WhisperTokenizer.from_pretrained(source)
+    if not checkpoint or not Path(checkpoint).exists():
+        raise FileNotFoundError(
+            f"base_asr_checkpoint does not exist: {checkpoint!r}; cannot load tokenizer."
+        )
+    return WhisperTokenizer.from_pretrained(checkpoint)
 
 
 def save_fusion_checkpoint(
@@ -712,6 +755,14 @@ def _run_fusion_stage(
                     optimizer=optimizer, scaler=scaler, include_backbone=include_backbone,
                 )
 
+    # Hand the *best dev* model to the next stage / resume scaffold, not the
+    # final-step weights: reload best.pt (when dev eval produced one) so the
+    # canonical fusion_model.pt + enhancer.pt and the threaded enhancer object all
+    # carry the best-WER model.
+    best_path = checkpoint_dir / "best.pt"
+    if best_path.is_file():
+        load_fusion_checkpoint(model, best_path)
+        logging.info("%s: handing off best dev model from %s", stage_name, best_path)
     save_fusion_checkpoint(checkpoint_dir / "fusion_model.pt", model, config, step)
     # Mirror the enhancer state under the name the resume scaffold expects.
     save_enhancer_checkpoint(checkpoint_dir / "enhancer.pt", model.enhancer, config, step)
@@ -741,6 +792,7 @@ def run_training(config_path: Path, run_dir_override: Path | None = None, resume
     config = load_fusion_config(config_path)
     if resume_from_stage != "__unset__":
         config["resume_from_stage"] = resume_from_stage
+    require_base_checkpoint(config)
     seed_everything(int(config["seed"]))
 
     run_dir = run_dir_override or Path(str(config["run_dir"]))

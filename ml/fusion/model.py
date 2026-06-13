@@ -282,18 +282,25 @@ class DualViewFusionModel(nn.Module):
 
 
 def load_whisper_backbone(checkpoint: str, model_name: str = "openai/whisper-small") -> Any:
-    """Load the fine-tuned Persian Whisper backbone (Phase 1), falling back to base.
+    """Load the fine-tuned Persian Whisper backbone (Phase 1).
 
-    ``checkpoint`` is normally the fine-tuned run dir (e.g.
-    ``models/asr/whisper-small/runs/best``); if it is missing or unset we fall
-    back to ``model_name`` so the stack can still be exercised.
+    ``checkpoint`` must point at the fine-tuned run dir (e.g.
+    ``models/asr/whisper-small/runs/best``). We deliberately do **not** fall back
+    to the vanilla ``model_name``: silently training fusion on top of an
+    un-fine-tuned Whisper would quietly invalidate every result, so a missing
+    checkpoint is a hard error.
     """
     from pathlib import Path
 
     from transformers import WhisperForConditionalGeneration
 
-    source = checkpoint if (checkpoint and Path(checkpoint).exists()) else model_name
-    return WhisperForConditionalGeneration.from_pretrained(source)
+    if not checkpoint or not Path(checkpoint).exists():
+        raise FileNotFoundError(
+            f"base_asr_checkpoint does not exist: {checkpoint!r}. Point it at the "
+            "fine-tuned Persian Whisper-small checkpoint; refusing to fall back to "
+            f"vanilla {model_name}."
+        )
+    return WhisperForConditionalGeneration.from_pretrained(checkpoint)
 
 
 def build_fusion_model(

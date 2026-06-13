@@ -155,6 +155,9 @@ def _tiny_config(root: Path, run_dir: Path) -> Path:
     config = {
         "run_dir": str(run_dir),
         "dataset_dir": str(root),
+        # Any existing path satisfies require_base_checkpoint; the real backbone /
+        # tokenizer loaders are monkeypatched out in these tests.
+        "base_asr_checkpoint": str(root),
         "train_split": "train",
         "device": "cpu",
         "mixed_precision": "false",
@@ -262,6 +265,25 @@ def test_resume_from_joint_loads_prior_fusion_checkpoint(tmp_path: Path, monkeyp
     run_training(config_path)
     assert run_training(config_path, resume_from_stage="joint") == 0
     assert (run_dir / "checkpoints" / "stage2_joint" / "fusion_model.pt").is_file()
+
+
+def test_run_training_requires_base_checkpoint(tmp_path: Path) -> None:
+    root = _make_degraded_dataset(tmp_path / "ds")
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    config = {
+        "run_dir": str(run_dir),
+        "dataset_dir": str(root),
+        "base_asr_checkpoint": str(tmp_path / "does_not_exist"),
+        "device": "cpu",
+        "mixed_precision": "false",
+        "enhancer": {"type": "residual_unet", "base_channels": 8, "depth": 2},
+        "stages": {"warmup": {"max_steps": 1, "batch_size": 2, "segment_seconds": 0.5, "lr_enhancer": 1e-3, "num_workers": 0}},
+    }
+    config_path = run_dir.parent / "fusion.yaml"
+    config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+    with pytest.raises(FileNotFoundError):
+        run_training(config_path)
 
 
 def test_eval_score_minimises_right_metric() -> None:

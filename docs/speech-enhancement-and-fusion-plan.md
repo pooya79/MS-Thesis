@@ -565,7 +565,7 @@ Orchestration requirements:
 - **Checkpoint at every stage boundary and support resume-from-stage** so a Stage 2 crash or OOM does not force re-running Stages 0 and 1. Default behavior is still a single end-to-end run; resume is for recovery.
 - **Discriminative learning rates** in Stage 2: a much lower learning rate for Whisper than for `E`/fusion (for example, 10x lower).
 - **`lambda` annealing:** higher in Stage 1 to anchor the clean view, decayed in Stage 2 so recognition dominates.
-- Stage 2 uses either full fine-tuning or LoRA/adapters on Whisper, selected by config; LoRA is the fallback if Stage 2 does not fit RTX 3090 memory or trains unstably.
+- Stage 2 does full fine-tuning of Whisper: the whole backbone is unfrozen and trained at its own lower learning rate. Parameter-efficient adaptation (LoRA/adapters) was considered as a memory fallback but is not implemented; the pipeline always fully fine-tunes the unfrozen backbone.
 
 Per-stage loop responsibilities:
 
@@ -602,7 +602,6 @@ stages:
     lr_frontend: 0.0001
     lr_whisper: 0.00001
     lambda: 0.1
-    whisper_adaptation: full   # full | lora
 ```
 
 ### Outputs

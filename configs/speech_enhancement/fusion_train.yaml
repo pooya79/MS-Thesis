@@ -60,7 +60,6 @@ stages:
     lr_frontend: 0.0001
     lr_whisper: 0.00001
     lambda: 0.1
-    whisper_adaptation: full   # full | lora
     eval_every: 2000
     save_every: 1000
     eval_max_batches: 50
