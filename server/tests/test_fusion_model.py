@@ -4,6 +4,7 @@ import torch
 
 from ml.enhancement.enhancer import build_enhancer
 from ml.fusion.model import (
+    CrossAttentionFusion,
     DualViewFusionModel,
     GatedFusion,
     build_fusion,
@@ -53,6 +54,38 @@ def test_gated_fusion_can_learn_away_from_balance() -> None:
     enhanced = torch.randn(1, 3, 8)
     fused = fusion(noisy, enhanced)
     assert torch.allclose(fused, enhanced, atol=1e-3)
+
+
+def test_cross_attention_fusion_starts_as_balanced_blend() -> None:
+    fusion = CrossAttentionFusion(d_model=16, num_layers=2, num_heads=4)
+    fusion.eval()  # disable dropout for the exact-identity check
+    noisy = torch.randn(2, 5, 16)
+    enhanced = torch.randn(2, 5, 16)
+    fused = fusion(noisy, enhanced)
+    # Identity-init cross-attn layers + zero-init gate -> exact average at start.
+    assert torch.allclose(fused, 0.5 * (noisy + enhanced), atol=1e-5)
+    assert fused.shape == noisy.shape
+
+
+def test_cross_attention_fusion_is_default_and_learns_away_from_blend() -> None:
+    fusion = build_fusion(8)
+    assert isinstance(fusion, CrossAttentionFusion)
+    # Push the gate hard toward the enhanced stream; with identity-init layers
+    # the output should then track the enhanced view.
+    with torch.no_grad():
+        fusion.combine.proj_out.bias.fill_(20.0)
+    noisy = torch.randn(1, 3, 8)
+    enhanced = torch.randn(1, 3, 8)
+    fusion.eval()
+    fused = fusion(noisy, enhanced)
+    assert torch.allclose(fused, enhanced, atol=1e-3)
+
+
+def test_cross_attention_fusion_picks_valid_head_count() -> None:
+    # 8 heads do not divide d_model=12; the block must fall back to a divisor.
+    fusion = CrossAttentionFusion(d_model=12, num_heads=8)
+    out = fusion(torch.randn(1, 4, 12), torch.randn(1, 4, 12))
+    assert out.shape == (1, 4, 12)
 
 
 def test_build_fusion_factory_rejects_unknown_type() -> None:

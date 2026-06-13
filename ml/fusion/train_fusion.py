@@ -54,6 +54,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "seed": 1337,
     "resume_from_stage": None,
     "enhancer": {"type": "residual_unet", "base_channels": 32, "depth": 3},
+    "fusion": {"type": "cross_attention", "num_layers": 2, "num_heads": 8, "ffn_ratio": 2.0},
     "stages": {
         "warmup": {
             "max_steps": 5000,

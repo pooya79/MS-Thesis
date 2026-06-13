@@ -21,6 +21,15 @@ enhancer:
   base_channels: 32
   depth: 3
 
+# Encoder-feature-space fusion (D4). cross_attention lets the noisy and enhanced
+# Whisper-encoder streams exchange context before a gated merge; `gated` is the
+# lightweight element-wise baseline. Starts as a balanced blend either way.
+fusion:
+  type: cross_attention
+  num_layers: 2
+  num_heads: 8
+  ffn_ratio: 2.0
+
 stages:
   warmup:        # Stage 0 — enhancer E only, L_enh
     max_steps: 5000

@@ -7,11 +7,13 @@ stage boundary and supporting resume-from-stage.
 
 The fusion model itself (``model.py``) performs **encoder-feature-space** fusion
 (D4): the noisy and enhanced log-Mels are each encoded by the shared Whisper
-encoder and their hidden states are blended by a gated ``GatedFusion`` block
-before the decoder.
+encoder and their hidden states are merged by a bidirectional
+``CrossAttentionFusion`` block before the decoder (``GatedFusion`` remains a
+lightweight element-wise baseline).
 """
 
 from ml.fusion.model import (
+    CrossAttentionFusion,
     DualViewFusionModel,
     GatedFusion,
     build_fusion,
@@ -20,6 +22,7 @@ from ml.fusion.model import (
 )
 
 __all__ = [
+    "CrossAttentionFusion",
     "DualViewFusionModel",
     "GatedFusion",
     "build_fusion",
