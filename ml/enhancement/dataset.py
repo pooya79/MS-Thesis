@@ -113,8 +113,25 @@ def read_mapping(dataset_dir: Path, split: str | None = None) -> list[DegradedPa
 
 
 def _resolve(dataset_dir: Path, value: str) -> Path:
+    """Resolve a manifest path, tolerating both relative-to-dataset-dir and
+    repo-root-relative forms.
+
+    generate_degraded_dataset records ``degraded_path``/``clean_path`` as the
+    path it constructed at generation time (repo-root-relative, already
+    containing the dataset dir name), while the loader's natural contract is
+    relative to ``dataset_dir``. Joining the former onto ``dataset_dir`` would
+    double the prefix, so try ``dataset_dir / value`` first and fall back to the
+    value as-is when that does not exist.
+    """
     path = Path(value)
-    return path if path.is_absolute() else (dataset_dir / path)
+    if path.is_absolute():
+        return path
+    joined = dataset_dir / path
+    if joined.exists():
+        return joined
+    if path.exists():
+        return path
+    return joined
 
 
 def reconstruct_clean_target(
