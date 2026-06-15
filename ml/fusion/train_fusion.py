@@ -496,6 +496,38 @@ def build_clean_dev_loader(config: dict[str, Any], stage: dict[str, Any], *, tok
     )
 
 
+def make_progress_bar(iterable: Any, desc: str, total: int | None = None) -> Any:
+    """Wrap an iterable in a tqdm bar, auto-disabled off-TTY (``disable=None``).
+
+    Mirrors the FastConformer trainer: interactive terminals get a live bar while
+    nohup/redirected runs stay quiet, and a missing tqdm degrades to the bare
+    iterable. Used for the eval loops, whose Whisper generation is slow enough to
+    warrant a bar.
+    """
+    try:
+        from tqdm.auto import tqdm
+
+        return tqdm(iterable, desc=desc, total=total, unit="batch", dynamic_ncols=True, leave=False, disable=None)
+    except ImportError:
+        return iterable
+
+
+def make_step_bar(desc: str, total: int, initial: int = 0) -> Any:
+    """Manual tqdm bar over training steps (auto-disabled off-TTY via ``disable=None``).
+
+    The step loops re-enter the dataloader across the ``while step < max_steps``
+    epochs, so we drive a manual bar with ``.update(1)`` rather than wrapping an
+    iterable; ``initial`` carries the resumed step count. Returns ``None`` when
+    tqdm is missing so callers simply skip the updates.
+    """
+    try:
+        from tqdm.auto import tqdm
+
+        return tqdm(total=total, initial=initial, desc=desc, unit="step", dynamic_ncols=True, leave=False, disable=None)
+    except ImportError:
+        return None
+
+
 def evaluate_enhancer(enhancer: Any, loader: Any, device: str, amp_enabled: bool) -> dict[str, float]:
     """Mean L_enh over the dev loader (Stage 0 has no ASR objective to score)."""
     import torch
@@ -504,7 +536,7 @@ def evaluate_enhancer(enhancer: Any, loader: Any, device: str, amp_enabled: bool
     enhancer.eval()
     total, count = 0.0, 0
     with torch.no_grad():
-        for batch in loader:
+        for batch in make_progress_bar(loader, "stage0 eval"):
             noisy = batch["noisy_mel"].to(device)
             clean = batch["clean_mel"].to(device)
             with torch.amp.autocast("cuda", enabled=amp_enabled):
@@ -550,8 +582,12 @@ def evaluate_fusion(
             generation_config.language = str(language)
         if task:
             generation_config.task = str(task)
+    # Bar length is the dev loader unless ``max_batches`` caps it shorter.
+    bar_total = len(loader) if hasattr(loader, "__len__") else None
+    if max_batches is not None:
+        bar_total = max_batches if bar_total is None else min(bar_total, max_batches)
     with torch.no_grad():
-        for index, batch in enumerate(loader):
+        for index, batch in enumerate(make_progress_bar(loader, "eval", total=bar_total)):
             if max_batches is not None and index >= max_batches:
                 break
             noisy = batch["noisy_mel"].to(device)
@@ -655,6 +691,7 @@ def run_stage_warmup(
     best_score = float("inf")
     step = start_step
     logging.info("stage0 warmup: max_steps=%s batch_size=%s amp=%s", max_steps, stage["batch_size"], amp_enabled)
+    progress = make_step_bar("stage0 warmup", max_steps, initial=start_step)
     while step < max_steps:
         for batch in loader:
             if step >= max_steps:
@@ -669,9 +706,13 @@ def run_stage_warmup(
             scaler.step(optimizer)
             scaler.update()
             step += 1
+            if progress is not None:
+                progress.update(1)
             if step % log_every == 0 or step == max_steps:
                 loss_value = float(loss.detach())
                 logging.info("stage0 step=%s L_enh=%.4f", step, loss_value)
+                if progress is not None:
+                    progress.set_postfix(L_enh=f"{loss_value:.4f}")
                 append_jsonl(metrics_path, {"timestamp": utc_now(), "stage": "warmup", "step": step, "L_enh": loss_value})
             if dev_loader is not None and eval_every and (step % eval_every == 0 or step == max_steps):
                 metrics = evaluate_enhancer(enhancer, dev_loader, device, amp_enabled)
@@ -684,6 +725,8 @@ def run_stage_warmup(
                     logging.info("stage0 new best L_enh=%.4f -> best.pt", score)
             if save_every and step % save_every == 0:
                 save_enhancer_checkpoint(checkpoint_dir / "last.pt", enhancer, config, step, optimizer=optimizer, scaler=scaler)
+    if progress is not None:
+        progress.close()
 
     # Hand the *best dev* enhancer to the next stage, not the final-step weights:
     # reload best.pt (when dev eval produced one) into the in-memory enhancer so
@@ -887,6 +930,7 @@ def _run_fusion_stage(
         "%s: max_steps=%s batch_size=%s lambda=%s train_backbone=%s amp=%s",
         stage_name, max_steps, stage["batch_size"], lam, train_backbone, amp_enabled,
     )
+    progress = make_step_bar(stage_name, max_steps, initial=start_step)
     while step < max_steps:
         for batch in loader:
             if step >= max_steps:
@@ -907,8 +951,12 @@ def _run_fusion_stage(
             scaler.step(optimizer)
             scaler.update()
             step += 1
+            if progress is not None:
+                progress.update(1)
             if step % log_every == 0 or step == max_steps:
                 logging.info("%s step=%s loss=%.4f L_ASR=%.4f L_enh=%.4f", stage_name, step, float(loss.detach()), float(l_asr.detach()), float(l_enh.detach()))
+                if progress is not None:
+                    progress.set_postfix(loss=f"{float(loss.detach()):.4f}", L_ASR=f"{float(l_asr.detach()):.4f}", L_enh=f"{float(l_enh.detach()):.4f}")
                 append_jsonl(metrics_path, {
                     "timestamp": utc_now(), "stage": stage_name, "step": step,
                     "loss": float(loss.detach()), "L_ASR": float(l_asr.detach()), "L_enh": float(l_enh.detach()),
@@ -945,6 +993,8 @@ def _run_fusion_stage(
                     checkpoint_dir / "last.pt", model, config, step,
                     optimizer=optimizer, scaler=scaler, include_backbone=include_backbone,
                 )
+    if progress is not None:
+        progress.close()
 
     # Hand the *best dev* model to the next stage / resume scaffold, not the
     # final-step weights: reload best.pt (when dev eval produced one) so the
