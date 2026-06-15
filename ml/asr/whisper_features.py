@@ -28,10 +28,20 @@ WHISPER_NUM_FRAMES = 3000
 
 @lru_cache(maxsize=4)
 def get_feature_extractor(model_name: str = "openai/whisper-small") -> Any:
-    """Return a cached Whisper feature extractor for ``model_name``."""
+    """Return a cached Whisper feature extractor for ``model_name``.
+
+    ``from_pretrained`` revalidates the HF cache over the network in every
+    fresh process (the lru_cache above is per-process, so each DataLoader worker
+    pays this on first use). We prefer the local cache (``local_files_only``) to
+    avoid those repeated HEAD requests, falling back to a networked fetch only
+    when the model is not cached yet.
+    """
     from transformers import WhisperFeatureExtractor
 
-    return WhisperFeatureExtractor.from_pretrained(model_name)
+    try:
+        return WhisperFeatureExtractor.from_pretrained(model_name, local_files_only=True)
+    except OSError:
+        return WhisperFeatureExtractor.from_pretrained(model_name)
 
 
 def waveform_to_log_mel(
