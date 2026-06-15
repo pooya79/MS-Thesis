@@ -56,16 +56,20 @@ stages:
     batch_size: 8
     segment_seconds: 4.0
     lr_enhancer: 0.0002
+    lr_scheduler: cosine       # cosine decay to 0; "none"/"constant" keeps a flat LR
+    warmup_steps: 500          # linear ramp 0 -> lr_enhancer, then cosine decay
     lambda: 1.0
     num_workers: 4
     log_every: 50
     eval_every: 500            # dev L_enh; best checkpoint -> best.pt
-    save_every: 1000           # rolling last.pt carries optimizer/step for mid-stage resume
+    save_every: 1000           # rolling last.pt carries optimizer/scheduler/step for mid-stage resume
     eval_max_batches: null     # null = whole dev split
   fusion:        # Stage 1 — E + fusion, Whisper frozen
     max_steps: 20000
     batch_size: 8
     lr_frontend: 0.0002
+    lr_scheduler: cosine
+    warmup_steps: 1000
     lambda: 0.3
     eval_every: 1000           # dev WER/CER via generation; best -> best.pt
     save_every: 1000
@@ -75,7 +79,9 @@ stages:
     max_steps: 40000
     batch_size: 4
     lr_frontend: 0.0001
-    lr_whisper: 0.00001
+    lr_whisper: 0.00001        # cosine scales both groups by the same factor, preserving this ratio
+    lr_scheduler: cosine
+    warmup_steps: 2000
     lambda: 0.1
     eval_every: 2000
     save_every: 1000

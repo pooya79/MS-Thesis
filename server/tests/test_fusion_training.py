@@ -342,6 +342,59 @@ def test_load_resume_state_roundtrips_step_and_optimizer(tmp_path: Path) -> None
     assert fresh_opt.state_dict()["state"], "optimizer state should be restored"
 
 
+def test_build_lr_scheduler_cosine_warms_up_then_decays() -> None:
+    import torch
+
+    from ml.fusion.train_fusion import build_lr_scheduler
+
+    param = torch.nn.Parameter(torch.zeros(1))
+    peak = 1e-3
+    optimizer = torch.optim.Adam([param], lr=peak)
+    scheduler = build_lr_scheduler(optimizer, {"lr_scheduler": "cosine", "warmup_steps": 10}, max_steps=100)
+
+    lrs = []
+    for _ in range(100):
+        optimizer.step()
+        scheduler.step()
+        lrs.append(optimizer.param_groups[0]["lr"])
+    assert lrs[0] < lrs[5] < lrs[9], "LR should ramp up during warm-up"
+    assert lrs[9] == pytest.approx(peak, rel=1e-3), "peak LR reached at end of warm-up"
+    assert lrs[-1] < 1e-5, "cosine arm should decay LR toward 0 by the final step"
+
+
+def test_build_lr_scheduler_none_keeps_flat_lr() -> None:
+    import torch
+
+    from ml.fusion.train_fusion import build_lr_scheduler
+
+    optimizer = torch.optim.Adam([torch.nn.Parameter(torch.zeros(1))], lr=1e-3)
+    assert build_lr_scheduler(optimizer, {"lr_scheduler": "none"}, max_steps=100) is None
+
+
+def test_load_resume_state_restores_scheduler(tmp_path: Path) -> None:
+    import torch
+
+    from ml.fusion.train_fusion import build_lr_scheduler, load_resume_state, save_enhancer_checkpoint
+
+    config = load_fusion_config_from_dict({"enhancer": {"type": "residual_unet", "base_channels": 8, "depth": 2}})
+    enhancer = build_enhancer(config["enhancer"])
+    optimizer = torch.optim.Adam(enhancer.parameters(), lr=1e-3)
+    scheduler = build_lr_scheduler(optimizer, {"lr_scheduler": "cosine", "warmup_steps": 5}, max_steps=50)
+    for _ in range(3):
+        enhancer(torch.zeros(1, 80, 20)).sum().backward()
+        optimizer.step()
+        scheduler.step()
+    ckpt = tmp_path / "last.pt"
+    save_enhancer_checkpoint(ckpt, enhancer, config, step=3, optimizer=optimizer, scaler=None, scheduler=scheduler)
+
+    fresh = build_enhancer(config["enhancer"])
+    fresh_opt = torch.optim.Adam(fresh.parameters(), lr=1e-3)
+    fresh_sched = build_lr_scheduler(fresh_opt, {"lr_scheduler": "cosine", "warmup_steps": 5}, max_steps=50)
+    load_resume_state(ckpt, fresh, fresh_opt, scaler=None, scheduler=fresh_sched)
+    assert fresh_sched.last_epoch == scheduler.last_epoch
+    assert fresh_sched.get_last_lr() == pytest.approx(scheduler.get_last_lr())
+
+
 def test_warmup_writes_resumable_last_checkpoint(tmp_path: Path) -> None:
     import torch
 

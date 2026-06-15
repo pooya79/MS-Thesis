@@ -96,6 +96,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "batch_size": 8,
             "segment_seconds": 4.0,
             "lr_enhancer": 2e-4,
+            # Cosine LR decay to 0 with a linear warm-up; "none"/"constant" keeps a flat LR.
+            "lr_scheduler": "cosine",
+            "warmup_steps": 500,
             "lambda": 1.0,
             "num_workers": 4,
             "log_every": 50,
@@ -108,6 +111,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "max_steps": 20000,
             "batch_size": 8,
             "lr_frontend": 2e-4,
+            "lr_scheduler": "cosine",
+            "warmup_steps": 1000,
             "lambda": 0.3,
             "eval_every": 1000,
             "save_every": 1000,
@@ -118,6 +123,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "batch_size": 4,
             "lr_frontend": 1e-4,
             "lr_whisper": 1e-5,
+            "lr_scheduler": "cosine",
+            "warmup_steps": 2000,
             "lambda": 0.1,
             "eval_every": 2000,
             "save_every": 1000,
@@ -577,6 +584,10 @@ def evaluate_fusion(
     # fine-tuned backbone). Models without the language token map — e.g. tiny
     # English-only/test configs — decode from decoder_start_token_id alone.
     generation_config = model.whisper.generation_config
+    # We cap decoding with ``max_new_tokens`` below; drop Whisper's preset
+    # ``max_length`` (448) so transformers doesn't warn that both are set and
+    # silently ignore one — ``max_new_tokens`` is the knob we actually want.
+    generation_config.max_length = None
     if getattr(generation_config, "lang_to_id", None):
         if language:
             generation_config.language = str(language)
@@ -619,8 +630,36 @@ def eval_score(stage_name: str, metrics: dict[str, float]) -> float:
     return float(metrics["L_enh"] if stage_name == "warmup" else metrics["wer"])
 
 
-def load_resume_state(path: Path, module: Any, optimizer: Any, scaler: Any) -> int:
-    """Restore model/optimizer/scaler from a ``last.pt`` and return the next step.
+def build_lr_scheduler(optimizer: Any, stage: dict[str, Any], max_steps: int) -> Any:
+    """Cosine-with-warmup LR schedule for a stage, or ``None`` for a flat LR.
+
+    Per-stage keys: ``lr_scheduler`` (``"cosine"`` default, or ``"none"`` /
+    ``"constant"`` to keep the optimiser's flat LR) and ``warmup_steps`` — a linear
+    ramp from 0 to the peak LR (default 0), after which the cosine arm decays the
+    peak LR to 0 by ``max_steps``. ``warmup_ratio`` (a fraction of ``max_steps``)
+    is an alternative to an absolute ``warmup_steps``. With multiple param groups
+    (Stage 2's frontend + backbone at different peak LRs) the schedule applies the
+    same multiplier to every group, so each group's peak LR and their ratio are
+    preserved.
+    """
+    kind = str(stage.get("lr_scheduler", "cosine")).lower()
+    if kind in {"none", "constant", "off"}:
+        return None
+    if kind != "cosine":
+        raise ValueError(f"unknown lr_scheduler {kind!r}; expected 'cosine' or 'none'")
+    warmup_steps = stage.get("warmup_steps")
+    if warmup_steps is None and stage.get("warmup_ratio") is not None:
+        warmup_steps = int(float(stage["warmup_ratio"]) * max_steps)
+    warmup_steps = int(warmup_steps or 0)
+    from transformers import get_cosine_schedule_with_warmup
+
+    return get_cosine_schedule_with_warmup(
+        optimizer, num_warmup_steps=warmup_steps, num_training_steps=max_steps
+    )
+
+
+def load_resume_state(path: Path, module: Any, optimizer: Any, scaler: Any, scheduler: Any = None) -> int:
+    """Restore model/optimizer/scaler/scheduler from a ``last.pt`` and return the next step.
 
     Returns ``0`` when the checkpoint predates mid-stage resume support (no
     ``optimizer_state``), so such a checkpoint only seeds weights, not the step.
@@ -641,6 +680,8 @@ def load_resume_state(path: Path, module: Any, optimizer: Any, scaler: Any) -> i
                 state[key] = value.to(param.device)
     if scaler is not None and checkpoint.get("scaler_state") is not None:
         scaler.load_state_dict(checkpoint["scaler_state"])
+    if scheduler is not None and checkpoint.get("scheduler_state") is not None:
+        scheduler.load_state_dict(checkpoint["scheduler_state"])
     return int(checkpoint.get("step", 0))
 
 
@@ -682,11 +723,12 @@ def run_stage_warmup(
     log_every = int(stage.get("log_every", 50))
     save_every = int(stage.get("save_every", 1000))
     eval_every = int(stage.get("eval_every", 0) or 0)
+    scheduler = build_lr_scheduler(optimizer, stage, max_steps)
 
     start_step = 0
     resume_ckpt = checkpoint_dir / "last.pt"
     if resume_ckpt.is_file():
-        start_step = load_resume_state(resume_ckpt, enhancer, optimizer, scaler)
+        start_step = load_resume_state(resume_ckpt, enhancer, optimizer, scaler, scheduler)
         logging.info("stage0 warmup: resuming from step %s (%s)", start_step, resume_ckpt)
     best_score = float("inf")
     step = start_step
@@ -705,15 +747,18 @@ def run_stage_warmup(
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
+            if scheduler is not None:
+                scheduler.step()
             step += 1
             if progress is not None:
                 progress.update(1)
             if step % log_every == 0 or step == max_steps:
                 loss_value = float(loss.detach())
-                logging.info("stage0 step=%s L_enh=%.4f", step, loss_value)
+                lr = optimizer.param_groups[0]["lr"]
+                logging.info("stage0 step=%s L_enh=%.4f lr=%.2e", step, loss_value, lr)
                 if progress is not None:
-                    progress.set_postfix(L_enh=f"{loss_value:.4f}")
-                append_jsonl(metrics_path, {"timestamp": utc_now(), "stage": "warmup", "step": step, "L_enh": loss_value})
+                    progress.set_postfix(L_enh=f"{loss_value:.4f}", lr=f"{lr:.2e}")
+                append_jsonl(metrics_path, {"timestamp": utc_now(), "stage": "warmup", "step": step, "L_enh": loss_value, "lr": lr})
             if dev_loader is not None and eval_every and (step % eval_every == 0 or step == max_steps):
                 metrics = evaluate_enhancer(enhancer, dev_loader, device, amp_enabled)
                 logging.info("stage0 eval step=%s L_enh=%.4f", step, metrics["L_enh"])
@@ -724,7 +769,7 @@ def run_stage_warmup(
                     save_enhancer_checkpoint(checkpoint_dir / "best.pt", enhancer, config, step)
                     logging.info("stage0 new best L_enh=%.4f -> best.pt", score)
             if save_every and step % save_every == 0:
-                save_enhancer_checkpoint(checkpoint_dir / "last.pt", enhancer, config, step, optimizer=optimizer, scaler=scaler)
+                save_enhancer_checkpoint(checkpoint_dir / "last.pt", enhancer, config, step, optimizer=optimizer, scaler=scaler, scheduler=scheduler)
     if progress is not None:
         progress.close()
 
@@ -749,6 +794,7 @@ def save_enhancer_checkpoint(
     *,
     optimizer: Any = None,
     scaler: Any = None,
+    scheduler: Any = None,
 ) -> None:
     import torch
 
@@ -760,6 +806,7 @@ def save_enhancer_checkpoint(
             "step": step,
             "optimizer_state": optimizer.state_dict() if optimizer is not None else None,
             "scaler_state": scaler.state_dict() if scaler is not None else None,
+            "scheduler_state": scheduler.state_dict() if scheduler is not None else None,
             "git_commit": git_commit(),
             "saved_at": utc_now(),
         },
@@ -800,6 +847,7 @@ def save_fusion_checkpoint(
     *,
     optimizer: Any = None,
     scaler: Any = None,
+    scheduler: Any = None,
     include_backbone: bool = True,
 ) -> None:
     import torch
@@ -820,6 +868,7 @@ def save_fusion_checkpoint(
             "step": step,
             "optimizer_state": optimizer.state_dict() if optimizer is not None else None,
             "scaler_state": scaler.state_dict() if scaler is not None else None,
+            "scheduler_state": scheduler.state_dict() if scheduler is not None else None,
             "git_commit": git_commit(),
             "saved_at": utc_now(),
         },
@@ -915,6 +964,7 @@ def _run_fusion_stage(
     eval_max_batches = stage.get("eval_max_batches")
     eval_max_batches = int(eval_max_batches) if eval_max_batches is not None else None
     grad_clip = float(stage.get("grad_clip", 1.0))
+    scheduler = build_lr_scheduler(optimizer, stage, max_steps)
     # Stage 1 freezes the backbone, so rolling last.pt can drop it (it equals the
     # base checkpoint); Stage 2 trains it and must keep it.
     include_backbone = train_backbone
@@ -922,7 +972,7 @@ def _run_fusion_stage(
     start_step = 0
     resume_ckpt = checkpoint_dir / "last.pt"
     if resume_ckpt.is_file():
-        start_step = load_resume_state(resume_ckpt, model, optimizer, scaler)
+        start_step = load_resume_state(resume_ckpt, model, optimizer, scaler, scheduler)
         logging.info("%s: resuming from step %s (%s)", stage_name, start_step, resume_ckpt)
     best_score = float("inf")
     step = start_step
@@ -950,16 +1000,19 @@ def _run_fusion_stage(
                 torch.nn.utils.clip_grad_norm_((p for g in param_groups for p in g["params"]), grad_clip)
             scaler.step(optimizer)
             scaler.update()
+            if scheduler is not None:
+                scheduler.step()
             step += 1
             if progress is not None:
                 progress.update(1)
             if step % log_every == 0 or step == max_steps:
-                logging.info("%s step=%s loss=%.4f L_ASR=%.4f L_enh=%.4f", stage_name, step, float(loss.detach()), float(l_asr.detach()), float(l_enh.detach()))
+                lr = optimizer.param_groups[0]["lr"]
+                logging.info("%s step=%s loss=%.4f L_ASR=%.4f L_enh=%.4f lr=%.2e", stage_name, step, float(loss.detach()), float(l_asr.detach()), float(l_enh.detach()), lr)
                 if progress is not None:
-                    progress.set_postfix(loss=f"{float(loss.detach()):.4f}", L_ASR=f"{float(l_asr.detach()):.4f}", L_enh=f"{float(l_enh.detach()):.4f}")
+                    progress.set_postfix(loss=f"{float(loss.detach()):.4f}", L_ASR=f"{float(l_asr.detach()):.4f}", L_enh=f"{float(l_enh.detach()):.4f}", lr=f"{lr:.2e}")
                 append_jsonl(metrics_path, {
                     "timestamp": utc_now(), "stage": stage_name, "step": step,
-                    "loss": float(loss.detach()), "L_ASR": float(l_asr.detach()), "L_enh": float(l_enh.detach()),
+                    "loss": float(loss.detach()), "L_ASR": float(l_asr.detach()), "L_enh": float(l_enh.detach()), "lr": lr,
                 })
             should_eval = bool(eval_every) and (step % eval_every == 0 or step == max_steps)
             if should_eval and (dev_loader is not None or clean_dev_loader is not None):
@@ -991,7 +1044,7 @@ def _run_fusion_stage(
             if save_every and step % save_every == 0:
                 save_fusion_checkpoint(
                     checkpoint_dir / "last.pt", model, config, step,
-                    optimizer=optimizer, scaler=scaler, include_backbone=include_backbone,
+                    optimizer=optimizer, scaler=scaler, scheduler=scheduler, include_backbone=include_backbone,
                 )
     if progress is not None:
         progress.close()
