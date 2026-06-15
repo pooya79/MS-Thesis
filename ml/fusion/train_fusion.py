@@ -349,6 +349,7 @@ def make_dataloader(
         drop_last=False,
         generator=_seeded_generator(seed) if shuffle else None,
         worker_init_fn=_worker_init_fn if num_workers else None,
+        persistent_workers=bool(num_workers),
     )
 
 
