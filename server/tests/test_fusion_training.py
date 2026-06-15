@@ -305,6 +305,16 @@ def test_run_training_requires_base_checkpoint(tmp_path: Path) -> None:
         run_training(config_path)
 
 
+def test_is_loadable_checkpoint_accepts_path_and_hub_id(tmp_path: Path) -> None:
+    from ml.fusion.model import is_loadable_checkpoint
+
+    assert is_loadable_checkpoint(str(tmp_path))  # existing local path
+    assert is_loadable_checkpoint("openai/whisper-small")  # Hub id escape hatch
+    assert not is_loadable_checkpoint("")
+    assert not is_loadable_checkpoint(str(tmp_path / "missing"))  # missing abs path
+    assert not is_loadable_checkpoint("just-a-name")  # no slash, not a path
+
+
 def test_eval_score_minimises_right_metric() -> None:
     assert eval_score("warmup", {"L_enh": 0.5, "wer": 0.9}) == 0.5
     assert eval_score("fusion", {"L_enh": 0.5, "wer": 0.9}) == 0.9

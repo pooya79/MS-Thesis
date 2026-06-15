@@ -1,7 +1,11 @@
 # Single config driving the 3-stage enhancement+fusion curriculum (D8/D10).
 run_dir: artifacts/speech_enhancement/fusion/run_001
 
-# Fine-tuned Persian Whisper-small checkpoint (Phase 1); used to init Stages 1-2.
+# Whisper-small backbone used to init Stages 1-2. Normally the fine-tuned Persian
+# checkpoint (Phase 1) as a local run dir. A Hugging Face Hub id (e.g.
+# openai/whisper-small) is also accepted as an explicit escape hatch to baseline
+# on vanilla Whisper — note this trains fusion on an un-fine-tuned backbone and is
+# not the intended methodology.
 base_asr_checkpoint: models/asr/whisper-small/runs/best
 
 # Training datasets. Each entry is a path string (kind auto-detected) or a

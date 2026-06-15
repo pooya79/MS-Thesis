@@ -62,7 +62,7 @@ from ml.enhancement.dataset import (
     detect_dataset_kind,
 )
 from ml.enhancement.enhancer import build_enhancer, enhancement_l1_loss
-from ml.fusion.model import build_fusion_model
+from ml.fusion.model import build_fusion_model, is_loadable_checkpoint
 
 STAGE_ORDER = ["warmup", "fusion", "joint"]
 STAGE_DIRS = {"warmup": "stage0_warmup", "fusion": "stage1_fusion", "joint": "stage2_joint"}
@@ -228,14 +228,14 @@ def require_base_checkpoint(config: dict[str, Any]) -> None:
     if not checkpoint:
         raise FileNotFoundError(
             "base_asr_checkpoint must be set to the fine-tuned Persian Whisper-small "
-            "checkpoint (e.g. models/asr/whisper-small/runs/best); refusing to train "
-            "fusion on vanilla Whisper."
+            "checkpoint (e.g. models/asr/whisper-small/runs/best), or a Hugging Face "
+            "Hub id (e.g. openai/whisper-small) to baseline on vanilla Whisper."
         )
-    if not Path(checkpoint).exists():
+    if not is_loadable_checkpoint(checkpoint):
         raise FileNotFoundError(
             f"base_asr_checkpoint does not exist: {checkpoint}. Point it at the "
-            "fine-tuned Persian Whisper-small checkpoint; refusing to fall back to "
-            "vanilla Whisper."
+            "fine-tuned Persian Whisper-small checkpoint, or a Hugging Face Hub id "
+            "(e.g. openai/whisper-small) to baseline on vanilla Whisper."
         )
 
 
@@ -734,14 +734,14 @@ def load_tokenizer(config: dict[str, Any]) -> Any:
     """Load the fine-tuned checkpoint's Whisper tokenizer (Persian lang/task prefix).
 
     Uses the ``base_asr_checkpoint`` tokenizer so labels carry the exact
-    language/task prefix the backbone was trained with; we do not fall back to the
-    base model (see ``require_base_checkpoint``). Factored out as a seam so tests
-    can inject a lightweight stub.
+    language/task prefix the backbone was trained with (a local run dir or a Hub
+    id; see ``require_base_checkpoint``). Factored out as a seam so tests can
+    inject a lightweight stub.
     """
     from transformers import WhisperTokenizer
 
     checkpoint = str(config.get("base_asr_checkpoint") or "")
-    if not checkpoint or not Path(checkpoint).exists():
+    if not is_loadable_checkpoint(checkpoint):
         raise FileNotFoundError(
             f"base_asr_checkpoint does not exist: {checkpoint!r}; cannot load tokenizer."
         )

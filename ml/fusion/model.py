@@ -281,24 +281,41 @@ class DualViewFusionModel(nn.Module):
         )
 
 
-def load_whisper_backbone(checkpoint: str, model_name: str = "openai/whisper-small") -> Any:
-    """Load the fine-tuned Persian Whisper backbone (Phase 1).
+def is_loadable_checkpoint(checkpoint: str) -> bool:
+    """True if ``checkpoint`` is a usable ``from_pretrained`` source.
 
-    ``checkpoint`` must point at the fine-tuned run dir (e.g.
-    ``models/asr/whisper-small/runs/best``). We deliberately do **not** fall back
-    to the vanilla ``model_name``: silently training fusion on top of an
-    un-fine-tuned Whisper would quietly invalidate every result, so a missing
-    checkpoint is a hard error.
+    Accepts either an existing local path (the fine-tuned run dir) or a Hugging
+    Face Hub id like ``openai/whisper-small`` (a relative, ``/``-containing string
+    that is not an existing path). The Hub-id case is an explicit escape hatch for
+    baselining on vanilla Whisper — see ``base_asr_checkpoint`` in the config.
     """
     from pathlib import Path
 
+    if not checkpoint:
+        return False
+    path = Path(checkpoint)
+    if path.exists():
+        return True
+    return "/" in checkpoint and not path.is_absolute()
+
+
+def load_whisper_backbone(checkpoint: str, model_name: str = "openai/whisper-small") -> Any:
+    """Load the Whisper backbone (Phase 1).
+
+    ``checkpoint`` normally points at the fine-tuned run dir (e.g.
+    ``models/asr/whisper-small/runs/best``). A Hugging Face Hub id such as
+    ``openai/whisper-small`` is also accepted as an explicit baseline escape
+    hatch. We still reject a missing local path: silently training fusion on top
+    of an un-fine-tuned Whisper would quietly invalidate every result, so a typo'd
+    checkpoint is a hard error.
+    """
     from transformers import WhisperForConditionalGeneration
 
-    if not checkpoint or not Path(checkpoint).exists():
+    if not is_loadable_checkpoint(checkpoint):
         raise FileNotFoundError(
             f"base_asr_checkpoint does not exist: {checkpoint!r}. Point it at the "
-            "fine-tuned Persian Whisper-small checkpoint; refusing to fall back to "
-            f"vanilla {model_name}."
+            "fine-tuned Persian Whisper-small checkpoint, or a Hugging Face Hub id "
+            f"(e.g. vanilla {model_name}) to baseline."
         )
     return WhisperForConditionalGeneration.from_pretrained(checkpoint)
 
