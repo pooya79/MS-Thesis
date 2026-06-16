@@ -66,8 +66,19 @@ class _GatedCombine(nn.Module):
         gate_logits = self.proj_out(self.dropout(self.act(self.proj_in(torch.cat([noisy_h, enhanced_h], dim=-1)))))
         return torch.sigmoid(gate_logits)
 
-    def forward(self, noisy_h: torch.Tensor, enhanced_h: torch.Tensor) -> torch.Tensor:
-        gate = self.gate(noisy_h, enhanced_h)
+    def forward(
+        self,
+        noisy_h: torch.Tensor,
+        enhanced_h: torch.Tensor,
+        gate_override: float | None = None,
+    ) -> torch.Tensor:
+        if gate_override is None:
+            gate = self.gate(noisy_h, enhanced_h)
+        else:
+            # Ablation: pin the blend to a constant instead of the learned gate
+            # (e.g. 0.0 = enhanced view off, 1.0 = noisy view off) to isolate how
+            # much the learned gating actually contributes.
+            gate = torch.full_like(enhanced_h, float(gate_override))
         return gate * enhanced_h + (1.0 - gate) * noisy_h
 
 
@@ -98,8 +109,13 @@ class GatedFusion(nn.Module):
         self.proj_in = self.combine.proj_in
         self.proj_out = self.combine.proj_out
 
-    def forward(self, noisy_h: torch.Tensor, enhanced_h: torch.Tensor) -> torch.Tensor:
-        return self.combine(noisy_h, enhanced_h)
+    def forward(
+        self,
+        noisy_h: torch.Tensor,
+        enhanced_h: torch.Tensor,
+        gate_override: float | None = None,
+    ) -> torch.Tensor:
+        return self.combine(noisy_h, enhanced_h, gate_override=gate_override)
 
 
 def _valid_head_count(d_model: int, requested: int) -> int:
@@ -189,14 +205,19 @@ class CrossAttentionFusion(nn.Module):
         )
         self.combine = _GatedCombine(d_model, hidden_ratio=hidden_ratio, dropout=dropout)
 
-    def forward(self, noisy_h: torch.Tensor, enhanced_h: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        noisy_h: torch.Tensor,
+        enhanced_h: torch.Tensor,
+        gate_override: float | None = None,
+    ) -> torch.Tensor:
         for noisy_layer, enhanced_layer in zip(self.noisy_layers, self.enhanced_layers):
             # Refine both streams from the current (pre-update) views so the
             # exchange is symmetric within a layer.
             refined_noisy = noisy_layer(noisy_h, enhanced_h)
             refined_enhanced = enhanced_layer(enhanced_h, noisy_h)
             noisy_h, enhanced_h = refined_noisy, refined_enhanced
-        return self.combine(noisy_h, enhanced_h)
+        return self.combine(noisy_h, enhanced_h, gate_override=gate_override)
 
 
 _FUSIONS: dict[str, type[nn.Module]] = {
@@ -250,18 +271,54 @@ class DualViewFusionModel(nn.Module):
             param.requires_grad_(True)
         self.whisper.train()
 
-    def encode_views(self, noisy_mel: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """Return ``(enhanced_mel, fused_hidden_states)`` for a noisy log-Mel batch."""
+    def encode_views(
+        self,
+        noisy_mel: torch.Tensor,
+        *,
+        view_mode: str = "fusion",
+        gate_override: float | None = None,
+    ) -> tuple[torch.Tensor | None, torch.Tensor]:
+        """Return ``(enhanced_mel, encoder_hidden_states)`` for a noisy log-Mel batch.
+
+        ``view_mode`` selects which stream feeds the decoder — the default
+        ``"fusion"`` runs the full dual-view fusion, while the ablation modes bypass
+        the fusion block entirely to isolate each component:
+
+        - ``"fusion"``: ``fused = fusion(noisy_h, enhanced_h)`` (optionally with
+          ``gate_override`` pinning the blend gate to a constant).
+        - ``"noisy"``: ``noisy_h`` alone — the backbone encoder on the **raw** audio,
+          enhancer and fusion skipped (``enhanced_mel`` is ``None``). The "is the
+          front end net overhead?" baseline.
+        - ``"enhanced"``: ``enhanced_h`` alone — the enhancer then the backbone
+          encoder, fusion skipped. The "enhancer-alone" ASR path.
+
+        ``gate_override`` is only valid in ``"fusion"`` mode.
+        """
+        if gate_override is not None and view_mode != "fusion":
+            raise ValueError(f"gate_override is only valid with view_mode='fusion', got {view_mode!r}")
+        if view_mode == "noisy":
+            return None, self.encoder(noisy_mel).last_hidden_state
         enhanced_mel = self.enhancer(noisy_mel)
-        noisy_h = self.encoder(noisy_mel).last_hidden_state
         enhanced_h = self.encoder(enhanced_mel).last_hidden_state
-        fused = self.fusion(noisy_h, enhanced_h)
+        if view_mode == "enhanced":
+            return enhanced_mel, enhanced_h
+        if view_mode != "fusion":
+            raise ValueError(f"unknown view_mode {view_mode!r}; expected 'fusion', 'noisy', or 'enhanced'")
+        noisy_h = self.encoder(noisy_mel).last_hidden_state
+        fused = self.fusion(noisy_h, enhanced_h, gate_override=gate_override)
         return enhanced_mel, fused
 
-    def forward(self, noisy_mel: torch.Tensor, labels: torch.Tensor | None = None) -> dict[str, Any]:
+    def forward(
+        self,
+        noisy_mel: torch.Tensor,
+        labels: torch.Tensor | None = None,
+        *,
+        view_mode: str = "fusion",
+        gate_override: float | None = None,
+    ) -> dict[str, Any]:
         from transformers.modeling_outputs import BaseModelOutput
 
-        enhanced_mel, fused = self.encode_views(noisy_mel)
+        enhanced_mel, fused = self.encode_views(noisy_mel, view_mode=view_mode, gate_override=gate_override)
         outputs = self.whisper(
             encoder_outputs=BaseModelOutput(last_hidden_state=fused),
             labels=labels,
@@ -274,17 +331,26 @@ class DualViewFusionModel(nn.Module):
         }
 
     @torch.no_grad()
-    def generate(self, noisy_mel: torch.Tensor, **generate_kwargs: Any) -> torch.Tensor:
-        """Decode token ids from the fused encoder stream (for dev-set WER/CER).
+    def generate(
+        self,
+        noisy_mel: torch.Tensor,
+        *,
+        view_mode: str = "fusion",
+        gate_override: float | None = None,
+        **generate_kwargs: Any,
+    ) -> torch.Tensor:
+        """Decode token ids from the encoder stream (for dev-set WER/CER).
 
         Runs the enhancer + shared encoder + fusion to build the fused encoder
         output, then hands it to the Whisper decoder's ``generate`` exactly as the
         forward pass hands it to the teacher-forced decoder, so generation sees the
-        same representation the training objective optimises.
+        same representation the training objective optimises. ``view_mode`` /
+        ``gate_override`` select an ablated encoder stream instead (see
+        :meth:`encode_views`).
         """
         from transformers.modeling_outputs import BaseModelOutput
 
-        _, fused = self.encode_views(noisy_mel)
+        _, fused = self.encode_views(noisy_mel, view_mode=view_mode, gate_override=gate_override)
         return self.whisper.generate(
             encoder_outputs=BaseModelOutput(last_hidden_state=fused),
             **generate_kwargs,

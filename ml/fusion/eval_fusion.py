@@ -27,6 +27,21 @@ Whisper backbone *architecture* and ``generation_config`` (its weights are
 overwritten by the checkpoint when the checkpoint carries the backbone); default
 ``openai/whisper-small`` keeps eval self-contained without the original
 fine-tuned run dir.
+
+**Ablation modes** (``eval.view_mode`` / ``eval.gate_override``, or ``--view-mode``
+/ ``--gate-override``) re-route which encoder stream feeds the decoder so the fusion
+contribution can be isolated against the same checkpoint and test sets:
+
+- ``view_mode="noisy"``: the backbone encoder on the **raw** audio, enhancer and
+  fusion skipped — the "is the front end net overhead?" baseline.
+- ``view_mode="enhanced"``: the **enhancer-alone** path (enhancer → encoder →
+  decoder), fusion skipped — measures whether the enhancer alone helps or hurts ASR.
+- ``gate_override=g`` (``view_mode="fusion"`` only): pins the fusion blend gate to a
+  constant ``g`` in ``[0, 1]`` instead of the learned per-channel gate (``0.0``
+  disables the enhanced stream, ``1.0`` the noisy stream) — tests what the gate
+  *would* contribute if it committed. The ``noisy``/``enhanced`` modes bypass the
+  fusion block so ``view_usage`` is empty; under ``gate_override`` the reported
+  view weight is the forced constant. ``metrics.json`` records both knobs.
 """
 
 from __future__ import annotations
@@ -81,8 +96,19 @@ DEFAULT_EVAL_CONFIG: dict[str, Any] = {
         "device": "auto",
         "mixed_precision": "auto",
         "generation_max_length": 225,
+        # Ablation knobs (see ml.fusion.model.DualViewFusionModel.encode_views):
+        #   view_mode: "fusion" (default dual-view) | "noisy" (backbone on raw
+        #     audio, enhancer+fusion skipped) | "enhanced" (enhancer-alone path).
+        #   gate_override: null or a float in [0, 1] pinning the fusion blend gate
+        #     to a constant (only valid with view_mode="fusion"; e.g. 0.0 disables
+        #     the enhanced stream, 1.0 disables the noisy stream).
+        "view_mode": "fusion",
+        "gate_override": None,
     },
 }
+
+
+VIEW_MODES = ("fusion", "noisy", "enhanced")
 
 
 def utc_now() -> str:
@@ -129,6 +155,15 @@ def validate_eval_config(config: dict[str, Any]) -> None:
             raise ValueError(f"{key} must be >= {minimum:g}")
     if eval_config["device"] not in {"auto", "cuda", "cpu"}:
         raise ValueError("eval.device must be auto, cuda, or cpu")
+    view_mode = str(eval_config.get("view_mode", "fusion"))
+    if view_mode not in VIEW_MODES:
+        raise ValueError(f"eval.view_mode must be one of {VIEW_MODES}, got {view_mode!r}")
+    gate_override = eval_config.get("gate_override")
+    if gate_override is not None:
+        if view_mode != "fusion":
+            raise ValueError("eval.gate_override is only valid with eval.view_mode='fusion'")
+        if not 0.0 <= float(gate_override) <= 1.0:
+            raise ValueError("eval.gate_override must be a float in [0, 1]")
 
 
 def resolve_existing_path(raw_path: str | Path, config_path: Path | None = None) -> Path:
@@ -330,6 +365,8 @@ def transcribe_examples(
     batch_size: int,
     generation_max_length: int,
     amp_enabled: bool,
+    view_mode: str = "fusion",
+    gate_override: float | None = None,
 ) -> tuple[list[str], list[float]]:
     """Greedily transcribe every clip through the fused ASR stack, in batches.
 
@@ -339,6 +376,13 @@ def transcribe_examples(
     The gate is captured by a forward hook on ``model.fusion.combine`` (the shared
     sigmoid gate of both fusion blocks), which fires once per batch when
     ``encode_views`` runs inside ``generate``.
+
+    ``view_mode``/``gate_override`` select an ablated encoder stream (see
+    :meth:`~ml.fusion.model.DualViewFusionModel.encode_views`). The ``"noisy"`` and
+    ``"enhanced"`` modes bypass the fusion block, so its gate hook never fires and
+    ``clean_view_weights`` stays empty; with ``gate_override`` the gate is pinned to
+    that constant, so the recorded weight is the forced value rather than the
+    learned one.
     """
     import torch
 
@@ -347,6 +391,11 @@ def transcribe_examples(
 
     def capture_gate(module: Any, args: Any, _output: Any) -> None:
         noisy_h, enhanced_h = args[0], args[1]
+        if gate_override is not None:
+            # The gate was pinned, so record the forced weight per clip rather than
+            # the learned gate (which the override replaced in the forward blend).
+            clean_view_weights.extend([float(gate_override)] * int(noisy_h.shape[0]))
+            return
         gate = module.gate(noisy_h, enhanced_h)  # [B, T, D] weight on the enhanced view
         clean_view_weights.extend(gate.float().mean(dim=(1, 2)).tolist())
 
@@ -366,18 +415,38 @@ def transcribe_examples(
                 mels.append(waveform_to_log_mel(audio, sample_rate=sample_rate, model_name=model_name))
             noisy_mel = torch.stack(mels).to(device)
             with torch.no_grad(), torch.amp.autocast("cuda", enabled=amp_enabled):
-                pred_ids = model.generate(noisy_mel, max_new_tokens=int(generation_max_length))
+                pred_ids = model.generate(
+                    noisy_mel,
+                    view_mode=view_mode,
+                    gate_override=gate_override,
+                    max_new_tokens=int(generation_max_length),
+                )
             hypotheses.extend(tokenizer.batch_decode(pred_ids, skip_special_tokens=True))
     finally:
         handle.remove()
     return hypotheses, clean_view_weights
 
 
-def run_evaluation(config_path: Path, output_dir_override: Path | None = None) -> int:
+def run_evaluation(
+    config_path: Path,
+    output_dir_override: Path | None = None,
+    *,
+    view_mode_override: str | None = None,
+    gate_override_override: float | None = None,
+) -> int:
     from transformers import WhisperTokenizer
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     config = load_eval_config(config_path)
+    # CLI ablation overrides win over the config, then re-validate the combination.
+    if view_mode_override is not None:
+        config["eval"]["view_mode"] = view_mode_override
+        if view_mode_override != "fusion":
+            config["eval"]["gate_override"] = None
+    if gate_override_override is not None:
+        config["eval"]["gate_override"] = gate_override_override
+    if view_mode_override is not None or gate_override_override is not None:
+        validate_eval_config(config)
     output_dir = resolve_output_dir(config, output_dir_override)
     output_dir.mkdir(parents=True, exist_ok=True)
     configure_logging(output_dir)
@@ -426,7 +495,17 @@ def run_evaluation(config_path: Path, output_dir_override: Path | None = None) -
         )
     configure_generation(model, model_config.get("language"), model_config.get("task"))
 
-    logging.info("transcribing %s %s examples (amp=%s)", len(examples), split, amp_enabled)
+    view_mode = str(eval_config.get("view_mode", "fusion"))
+    gate_override = eval_config.get("gate_override")
+    gate_override = None if gate_override is None else float(gate_override)
+    logging.info(
+        "transcribing %s %s examples (amp=%s view_mode=%s gate_override=%s)",
+        len(examples),
+        split,
+        amp_enabled,
+        view_mode,
+        gate_override,
+    )
     hypotheses, clean_view_weights = transcribe_examples(
         model,
         examples,
@@ -437,6 +516,8 @@ def run_evaluation(config_path: Path, output_dir_override: Path | None = None) -
         batch_size=int(eval_config["batch_size"]),
         generation_max_length=int(eval_config["generation_max_length"]),
         amp_enabled=amp_enabled,
+        view_mode=view_mode,
+        gate_override=gate_override,
     )
     references = [example.transcript for example in examples]
 
@@ -461,6 +542,8 @@ def run_evaluation(config_path: Path, output_dir_override: Path | None = None) -
         "datasets": [str(path) for path in dataset_dirs],
         "split": split,
         "examples": len(examples),
+        "view_mode": view_mode,
+        "gate_override": gate_override,
         **aggregate_metrics,
         "view_usage": view_usage,
         "dataset_metrics": dataset_error_metrics(examples, references, hypotheses),
@@ -501,8 +584,33 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--config", required=True, type=Path, help="YAML evaluation config path.")
     parser.add_argument("--output-dir", type=Path, default=None, help="Optional evaluation output directory override.")
+    parser.add_argument(
+        "--view-mode",
+        choices=VIEW_MODES,
+        default=None,
+        help=(
+            "Ablation: which encoder stream feeds the decoder. 'fusion' (default) uses the full "
+            "dual-view fusion; 'noisy' runs the backbone on raw audio (enhancer+fusion skipped); "
+            "'enhanced' is the enhancer-alone path. Overrides eval.view_mode in the config."
+        ),
+    )
+    parser.add_argument(
+        "--gate-override",
+        type=float,
+        default=None,
+        help=(
+            "Ablation: pin the fusion blend gate to this constant in [0, 1] (only with view-mode "
+            "'fusion'). 0.0 disables the enhanced stream, 1.0 disables the noisy stream. Overrides "
+            "eval.gate_override."
+        ),
+    )
     args = parser.parse_args(argv)
-    return run_evaluation(args.config, args.output_dir)
+    return run_evaluation(
+        args.config,
+        args.output_dir,
+        view_mode_override=args.view_mode,
+        gate_override_override=args.gate_override,
+    )
 
 
 if __name__ == "__main__":

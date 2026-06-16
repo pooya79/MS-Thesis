@@ -156,3 +156,85 @@ def test_build_fusion_model_reuses_passed_components() -> None:
     assert isinstance(model, DualViewFusionModel)
     assert model.enhancer is enhancer
     assert model.whisper is whisper
+
+
+def test_gate_override_pins_the_blend_to_a_constant() -> None:
+    # The ablation knob replaces the learned gate with a fixed weight so 0.0 yields
+    # the noisy stream, 1.0 the enhanced stream, and 0.5 the balanced average —
+    # exactly what eval_fusion's --gate-override relies on to isolate the gate.
+    fusion = CrossAttentionFusion(d_model=16)
+    noisy = torch.randn(2, 5, 16)
+    enhanced = torch.randn(2, 5, 16)
+    # Identity-init cross-attn layers leave the streams untouched, so the override
+    # acts directly on (noisy, enhanced).
+    assert torch.allclose(fusion(noisy, enhanced, gate_override=0.0), noisy, atol=1e-5)
+    assert torch.allclose(fusion(noisy, enhanced, gate_override=1.0), enhanced, atol=1e-5)
+    assert torch.allclose(fusion(noisy, enhanced, gate_override=0.5), 0.5 * (noisy + enhanced), atol=1e-5)
+
+
+def test_encode_views_modes_select_the_expected_stream() -> None:
+    whisper = _tiny_whisper()
+    model = DualViewFusionModel(
+        enhancer=build_enhancer({"base_channels": 8, "depth": 2}),
+        whisper=whisper,
+        fusion=build_fusion(int(whisper.config.d_model)),
+    ).eval()
+    noisy_mel = torch.randn(2, 80, 100)
+
+    # "noisy" skips the enhancer entirely (no enhanced_mel) and decodes the raw view.
+    enhanced_mel, noisy_h = model.encode_views(noisy_mel, view_mode="noisy")
+    assert enhanced_mel is None
+    expected_noisy = model.encoder(noisy_mel).last_hidden_state
+    assert torch.allclose(noisy_h, expected_noisy, atol=1e-5)
+
+    # "enhanced" is the enhancer-alone path: encoder hidden states of the enhanced mel.
+    enhanced_mel, enhanced_h = model.encode_views(noisy_mel, view_mode="enhanced")
+    assert enhanced_mel is not None and enhanced_mel.shape == noisy_mel.shape
+    expected_enhanced = model.encoder(model.enhancer(noisy_mel)).last_hidden_state
+    assert torch.allclose(enhanced_h, expected_enhanced, atol=1e-5)
+
+
+def test_encode_views_rejects_gate_override_outside_fusion() -> None:
+    import pytest
+
+    whisper = _tiny_whisper()
+    model = DualViewFusionModel(
+        enhancer=build_enhancer({"base_channels": 8, "depth": 2}),
+        whisper=whisper,
+        fusion=build_fusion(int(whisper.config.d_model)),
+    )
+    with pytest.raises(ValueError):
+        model.encode_views(torch.randn(1, 80, 100), view_mode="noisy", gate_override=0.0)
+
+
+def _eval_config(**eval_overrides):
+    import copy
+
+    from ml.fusion.eval_fusion import DEFAULT_EVAL_CONFIG
+
+    config = copy.deepcopy(DEFAULT_EVAL_CONFIG)
+    config["model"]["checkpoint"] = "fusion_model.pt"
+    config["eval"].update(eval_overrides)
+    return config
+
+
+def test_eval_config_accepts_ablation_knobs() -> None:
+    from ml.fusion.eval_fusion import validate_eval_config
+
+    validate_eval_config(_eval_config(view_mode="noisy"))
+    validate_eval_config(_eval_config(view_mode="enhanced"))
+    validate_eval_config(_eval_config(view_mode="fusion", gate_override=0.0))
+    validate_eval_config(_eval_config(view_mode="fusion", gate_override=1.0))
+
+
+def test_eval_config_rejects_bad_ablation_knobs() -> None:
+    import pytest
+
+    from ml.fusion.eval_fusion import validate_eval_config
+
+    with pytest.raises(ValueError):
+        validate_eval_config(_eval_config(view_mode="bogus"))
+    with pytest.raises(ValueError):  # gate override only valid in fusion mode
+        validate_eval_config(_eval_config(view_mode="noisy", gate_override=0.5))
+    with pytest.raises(ValueError):  # outside [0, 1]
+        validate_eval_config(_eval_config(gate_override=1.5))
