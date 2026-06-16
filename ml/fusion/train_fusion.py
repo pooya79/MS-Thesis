@@ -100,6 +100,13 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "lr_scheduler": "cosine",
             "warmup_steps": 500,
             "lambda": 1.0,
+            # Encoder-feature-matching loss (D5+): when > 0, add
+            # feature_match_weight * L1(encoder(enhanced), encoder(clean)) to the
+            # warm-up objective so the enhancer is optimised to look clean to the
+            # Whisper encoder, not just to minimise raw mel L1 (a weak ASR proxy).
+            # 0.0 keeps the original mel-L1-only warm-up. lambda weights L_enh when
+            # feature matching is on. Needs base_asr_checkpoint for the encoder.
+            "feature_match_weight": 0.0,
             "num_workers": 4,
             "log_every": 50,
             "eval_every": 500,
@@ -535,23 +542,45 @@ def make_step_bar(desc: str, total: int, initial: int = 0) -> Any:
         return None
 
 
-def evaluate_enhancer(enhancer: Any, loader: Any, device: str, amp_enabled: bool) -> dict[str, float]:
-    """Mean L_enh over the dev loader (Stage 0 has no ASR objective to score)."""
+def evaluate_enhancer(
+    enhancer: Any,
+    loader: Any,
+    device: str,
+    amp_enabled: bool,
+    *,
+    feat_encoder: Any = None,
+    feat_weight: float = 0.0,
+    lam: float = 1.0,
+) -> dict[str, float]:
+    """Mean L_enh over the dev loader (Stage 0 has no ASR objective to score).
+
+    When ``feat_encoder`` is given (warm-up feature matching enabled), also reports
+    the encoder-feature-matching loss ``L_feat`` and the combined warm-up objective
+    ``L_warmup = lam*L_enh + feat_weight*L_feat`` — the latter is what best-checkpoint
+    selection minimises in that mode (see :func:`eval_score`).
+    """
     import torch
 
     was_training = enhancer.training
     enhancer.eval()
-    total, count = 0.0, 0
+    total_enh, total_feat, count = 0.0, 0.0, 0
     with torch.no_grad():
         for batch in make_progress_bar(loader, "stage0 eval"):
             noisy = batch["noisy_mel"].to(device)
             clean = batch["clean_mel"].to(device)
             with torch.amp.autocast("cuda", enabled=amp_enabled):
-                loss = enhancement_l1_loss(enhancer(noisy), clean)
-            total += float(loss.detach())
+                enhanced = enhancer(noisy)
+                total_enh += float(enhancement_l1_loss(enhanced, clean).detach())
+                if feat_encoder is not None:
+                    total_feat += float(feature_match_loss(feat_encoder, enhanced, clean).detach())
             count += 1
     enhancer.train(was_training)
-    return {"L_enh": total / max(1, count)}
+    n = max(1, count)
+    metrics = {"L_enh": total_enh / n}
+    if feat_encoder is not None:
+        metrics["L_feat"] = total_feat / n
+        metrics["L_warmup"] = lam * metrics["L_enh"] + feat_weight * metrics["L_feat"]
+    return metrics
 
 
 def evaluate_fusion(
@@ -626,8 +655,14 @@ def evaluate_fusion(
 
 
 def eval_score(stage_name: str, metrics: dict[str, float]) -> float:
-    """Scalar to MINIMISE for best-checkpoint selection: WER for ASR stages, L_enh for warm-up."""
-    return float(metrics["L_enh"] if stage_name == "warmup" else metrics["wer"])
+    """Scalar to MINIMISE for best-checkpoint selection: WER for ASR stages, warm-up loss otherwise.
+
+    For warm-up the score is the combined ``L_warmup`` (mel L1 + feature matching)
+    when feature matching is enabled, falling back to plain ``L_enh`` otherwise.
+    """
+    if stage_name != "warmup":
+        return float(metrics["wer"])
+    return float(metrics.get("L_warmup", metrics["L_enh"]))
 
 
 def build_lr_scheduler(optimizer: Any, stage: dict[str, Any], max_steps: int) -> Any:
@@ -699,9 +734,20 @@ def run_stage_warmup(
     eval_path = run_dir / "logs" / "eval_metrics.jsonl"
     checkpoint_dir = run_dir / "checkpoints" / STAGE_DIRS["warmup"]
 
+    # ASR-aware warm-up: when feature_match_weight > 0, also pull the enhanced mel's
+    # Whisper-encoder features toward the clean mel's. lambda then weights L_enh.
+    feat_weight = float(stage.get("feature_match_weight", 0.0) or 0.0)
+    lam = float(stage.get("lambda", 1.0))
+    # The Whisper encoder only accepts the full [80, 3000] window, so feature
+    # matching forces full-window crops (the cheap short crops can't be encoded).
+    segment_seconds = stage.get("segment_seconds")
+    if feat_weight > 0 and segment_seconds is not None:
+        logging.info("stage0 warmup: feature matching needs full 30s windows; ignoring segment_seconds=%s", segment_seconds)
+        segment_seconds = None
+
     train_dataset = build_train_dataset(
         config,
-        segment_seconds=stage.get("segment_seconds"),
+        segment_seconds=segment_seconds,
         return_labels=False,
         tokenizer=None,
         include_clean=False,  # warm-up trains the enhancer on degraded/clean pairs only
@@ -718,6 +764,10 @@ def run_stage_warmup(
     optimizer = torch.optim.Adam(enhancer.parameters(), lr=float(stage["lr_enhancer"]))
     amp_enabled = use_amp(config["mixed_precision"], device)
     scaler = torch.amp.GradScaler("cuda", enabled=amp_enabled)
+
+    feat_encoder = load_feature_encoder(config, device) if feat_weight > 0 else None
+    if feat_encoder is not None:
+        logging.info("stage0 warmup: feature matching on (weight=%s, lambda=%s)", feat_weight, lam)
 
     max_steps = int(stage["max_steps"])
     log_every = int(stage.get("log_every", 50))
@@ -743,7 +793,12 @@ def run_stage_warmup(
             optimizer.zero_grad(set_to_none=True)
             with torch.amp.autocast("cuda", enabled=amp_enabled):
                 enhanced = enhancer(noisy)
-                loss = enhancement_l1_loss(enhanced, clean)
+                l_enh = enhancement_l1_loss(enhanced, clean)
+                if feat_encoder is not None:
+                    l_feat = feature_match_loss(feat_encoder, enhanced, clean)
+                    loss = lam * l_enh + feat_weight * l_feat
+                else:
+                    loss = l_enh
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
@@ -753,21 +808,35 @@ def run_stage_warmup(
             if progress is not None:
                 progress.update(1)
             if step % log_every == 0 or step == max_steps:
-                loss_value = float(loss.detach())
+                l_enh_value = float(l_enh.detach())
                 lr = optimizer.param_groups[0]["lr"]
-                logging.info("stage0 step=%s L_enh=%.4f lr=%.2e", step, loss_value, lr)
+                record = {"timestamp": utc_now(), "stage": "warmup", "step": step, "L_enh": l_enh_value, "lr": lr}
+                postfix = {"L_enh": f"{l_enh_value:.4f}", "lr": f"{lr:.2e}"}
+                if feat_encoder is not None:
+                    record["L_feat"] = float(l_feat.detach())
+                    record["loss"] = float(loss.detach())
+                    postfix["L_feat"] = f"{record['L_feat']:.4f}"
+                    logging.info("stage0 step=%s loss=%.4f L_enh=%.4f L_feat=%.4f lr=%.2e", step, record["loss"], l_enh_value, record["L_feat"], lr)
+                else:
+                    logging.info("stage0 step=%s L_enh=%.4f lr=%.2e", step, l_enh_value, lr)
                 if progress is not None:
-                    progress.set_postfix(L_enh=f"{loss_value:.4f}", lr=f"{lr:.2e}")
-                append_jsonl(metrics_path, {"timestamp": utc_now(), "stage": "warmup", "step": step, "L_enh": loss_value, "lr": lr})
+                    progress.set_postfix(**postfix)
+                append_jsonl(metrics_path, record)
             if dev_loader is not None and eval_every and (step % eval_every == 0 or step == max_steps):
-                metrics = evaluate_enhancer(enhancer, dev_loader, device, amp_enabled)
-                logging.info("stage0 eval step=%s L_enh=%.4f", step, metrics["L_enh"])
+                metrics = evaluate_enhancer(
+                    enhancer, dev_loader, device, amp_enabled,
+                    feat_encoder=feat_encoder, feat_weight=feat_weight, lam=lam,
+                )
+                if "L_feat" in metrics:
+                    logging.info("stage0 eval step=%s L_enh=%.4f L_feat=%.4f L_warmup=%.4f", step, metrics["L_enh"], metrics["L_feat"], metrics["L_warmup"])
+                else:
+                    logging.info("stage0 eval step=%s L_enh=%.4f", step, metrics["L_enh"])
                 append_jsonl(eval_path, {"timestamp": utc_now(), "stage": "warmup", "step": step, **metrics})
                 score = eval_score("warmup", metrics)
                 if score < best_score:
                     best_score = score
                     save_enhancer_checkpoint(checkpoint_dir / "best.pt", enhancer, config, step)
-                    logging.info("stage0 new best L_enh=%.4f -> best.pt", score)
+                    logging.info("stage0 new best score=%.4f -> best.pt", score)
             if save_every and step % save_every == 0:
                 save_enhancer_checkpoint(checkpoint_dir / "last.pt", enhancer, config, step, optimizer=optimizer, scaler=scaler, scheduler=scheduler)
     if progress is not None:
@@ -819,6 +888,43 @@ def load_enhancer_state(enhancer: Any, checkpoint_path: Path) -> None:
 
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     enhancer.load_state_dict(checkpoint["model_state"])
+
+
+def load_feature_encoder(config: dict[str, Any], device: str) -> Any:
+    """Load the frozen Whisper *encoder* for the warm-up feature-matching loss.
+
+    The enhancer is trained to make ``encoder(enhanced_mel)`` match
+    ``encoder(clean_mel)`` — an ASR-aware perceptual target far more correlated
+    with WER than raw mel L1. The encoder comes from the same fine-tuned backbone
+    Stages 1-2 use (``base_asr_checkpoint``), is frozen, and put in eval() so its
+    dropout/BN are inert; only the enhancer receives gradients through it.
+    """
+    from ml.fusion.model import load_whisper_backbone
+
+    whisper = load_whisper_backbone(
+        str(config.get("base_asr_checkpoint") or ""),
+        model_name=str(config.get("model_name", "openai/whisper-small")),
+    )
+    encoder = whisper.get_encoder()
+    for param in encoder.parameters():
+        param.requires_grad_(False)
+    encoder.eval().to(device)
+    return encoder
+
+
+def feature_match_loss(encoder: Any, enhanced_mel: Any, clean_mel: Any) -> Any:
+    """L1 between the Whisper-encoder features of the enhanced vs clean log-Mel.
+
+    The clean-side features are detached (no_grad): they are a fixed target, so
+    only the enhancer is pulled toward producing encoder-clean features.
+    """
+    import torch
+    from torch.nn import functional as F
+
+    enhanced_features = encoder(enhanced_mel).last_hidden_state
+    with torch.no_grad():
+        clean_features = encoder(clean_mel).last_hidden_state
+    return F.l1_loss(enhanced_features, clean_features)
 
 
 def load_tokenizer(config: dict[str, Any]) -> Any:

@@ -40,6 +40,13 @@ enhancer:
   type: residual_unet
   base_channels: 32
   depth: 3
+  # Optional long-range temporal model at the U-Net bottleneck (identity-init, so
+  # it never perturbs the Stage 0 identity start). none | transformer | gru.
+  bottleneck: none
+  bottleneck_layers: 2
+  bottleneck_heads: 4
+  bottleneck_dim: 256
+  bottleneck_dropout: 0.0
 
 # Encoder-feature-space fusion (D4). cross_attention lets the noisy and enhanced
 # Whisper-encoder streams exchange context before a gated merge; `gated` is the
@@ -59,6 +66,11 @@ stages:
     lr_scheduler: cosine       # cosine decay to 0; "none"/"constant" keeps a flat LR
     warmup_steps: 500          # linear ramp 0 -> lr_enhancer, then cosine decay
     lambda: 1.0
+    # ASR-aware warm-up: when > 0, add feature_match_weight * L1(encoder(enhanced),
+    # encoder(clean)) so the enhancer is optimised to look clean to the Whisper
+    # encoder, not just to minimise raw mel L1. lambda then weights L_enh. Needs
+    # base_asr_checkpoint and forces full 30s windows (segment_seconds ignored).
+    feature_match_weight: 0.0
     num_workers: 4
     log_every: 50
     eval_every: 500            # dev L_enh; best checkpoint -> best.pt

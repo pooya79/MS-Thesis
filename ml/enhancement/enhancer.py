@@ -66,12 +66,112 @@ def _safe_groups(groups: int, channels: int) -> int:
     return max(1, g)
 
 
+def _valid_heads(dim: int, requested: int) -> int:
+    """Largest divisor of ``dim`` that is ``<= requested`` (``>= 1``)."""
+    heads = min(max(1, requested), dim)
+    while heads > 1 and dim % heads != 0:
+        heads -= 1
+    return heads
+
+
+def _downsampled_size(size: int, depth: int) -> int:
+    """Size after ``depth`` stride-2, kernel-3, pad-1 convs (the U-Net down path)."""
+    for _ in range(depth):
+        size = (size + 2 * 1 - 3) // 2 + 1
+    return size
+
+
+class TemporalBottleneck(nn.Module):
+    """Sequence model over the time axis at the U-Net bottleneck.
+
+    The conv U-Net only sees a few hundred ms of temporal context, which is too
+    little for noise/reverb suppression. This block adds long-range temporal
+    modelling where the feature map is smallest (cheapest): the ``[B, C, F, T]``
+    bottleneck is flattened to a ``[B, T, C*F]`` sequence, projected to ``dim``,
+    passed through ``layers`` of a transformer encoder (or a bidirectional GRU),
+    projected back, and added as a **residual**. The output projection is
+    zero-initialised so the block starts as the exact identity — preserving the
+    enhancer's identity-init property (D8) so it never destabilises early training.
+    """
+
+    def __init__(
+        self,
+        channels: int,
+        freq: int,
+        *,
+        kind: str = "transformer",
+        layers: int = 2,
+        heads: int = 4,
+        dim: int = 256,
+        dropout: float = 0.0,
+    ) -> None:
+        super().__init__()
+        if kind not in {"transformer", "gru"}:
+            raise ValueError(f"unknown bottleneck kind {kind!r}; expected 'transformer' or 'gru'")
+        if layers < 1:
+            raise ValueError("bottleneck layers must be >= 1")
+        self.kind = kind
+        self.in_dim = int(channels) * int(freq)
+        self.proj_in = nn.Linear(self.in_dim, dim)
+        if kind == "transformer":
+            layer = nn.TransformerEncoderLayer(
+                d_model=dim,
+                nhead=_valid_heads(dim, heads),
+                dim_feedforward=dim * 4,
+                dropout=dropout,
+                activation="gelu",
+                batch_first=True,
+                norm_first=True,
+            )
+            # norm_first layers can't use the nested-tensor fast path; disable it
+            # explicitly to skip the spurious warning.
+            self.seq = nn.TransformerEncoder(layer, num_layers=layers, enable_nested_tensor=False)
+            seq_out = dim
+        else:
+            self.seq = nn.GRU(
+                dim,
+                dim,
+                num_layers=layers,
+                batch_first=True,
+                bidirectional=True,
+                dropout=dropout if layers > 1 else 0.0,
+            )
+            seq_out = dim * 2
+        # Zero-init the output projection -> residual is 0 at start -> identity.
+        self.proj_out = nn.Linear(seq_out, self.in_dim)
+        nn.init.zeros_(self.proj_out.weight)
+        nn.init.zeros_(self.proj_out.bias)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """``x``: ``[B, C, F, T]`` -> ``[B, C, F, T]`` with temporal context mixed in."""
+        b, c, f, t = x.shape
+        if c * f != self.in_dim:
+            raise ValueError(
+                f"TemporalBottleneck expected C*F={self.in_dim} at the bottleneck, got C={c} F={f}; "
+                "check base_channels/depth match the configured bottleneck."
+            )
+        seq = x.permute(0, 3, 1, 2).reshape(b, t, c * f)  # [B, T, C*F]
+        h = self.proj_in(seq)
+        if self.kind == "gru":
+            h, _ = self.seq(h)
+        else:
+            h = self.seq(h)
+        seq = seq + self.proj_out(h)  # residual; proj_out is zero-init -> identity at start
+        return seq.reshape(b, t, c, f).permute(0, 2, 3, 1).contiguous()
+
+
 class ResidualUNetEnhancer(nn.Module):
     """Lightweight residual 2D-conv U-Net mapping noisy -> clean log-Mel.
 
     The net operates on ``[B, 1, n_mels, T]`` (the log-Mel as an image),
     down/upsamples ``depth`` times with stride-2 convs and skip connections,
     and adds its output as a residual to the input log-Mel.
+
+    ``bottleneck`` optionally inserts a :class:`TemporalBottleneck` (``"transformer"``
+    or ``"gru"``) at the deepest feature map to add the long-range temporal context
+    the purely-convolutional path lacks; ``"none"`` (default) keeps the original
+    lightweight net. The bottleneck is identity-initialised, so enabling it does not
+    change the identity-init behaviour Stage 0 relies on.
     """
 
     def __init__(
@@ -81,6 +181,11 @@ class ResidualUNetEnhancer(nn.Module):
         depth: int = 3,
         groups: int = 8,
         residual: bool = True,
+        bottleneck: str = "none",
+        bottleneck_layers: int = 2,
+        bottleneck_heads: int = 4,
+        bottleneck_dim: int = 256,
+        bottleneck_dropout: float = 0.0,
     ) -> None:
         super().__init__()
         if depth < 1:
@@ -100,6 +205,22 @@ class ResidualUNetEnhancer(nn.Module):
             )
             self.down_blocks.append(_ConvBlock(out_channels, out_channels, groups))
             channels = out_channels
+
+        # Optional long-range temporal model at the bottleneck (identity at init).
+        # `channels` is now the bottleneck width; the freq axis is downsampled
+        # `depth` times by the stride-2 convs above.
+        if bottleneck in {None, "none"}:
+            self.bottleneck: nn.Module = nn.Identity()
+        else:
+            self.bottleneck = TemporalBottleneck(
+                channels,
+                _downsampled_size(n_mels, depth),
+                kind=str(bottleneck),
+                layers=int(bottleneck_layers),
+                heads=int(bottleneck_heads),
+                dim=int(bottleneck_dim),
+                dropout=float(bottleneck_dropout),
+            )
 
         self.up_samplers = nn.ModuleList()
         self.up_blocks = nn.ModuleList()
@@ -128,6 +249,8 @@ class ResidualUNetEnhancer(nn.Module):
         for downsampler, block in zip(self.downsamplers, self.down_blocks):
             skips.append(x)
             x = block(downsampler(x))
+
+        x = self.bottleneck(x)
 
         for upsampler, block, skip in zip(
             self.up_samplers, self.up_blocks, reversed(skips)

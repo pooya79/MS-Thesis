@@ -5,6 +5,7 @@ import torch
 
 from ml.enhancement.enhancer import (
     ResidualUNetEnhancer,
+    TemporalBottleneck,
     build_enhancer,
     enhancement_l1_loss,
 )
@@ -54,6 +55,39 @@ def test_enhancement_l1_loss_finite_and_zero_on_match() -> None:
     loss = enhancement_l1_loss(clean + 1.0, clean)
     assert torch.isfinite(loss)
     assert loss.item() == pytest.approx(1.0, abs=1e-5)
+
+
+@pytest.mark.parametrize("kind", ["transformer", "gru"])
+@pytest.mark.parametrize("time_frames", [400, 401])
+def test_enhancer_with_bottleneck_preserves_shape_and_identity_init(kind: str, time_frames: int) -> None:
+    model = build_enhancer(
+        {"type": "residual_unet", "base_channels": 16, "depth": 3, "bottleneck": kind, "bottleneck_dim": 64}
+    ).eval()
+    mel = torch.randn(2, 80, time_frames)
+    with torch.no_grad():
+        out = model(mel)
+    assert out.shape == mel.shape
+    # Identity-init: zero-init U-Net out_proj + zero-init bottleneck out_proj -> input.
+    assert torch.allclose(out, mel, atol=1e-5)
+
+
+def test_bottleneck_is_trainable_away_from_identity() -> None:
+    # After a few steps the bottleneck contributes a non-zero residual.
+    torch.manual_seed(0)
+    model = ResidualUNetEnhancer(base_channels=8, depth=2, bottleneck="gru", bottleneck_dim=32)
+    noisy = torch.randn(1, 80, 128)
+    clean = torch.randn(1, 80, 128)
+    opt = torch.optim.Adam(model.parameters(), lr=1e-2)
+    for _ in range(20):
+        opt.zero_grad()
+        enhancement_l1_loss(model(noisy), clean).backward()
+        opt.step()
+    assert any(p.grad is not None and p.grad.abs().sum() > 0 for p in model.bottleneck.parameters())
+
+
+def test_bottleneck_rejects_unknown_kind() -> None:
+    with pytest.raises(ValueError):
+        TemporalBottleneck(channels=16, freq=10, kind="lstm")
 
 
 def test_enhancer_overfits_tiny_batch() -> None:

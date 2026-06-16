@@ -26,6 +26,7 @@ SCRIPT_MODULES = [
     "ml.asr.eval_fastconformer",
     "ml.fusion.train_fusion",
     "ml.fusion.eval_fusion",
+    "ml.enhancement.diagnose_enhancement",
 ]
 
 

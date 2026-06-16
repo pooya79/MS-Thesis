@@ -627,3 +627,88 @@ def test_train_fusion_help(capsys: pytest.CaptureFixture[str]) -> None:
     out = capsys.readouterr().out
     assert "3-stage" in out
     assert "--resume-from-stage" in out
+
+
+def _tiny_whisper_encoder():
+    """A tiny Whisper encoder (offline) for feature-matching / diagnostic tests."""
+    from transformers import WhisperConfig, WhisperForConditionalGeneration
+
+    config = WhisperConfig(
+        vocab_size=64, num_mel_bins=80, d_model=16,
+        encoder_layers=1, decoder_layers=1,
+        encoder_attention_heads=2, decoder_attention_heads=2,
+        encoder_ffn_dim=32, decoder_ffn_dim=32,
+        max_source_positions=1500, max_target_positions=64,
+        pad_token_id=0, bos_token_id=1, eos_token_id=2, decoder_start_token_id=1,
+    )
+    encoder = WhisperForConditionalGeneration(config).get_encoder().eval()
+    for p in encoder.parameters():
+        p.requires_grad_(False)
+    return encoder
+
+
+def test_warmup_feature_matching_logs_and_runs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import ml.fusion.train_fusion as train_fusion
+
+    monkeypatch.setattr(train_fusion, "load_feature_encoder", lambda config, device: _tiny_whisper_encoder())
+    root = _make_degraded_dataset(tmp_path / "ds", splits=("train", "dev"))
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    config = load_fusion_config(_tiny_config(root, run_dir))
+    # Turn feature matching on and add a dev eval so L_feat shows up in both logs.
+    config["stages"]["warmup"].update({"feature_match_weight": 0.5, "eval_every": 3})
+    config["valid_split"] = "dev"
+    enhancer = build_enhancer(config["enhancer"])
+    train_fusion.run_stage_warmup(config, run_dir, enhancer, "cpu")
+
+    train_rows = [json.loads(l) for l in (run_dir / "logs" / "train_metrics.jsonl").read_text().splitlines()]
+    assert any("L_feat" in r for r in train_rows if r["stage"] == "warmup")
+    eval_rows = [json.loads(l) for l in (run_dir / "logs" / "eval_metrics.jsonl").read_text().splitlines()]
+    assert any({"L_feat", "L_warmup"} <= r.keys() for r in eval_rows)
+
+
+def test_eval_score_warmup_uses_combined_when_present() -> None:
+    # Plain L_enh when feature matching is off; combined L_warmup when on.
+    assert eval_score("warmup", {"L_enh": 0.5}) == 0.5
+    assert eval_score("warmup", {"L_enh": 0.5, "L_feat": 0.2, "L_warmup": 0.7}) == 0.7
+
+
+def test_diagnose_enhancement_identity_baseline(tmp_path: Path) -> None:
+    from ml.enhancement.diagnose_enhancement import main as diagnose_main
+
+    root = _make_degraded_dataset(tmp_path / "ds", splits=("dev",))
+    out_dir = tmp_path / "diag"
+    rc = diagnose_main([
+        "--dataset", str(root), "--split", "dev",
+        "--device", "cpu", "--batch-size", "2", "--output-dir", str(out_dir),
+    ])
+    assert rc == 0
+    report = json.loads((out_dir / "diagnosis.json").read_text())
+    # Identity baseline only (no checkpoint): headroom present, no trained metric.
+    assert report["overall"]["identity_L_enh"] > 0
+    assert "trained_L_enh" not in report["overall"]
+    assert "narrowband" in report["by_bandwidth"]
+
+
+def test_diagnose_enhancement_with_checkpoint_reports_captured(tmp_path: Path) -> None:
+    from ml.enhancement.diagnose_enhancement import main as diagnose_main
+    from ml.fusion.train_fusion import save_enhancer_checkpoint
+
+    config = load_fusion_config_from_dict({"enhancer": {"type": "residual_unet", "base_channels": 8, "depth": 2}})
+    enhancer = build_enhancer(config["enhancer"])
+    ckpt = tmp_path / "enhancer.pt"
+    save_enhancer_checkpoint(ckpt, enhancer, config, step=0)
+
+    root = _make_degraded_dataset(tmp_path / "ds", splits=("dev",))
+    out_dir = tmp_path / "diag"
+    rc = diagnose_main([
+        "--dataset", str(root), "--split", "dev", "--enhancer-checkpoint", str(ckpt),
+        "--device", "cpu", "--batch-size", "2", "--output-dir", str(out_dir), "--dump-mels", "1",
+    ])
+    assert rc == 0
+    report = json.loads((out_dir / "diagnosis.json").read_text())
+    overall = report["overall"]
+    assert "trained_L_enh" in overall and "captured" in overall
+    # An identity-init enhancer leaves the mel unchanged -> trained ~= identity.
+    assert overall["trained_L_enh"] == pytest.approx(overall["identity_L_enh"], rel=1e-3)
+    assert (out_dir / "mels").is_dir() and any((out_dir / "mels").glob("*_noisy.npy"))

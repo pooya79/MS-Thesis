@@ -10,12 +10,14 @@ from __future__ import annotations
 
 from ml.enhancement.enhancer import (
     ResidualUNetEnhancer,
+    TemporalBottleneck,
     build_enhancer,
     enhancement_l1_loss,
 )
 
 __all__ = [
     "ResidualUNetEnhancer",
+    "TemporalBottleneck",
     "build_enhancer",
     "enhancement_l1_loss",
 ]
