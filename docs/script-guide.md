@@ -15,6 +15,7 @@ uv run python -m ml.speech_data.scripts.generate_random_degraded_clip --help
 uv run python -m ml.speech_data.generate_degraded_dataset --help
 uv run python -m ml.speech_data.generate_degraded_pairs --help
 uv run python -m ml.speech_data.inspect_manifest --help
+uv run python -m ml.speech_data.validate_degraded_dataset --help
 uv run python -m ml.asr.train_whisper_small --help
 uv run python -m ml.asr.eval_whisper_small --help
 uv run python -m ml.asr.train_fastconformer --help
@@ -250,6 +251,18 @@ Inspect a generated speech-enhancement manifest:
 uv run python -m ml.speech_data.inspect_manifest \
   data/speech_enhancement/manifests/se_train_pairs.jsonl
 ```
+
+## Degraded Dataset Validation
+
+Check that a degraded dataset's noisy/clean pairs are actually trainable — the enhancer is trained to map the noisy clip to the *reconstructed* bandwidth-aligned clean target, so misaligned, mislabeled, or no-op pairs silently corrupt `L_enh`. This validates pair **consistency** (it does not re-run the codec/network degradation, which is not bit-reproducible) across four axes: **alignment** (cross-correlation lag between noisy and reconstructed clean), **degradation magnitude** (waveform SNR + mel L1, by `target_bandwidth`/channel/codec), **bandwidth consistency** (fraction of the noisy clip's energy above the recorded channel cutoff — ~0 for narrowband / wideband-filtered), and **metadata completeness** (the fields the target reconstruction needs). It flags clips whose lag reaches `--max-lag-ms`, whose degradation is a near no-op (`--noop-rel-l2`), whose band-limiting is violated (`--hf-tolerance`), or with missing metadata:
+
+```bash
+uv run python -m ml.speech_data.validate_degraded_dataset \
+  --dataset data/cv-corpus-25.0-degraded-v2 \
+  --sample 300 --output-dir artifacts/degraded_validation
+```
+
+`--dataset` is a degraded `generate_degraded_dataset` directory (repeatable). `--split` defaults to all splits; `--sample N` randomly checks N pairs per dataset (0 = all) under `--seed`. `--clean-target` matches the training target mode. `--output-dir` writes `validation.json` (per-dataset flag counts, overall + per-`target_bandwidth` distributions, and up to 50 flagged examples for inspection). A high `misaligned`/`bandwidth_mismatch` count means the data, not the model, is the problem; a high `near_noop` count or low SNR means the degradation is too weak for enhancement to have any headroom.
 
 ## Whisper-small Training
 
