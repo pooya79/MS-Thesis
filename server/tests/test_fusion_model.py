@@ -88,6 +88,24 @@ def test_cross_attention_fusion_picks_valid_head_count() -> None:
     assert out.shape == (1, 4, 12)
 
 
+def test_combine_gate_exposes_blend_weight() -> None:
+    # The shared gate reports the per-channel enhanced-view weight that eval
+    # measures, and the gate reproduces the forward blend exactly.
+    fusion = CrossAttentionFusion(d_model=16, num_layers=2, num_heads=4)
+    fusion.eval()
+    noisy = torch.randn(2, 5, 16)
+    enhanced = torch.randn(2, 5, 16)
+    # Refined streams are what the gate actually sees inside forward; at the
+    # balanced init the cross-attn layers are the identity, so feed the raw views.
+    gate = fusion.combine.gate(noisy, enhanced)
+    assert gate.shape == noisy.shape
+    assert torch.all(gate >= 0.0) and torch.all(gate <= 1.0)
+    # Zero-init gate -> 0.5 everywhere -> balanced average of the two views.
+    assert torch.allclose(gate, torch.full_like(gate, 0.5), atol=1e-6)
+    blended = gate * enhanced + (1.0 - gate) * noisy
+    assert torch.allclose(blended, fusion.combine(noisy, enhanced), atol=1e-6)
+
+
 def test_build_fusion_factory_rejects_unknown_type() -> None:
     import pytest
 

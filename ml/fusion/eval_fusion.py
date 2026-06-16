@@ -10,7 +10,11 @@ config, logs, and a source manifest.
 
 The fusion model is the thesis ASR system end to end: each test clip's Whisper
 log-Mel is the *noisy* view fed to the model, and ``model.generate`` decodes token
-ids from the fused encoder stream exactly as training's dev eval does. Evaluating
+ids from the fused encoder stream exactly as training's dev eval does. A
+``view_usage`` block in ``metrics.json`` additionally reports how much of each
+encoded view the fusion gate used — the mean/median over clips of the enhanced
+(clean) weight ``g`` and the noisy weight ``1 - g`` — with the per-clip weights
+also written to ``predictions.jsonl``. Evaluating
 on a clean (non-degraded) ``test.tsv`` therefore measures how the fused stack
 transcribes that audio as a drop-in ASR model; point ``data.datasets`` at a
 degraded dataset's clip dirs to measure robustness instead.
@@ -214,6 +218,27 @@ def dataset_error_metrics(
     ]
 
 
+def view_usage_metrics(clean_view_weights: list[float]) -> dict[str, Any]:
+    """Summarise how much of each encoded view the fusion gate used across clips.
+
+    ``clean_view_weights`` is the per-example mean fusion gate ``g`` (weight on the
+    enhanced/clean encoder stream); the noisy weight is ``1 - g``. Reports the mean
+    and median of both fractions over the evaluated clips, so a number near 1 means
+    the fusion leaned on the enhanced view and near 0 means it fell back on the raw
+    noisy view.
+    """
+    if not clean_view_weights:
+        return {"examples": 0}
+    clean = np.asarray(clean_view_weights, dtype=np.float64)
+    return {
+        "examples": int(clean.size),
+        "clean_view_weight_mean": float(clean.mean()),
+        "clean_view_weight_median": float(np.median(clean)),
+        "noisy_view_weight_mean": float((1.0 - clean).mean()),
+        "noisy_view_weight_median": float(np.median(1.0 - clean)),
+    }
+
+
 def resolve_device(requested: str) -> str:
     import torch
 
@@ -305,28 +330,47 @@ def transcribe_examples(
     batch_size: int,
     generation_max_length: int,
     amp_enabled: bool,
-) -> list[str]:
-    """Greedily transcribe every clip through the fused ASR stack, in batches."""
+) -> tuple[list[str], list[float]]:
+    """Greedily transcribe every clip through the fused ASR stack, in batches.
+
+    Returns ``(hypotheses, clean_view_weights)``: the decoded transcripts and, per
+    example (same order), the mean fusion gate ``g`` — the fraction of the
+    *enhanced/clean* encoded view the fusion used (``1 - g`` is the noisy view).
+    The gate is captured by a forward hook on ``model.fusion.combine`` (the shared
+    sigmoid gate of both fusion blocks), which fires once per batch when
+    ``encode_views`` runs inside ``generate``.
+    """
     import torch
 
     model.to(device).eval()
+    clean_view_weights: list[float] = []
+
+    def capture_gate(module: Any, args: Any, _output: Any) -> None:
+        noisy_h, enhanced_h = args[0], args[1]
+        gate = module.gate(noisy_h, enhanced_h)  # [B, T, D] weight on the enhanced view
+        clean_view_weights.extend(gate.float().mean(dim=(1, 2)).tolist())
+
+    handle = model.fusion.combine.register_forward_hook(capture_gate)
     hypotheses: list[str] = []
     total_batches = (len(examples) + batch_size - 1) // batch_size
     batch_starts = range(0, len(examples), batch_size)
-    for start in make_progress_bar(batch_starts, "fusion eval", total=total_batches):
-        batch = examples[start : start + batch_size]
-        mels = []
-        for example in batch:
-            audio, source_rate = load_audio(example.audio_path)
-            audio = to_mono(np.asarray(audio, dtype=np.float32))
-            if int(source_rate) != sample_rate:
-                audio = resample_audio(audio, int(source_rate), sample_rate)
-            mels.append(waveform_to_log_mel(audio, sample_rate=sample_rate, model_name=model_name))
-        noisy_mel = torch.stack(mels).to(device)
-        with torch.no_grad(), torch.amp.autocast("cuda", enabled=amp_enabled):
-            pred_ids = model.generate(noisy_mel, max_new_tokens=int(generation_max_length))
-        hypotheses.extend(tokenizer.batch_decode(pred_ids, skip_special_tokens=True))
-    return hypotheses
+    try:
+        for start in make_progress_bar(batch_starts, "fusion eval", total=total_batches):
+            batch = examples[start : start + batch_size]
+            mels = []
+            for example in batch:
+                audio, source_rate = load_audio(example.audio_path)
+                audio = to_mono(np.asarray(audio, dtype=np.float32))
+                if int(source_rate) != sample_rate:
+                    audio = resample_audio(audio, int(source_rate), sample_rate)
+                mels.append(waveform_to_log_mel(audio, sample_rate=sample_rate, model_name=model_name))
+            noisy_mel = torch.stack(mels).to(device)
+            with torch.no_grad(), torch.amp.autocast("cuda", enabled=amp_enabled):
+                pred_ids = model.generate(noisy_mel, max_new_tokens=int(generation_max_length))
+            hypotheses.extend(tokenizer.batch_decode(pred_ids, skip_special_tokens=True))
+    finally:
+        handle.remove()
+    return hypotheses, clean_view_weights
 
 
 def run_evaluation(config_path: Path, output_dir_override: Path | None = None) -> int:
@@ -383,7 +427,7 @@ def run_evaluation(config_path: Path, output_dir_override: Path | None = None) -
     configure_generation(model, model_config.get("language"), model_config.get("task"))
 
     logging.info("transcribing %s %s examples (amp=%s)", len(examples), split, amp_enabled)
-    hypotheses = transcribe_examples(
+    hypotheses, clean_view_weights = transcribe_examples(
         model,
         examples,
         tokenizer,
@@ -397,6 +441,14 @@ def run_evaluation(config_path: Path, output_dir_override: Path | None = None) -
     references = [example.transcript for example in examples]
 
     aggregate_metrics = error_metrics(references, hypotheses)
+    view_usage = view_usage_metrics(clean_view_weights)
+    logging.info(
+        "fusion view usage: clean(enhanced) mean=%.3f median=%.3f | noisy mean=%.3f median=%.3f",
+        view_usage.get("clean_view_weight_mean", float("nan")),
+        view_usage.get("clean_view_weight_median", float("nan")),
+        view_usage.get("noisy_view_weight_mean", float("nan")),
+        view_usage.get("noisy_view_weight_median", float("nan")),
+    )
     metrics = {
         "created_at": utc_now(),
         "config_path": str(config_path),
@@ -410,13 +462,19 @@ def run_evaluation(config_path: Path, output_dir_override: Path | None = None) -
         "split": split,
         "examples": len(examples),
         **aggregate_metrics,
+        "view_usage": view_usage,
         "dataset_metrics": dataset_error_metrics(examples, references, hypotheses),
     }
     write_json(output_dir / "metrics.json", metrics)
 
+    # Align per-clip clean-view weights with examples; tolerate a length mismatch
+    # (e.g. hook never fired) by falling back to None rather than failing the run.
+    clip_weights = clean_view_weights if len(clean_view_weights) == len(examples) else [None] * len(examples)
     predictions_path = output_dir / "predictions.jsonl"
     with predictions_path.open("w", encoding="utf-8") as handle:
-        for index, (example, reference, hypothesis) in enumerate(zip(examples, references, hypotheses, strict=True), start=1):
+        for index, (example, reference, hypothesis, clean_weight) in enumerate(
+            zip(examples, references, hypotheses, clip_weights, strict=True), start=1
+        ):
             handle.write(
                 json.dumps(
                     {
@@ -425,6 +483,8 @@ def run_evaluation(config_path: Path, output_dir_override: Path | None = None) -
                         "dataset": str(example.dataset_dir or example.audio_path.parent),
                         "reference": reference,
                         "hypothesis": hypothesis,
+                        "clean_view_weight": clean_weight,
+                        "noisy_view_weight": None if clean_weight is None else 1.0 - clean_weight,
                     },
                     ensure_ascii=False,
                     sort_keys=True,

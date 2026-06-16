@@ -55,9 +55,19 @@ class _GatedCombine(nn.Module):
         nn.init.zeros_(self.proj_out.weight)
         nn.init.zeros_(self.proj_out.bias)
 
-    def forward(self, noisy_h: torch.Tensor, enhanced_h: torch.Tensor) -> torch.Tensor:
+    def gate(self, noisy_h: torch.Tensor, enhanced_h: torch.Tensor) -> torch.Tensor:
+        """Per-channel blend gate ``g`` of shape ``[B, T, D]``, in ``[0, 1]``.
+
+        ``g`` is the weight on the *enhanced* (clean) stream in
+        ``fused = g * enhanced + (1 - g) * noisy``: near 1 trusts the enhanced
+        view, near 0 falls back on the raw noisy view. Exposed so eval can
+        measure how much of each encoded view the fusion actually used.
+        """
         gate_logits = self.proj_out(self.dropout(self.act(self.proj_in(torch.cat([noisy_h, enhanced_h], dim=-1)))))
-        gate = torch.sigmoid(gate_logits)
+        return torch.sigmoid(gate_logits)
+
+    def forward(self, noisy_h: torch.Tensor, enhanced_h: torch.Tensor) -> torch.Tensor:
+        gate = self.gate(noisy_h, enhanced_h)
         return gate * enhanced_h + (1.0 - gate) * noisy_h
 
 
