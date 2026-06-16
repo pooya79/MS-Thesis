@@ -1,0 +1,32 @@
+# Evaluate a trained dual-view fusion model as a whole ASR system on dataset
+# test.tsv files. Outputs match the Whisper/FastConformer eval layout
+# (metrics.json with aggregate + per-dataset WER/CER, predictions.jsonl, the
+# effective config, logs, and a source manifest).
+model:
+  # Fusion training checkpoint to evaluate. Normally the joint-stage final model;
+  # best.pt or a Stage 1 checkpoint also load. The enhancer/fusion architecture is
+  # read back from the checkpoint, so it need not be repeated here.
+  checkpoint: artifacts/speech_enhancement/fusion/run_001/checkpoints/stage2_joint/fusion_model.pt
+  # Whisper backbone architecture + generation_config source. A local fine-tuned
+  # run dir or a Hub id; the checkpoint overwrites its weights when it carries the
+  # backbone. openai/whisper-small keeps eval self-contained.
+  base_asr_checkpoint: openai/whisper-small
+  model_name: openai/whisper-small
+  processor: null              # tokenizer for decoding; defaults to model_name
+  language: Persian            # Whisper decoder prompt (multilingual backbones)
+  task: transcribe
+
+data:
+  root_dir: data
+  datasets:
+    - cv-corpus-25.0
+  sample_rate: 16000
+  split: test
+
+eval:
+  output_dir: models/asr/fusion/evals
+  name: null                   # null -> timestamped run dir
+  batch_size: 8
+  device: auto                 # auto | cuda | cpu
+  mixed_precision: auto        # auto | true | false (cuda only)
+  generation_max_length: 225   # cap on generated tokens per clip
