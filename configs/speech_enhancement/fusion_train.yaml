@@ -87,6 +87,14 @@ stages:
     save_every: 1000
     eval_max_batches: 50       # cap dev batches so periodic WER stays cheap
     grad_clip: 1.0
+    # Temporary NaN/jump diagnostics: writes per-batch pair IDs, label lengths,
+    # and tensor min/max/finite stats to logs/fusion_debug_metrics.jsonl for this
+    # inclusive step window, plus any non-finite scalar loss outside it. Set
+    # `debug_steps: false` to keep only the automatic non-finite scalar records,
+    # or move start/end around the suspicious training region.
+    debug_steps:
+      start: 5880
+      end: 6020
   joint:         # Stage 2 — E + fusion + Whisper, end-to-end
     max_steps: 40000
     batch_size: 4
@@ -99,3 +107,8 @@ stages:
     save_every: 1000
     eval_max_batches: 50
     grad_clip: 1.0
+    # Same temporary diagnostics are available in Stage 2 if the jump appears
+    # after unfreezing Whisper; adjust the window or set `debug_steps: false`.
+    debug_steps:
+      start: 5880
+      end: 6020

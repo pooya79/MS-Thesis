@@ -525,6 +525,49 @@ def configure_whisper_generation(whisper: Any, language: str | None, task: str |
             generation_config.task = str(task)
 
 
+def _tensor_debug_stats(tensor: Any) -> dict[str, Any]:
+    """Small JSON-safe summary for diagnosing non-finite training batches."""
+    import torch
+
+    detached = tensor.detach()
+    finite = torch.isfinite(detached)
+    finite_count = int(finite.sum().item())
+    total = int(detached.numel())
+    stats: dict[str, Any] = {
+        "shape": list(detached.shape),
+        "dtype": str(detached.dtype).replace("torch.", ""),
+        "all_finite": finite_count == total,
+        "finite_fraction": finite_count / max(1, total),
+    }
+    if finite_count:
+        finite_values = detached[finite].float()
+        stats.update(
+            {
+                "min": float(finite_values.min().item()),
+                "max": float(finite_values.max().item()),
+                "mean": float(finite_values.mean().item()),
+                "abs_max": float(finite_values.abs().max().item()),
+            }
+        )
+    else:
+        stats.update({"min": None, "max": None, "mean": None, "abs_max": None})
+    return stats
+
+
+def _label_lengths(labels: Any) -> list[int]:
+    return (labels != -100).sum(dim=1).detach().cpu().tolist()
+
+
+def _debug_step_window(stage: dict[str, Any]) -> tuple[int | None, int | None]:
+    """Return the inclusive debug step window; false/null disables window logging."""
+    debug_steps = stage.get("debug_steps", {"start": 5880, "end": 6020})
+    if debug_steps is False or debug_steps is None:
+        return None, None
+    if isinstance(debug_steps, dict):
+        return int(debug_steps.get("start", 5880)), int(debug_steps.get("end", 6020))
+    raise ValueError("stage.debug_steps must be a mapping with start/end, false, or null")
+
+
 def make_progress_bar(iterable: Any, desc: str, total: int | None = None) -> Any:
     """Wrap an iterable in a tqdm bar, auto-disabled off-TTY (``disable=None``).
 
@@ -1017,6 +1060,7 @@ def _run_fusion_stage(
     stage = config["stages"][stage_name]
     metrics_path = run_dir / "logs" / "train_metrics.jsonl"
     eval_path = run_dir / "logs" / "eval_metrics.jsonl"
+    debug_path = run_dir / "logs" / "fusion_debug_metrics.jsonl"
     checkpoint_dir = run_dir / "checkpoints" / STAGE_DIRS[stage_name]
 
     tokenizer = load_tokenizer(config)
@@ -1073,6 +1117,7 @@ def _run_fusion_stage(
     eval_max_batches = stage.get("eval_max_batches")
     eval_max_batches = int(eval_max_batches) if eval_max_batches is not None else None
     grad_clip = float(stage.get("grad_clip", 1.0))
+    debug_start, debug_end = _debug_step_window(stage)
     scheduler = build_lr_scheduler(optimizer, stage, max_steps)
     # Stage 1 freezes the backbone, so rolling last.pt can drop it (it equals the
     # base checkpoint); Stage 2 trains it and must keep it.
@@ -1097,12 +1142,63 @@ def _run_fusion_stage(
             noisy = batch["noisy_mel"].to(device)
             clean = batch["clean_mel"].to(device)
             labels = batch["labels"].to(device)
+            next_step = step + 1
             optimizer.zero_grad(set_to_none=True)
             with torch.amp.autocast("cuda", enabled=amp_enabled):
                 out = model(noisy, labels=labels)
                 l_asr = out["loss"]
                 l_enh = enhancement_l1_loss(out["enhanced_mel"], clean)
                 loss = l_asr + lam * l_enh
+            debug_in_window = (
+                debug_start is not None
+                and debug_end is not None
+                and debug_start <= next_step <= debug_end
+            )
+            scalar_nonfinite = not all(
+                bool(torch.isfinite(value.detach()).all().item())
+                for value in (loss, l_asr, l_enh)
+            )
+            if debug_in_window or scalar_nonfinite:
+                tensors = {
+                    "loss": loss,
+                    "L_ASR": l_asr,
+                    "L_enh": l_enh,
+                    "noisy_mel": noisy,
+                    "clean_mel": clean,
+                    "enhanced_mel": out["enhanced_mel"],
+                    "encoder_hidden_states": out["encoder_hidden_states"],
+                    "logits": out["logits"],
+                }
+                tensor_stats = {name: _tensor_debug_stats(value) for name, value in tensors.items()}
+                has_nonfinite = any(not stats["all_finite"] for stats in tensor_stats.values())
+                valid_labels = labels[labels != -100]
+                label_stats = {
+                    "shape": list(labels.shape),
+                    "lengths": _label_lengths(labels),
+                    "min": int(valid_labels.min().item()) if int(valid_labels.numel()) else None,
+                    "max": int(valid_labels.max().item()) if int(valid_labels.numel()) else None,
+                }
+                append_jsonl(
+                    debug_path,
+                    {
+                        "timestamp": utc_now(),
+                        "stage": stage_name,
+                        "step": next_step,
+                        "pair_id": batch.get("pair_id", []),
+                        "label_stats": label_stats,
+                        "tensor_stats": tensor_stats,
+                        "has_nonfinite": has_nonfinite,
+                        "lr": optimizer.param_groups[0]["lr"],
+                    },
+                )
+                if has_nonfinite:
+                    logging.warning(
+                        "%s step=%s non-finite debug batch pair_id=%s -> %s",
+                        stage_name,
+                        next_step,
+                        batch.get("pair_id", []),
+                        debug_path,
+                    )
             scaler.scale(loss).backward()
             if grad_clip > 0:
                 scaler.unscale_(optimizer)
