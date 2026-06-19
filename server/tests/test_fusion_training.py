@@ -21,6 +21,7 @@ from ml.fusion.train_fusion import (
     build_enhancer,
     build_train_dataset,
     clean_dataset_dirs,
+    configure_whisper_generation,
     degraded_dataset_dirs,
     eval_score,
     load_fusion_config,
@@ -234,6 +235,36 @@ def _tiny_dual_view_model(config, *, enhancer=None, whisper=None):
         whisper = WhisperForConditionalGeneration(whisper_config)
     fusion = build_fusion(int(whisper.config.d_model), config.get("fusion"))
     return DualViewFusionModel(enhancer=enhancer, whisper=whisper, fusion=fusion)
+
+
+def test_configure_whisper_generation_clears_legacy_max_length() -> None:
+    from transformers import WhisperConfig, WhisperForConditionalGeneration
+
+    whisper_config = WhisperConfig(
+        vocab_size=64,
+        num_mel_bins=80,
+        d_model=16,
+        encoder_layers=1,
+        decoder_layers=1,
+        encoder_attention_heads=2,
+        decoder_attention_heads=2,
+        encoder_ffn_dim=32,
+        decoder_ffn_dim=32,
+        max_source_positions=1500,
+        max_target_positions=64,
+        pad_token_id=0,
+        bos_token_id=1,
+        eos_token_id=2,
+        decoder_start_token_id=1,
+    )
+    whisper = WhisperForConditionalGeneration(whisper_config)
+    whisper.generation_config.max_length = 20
+    whisper.config.max_length = 20
+
+    configure_whisper_generation(whisper, language="Persian", task="transcribe")
+
+    assert whisper.generation_config.max_length is None
+    assert whisper.config.max_length is None
 
 
 class _FakeTokenizer:

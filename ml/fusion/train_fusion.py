@@ -510,6 +510,21 @@ def build_clean_dev_loader(config: dict[str, Any], stage: dict[str, Any], *, tok
     )
 
 
+def configure_whisper_generation(whisper: Any, language: str | None, task: str | None) -> None:
+    """Configure Whisper generation for eval without conflicting length caps."""
+    generation_config = whisper.generation_config
+    # Transformers may inherit max_length from either generation_config or the
+    # legacy model config. Clear both because eval uses max_new_tokens explicitly.
+    generation_config.max_length = None
+    if hasattr(whisper.config, "max_length"):
+        whisper.config.max_length = None
+    if getattr(generation_config, "lang_to_id", None):
+        if language:
+            generation_config.language = str(language)
+        if task:
+            generation_config.task = str(task)
+
+
 def make_progress_bar(iterable: Any, desc: str, total: int | None = None) -> Any:
     """Wrap an iterable in a tqdm bar, auto-disabled off-TTY (``disable=None``).
 
@@ -609,19 +624,7 @@ def evaluate_fusion(
     gen_max_length = int(config.get("generation_max_length", 225))
     language = config.get("language")
     task = config.get("task")
-    # Only steer the decoder prompt on a genuinely multilingual Whisper (the
-    # fine-tuned backbone). Models without the language token map — e.g. tiny
-    # English-only/test configs — decode from decoder_start_token_id alone.
-    generation_config = model.whisper.generation_config
-    # We cap decoding with ``max_new_tokens`` below; drop Whisper's preset
-    # ``max_length`` (448) so transformers doesn't warn that both are set and
-    # silently ignore one — ``max_new_tokens`` is the knob we actually want.
-    generation_config.max_length = None
-    if getattr(generation_config, "lang_to_id", None):
-        if language:
-            generation_config.language = str(language)
-        if task:
-            generation_config.task = str(task)
+    configure_whisper_generation(model.whisper, language, task)
     # Bar length is the dev loader unless ``max_batches`` caps it shorter.
     bar_total = len(loader) if hasattr(loader, "__len__") else None
     if max_batches is not None:

@@ -67,7 +67,7 @@ from ml.asr.train_whisper_small import (
 )
 from ml.asr.whisper_features import WHISPER_SAMPLE_RATE, waveform_to_log_mel
 from ml.fusion.model import build_fusion_model, is_loadable_checkpoint
-from ml.fusion.train_fusion import load_fusion_checkpoint
+from ml.fusion.train_fusion import configure_whisper_generation, load_fusion_checkpoint
 from ml.utils.audio import load_audio, resample_audio, to_mono
 
 
@@ -345,13 +345,7 @@ def configure_generation(model: Any, language: str | None, task: str | None) -> 
     ``max_new_tokens`` cap applies cleanly, and set language/task only when the
     backbone actually carries the language-token map.
     """
-    generation_config = model.whisper.generation_config
-    generation_config.max_length = None
-    if getattr(generation_config, "lang_to_id", None):
-        if language:
-            generation_config.language = str(language)
-        if task:
-            generation_config.task = str(task)
+    configure_whisper_generation(model.whisper, language, task)
 
 
 def transcribe_examples(
