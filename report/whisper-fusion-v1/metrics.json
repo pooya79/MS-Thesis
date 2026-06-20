@@ -1,0 +1,60 @@
+{
+  "backbone_from_checkpoint": true,
+  "base_asr_checkpoint": "openai/whisper-small",
+  "cer": 0.15458319761705824,
+  "checkpoint": "/home/user01/MS-Thesis/models/asr/fusion/run_001/checkpoints/stage2_joint/fusion_model.pt",
+  "config_path": "configs/speech_enhancement/fusion_eval_v1.yaml",
+  "created_at": "2026-06-16T07:11:09.568410+00:00",
+  "dataset_metrics": [
+    {
+      "cer": 0.13794106689847258,
+      "dataset": "/home/user01/MS-Thesis/data/AGFarsdat_test_normalized",
+      "examples": 10044,
+      "wer": 0.29446558124489763
+    },
+    {
+      "cer": 0.1787126160192506,
+      "dataset": "/home/user01/MS-Thesis/data/cv-corpus-25.0",
+      "examples": 10519,
+      "wer": 0.18365131489673514
+    },
+    {
+      "cer": 0.06682196079960234,
+      "dataset": "/home/user01/MS-Thesis/data/fleurs-normalized",
+      "examples": 871,
+      "wer": 0.21548972671055255
+    },
+    {
+      "cer": 0.11334056399132321,
+      "dataset": "/home/user01/MS-Thesis/data/PersianSpeech_test",
+      "examples": 24,
+      "wer": 0.28776978417266186
+    },
+    {
+      "cer": 0.219140613061948,
+      "dataset": "/home/user01/MS-Thesis/data/persian-speech-corpus-test",
+      "examples": 396,
+      "wer": 0.372572147519069
+    }
+  ],
+  "datasets": [
+    "data/AGFarsdat_test_normalized",
+    "data/cv-corpus-25.0",
+    "data/fleurs-normalized",
+    "data/PersianSpeech_test",
+    "data/persian-speech-corpus-test"
+  ],
+  "device": "cuda",
+  "effective_config_path": "models/asr/fusion/evals/20260616-064845/config/eval.yaml",
+  "examples": 21854,
+  "processor": "openai/whisper-small",
+  "split": "test",
+  "view_usage": {
+    "clean_view_weight_mean": 0.5154383616100742,
+    "clean_view_weight_median": 0.5158659219741821,
+    "examples": 21854,
+    "noisy_view_weight_mean": 0.4845616383899259,
+    "noisy_view_weight_median": 0.48413407802581787
+  },
+  "wer": 0.2434793743924657
+}

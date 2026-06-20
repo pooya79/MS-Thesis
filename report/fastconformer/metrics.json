@@ -1,0 +1,50 @@
+{
+  "cer": 0.1478705526366722,
+  "checkpoint": "/home/user01/MS-Thesis/models/asr/fastconformer/runs/fastconformer-fa/best.pt",
+  "config_path": "configs/fastconformer_eval.yaml",
+  "created_at": "2026-06-11T18:59:50.164355+00:00",
+  "dataset_metrics": [
+    {
+      "cer": 0.14805655590838937,
+      "dataset": "/home/user01/MS-Thesis/data/AGFarsdat_test_normalized",
+      "examples": 10044,
+      "wer": 0.31073150444386255
+    },
+    {
+      "cer": 0.16460831496572503,
+      "dataset": "/home/user01/MS-Thesis/data/cv-corpus-25.0",
+      "examples": 10519,
+      "wer": 0.11684804733085462
+    },
+    {
+      "cer": 0.09944347520979328,
+      "dataset": "/home/user01/MS-Thesis/data/fleurs-normalized",
+      "examples": 871,
+      "wer": 0.29224017554358667
+    },
+    {
+      "cer": 0.13503253796095444,
+      "dataset": "/home/user01/MS-Thesis/data/PersianSpeech_test",
+      "examples": 24,
+      "wer": 0.3069544364508393
+    },
+    {
+      "cer": 0.12216924910607867,
+      "dataset": "/home/user01/MS-Thesis/data/persian-speech-corpus-test",
+      "examples": 396,
+      "wer": 0.33687190375088466
+    }
+  ],
+  "datasets": [
+    "data/AGFarsdat_test_normalized",
+    "data/cv-corpus-25.0",
+    "data/fleurs-normalized",
+    "data/PersianSpeech_test",
+    "data/persian-speech-corpus-test"
+  ],
+  "device": "cuda",
+  "effective_config_path": "models/asr/fastconformer/evals/fastconformer-fa-test/config/eval.yaml",
+  "examples": 21854,
+  "split": "test",
+  "wer": 0.22733278618867178
+}

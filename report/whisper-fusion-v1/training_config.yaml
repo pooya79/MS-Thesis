@@ -1,0 +1,69 @@
+run_dir: models/asr/fusion/run_001
+base_asr_checkpoint: openai/whisper-small
+datasets:
+- data/cv-corpus-25.0
+- data/cv-corpus-25.0-degraded-v2
+- data/FarsSpon_train_dev
+- data/cv-corpus-25.0-long
+- data/FarsSpon_train_dev-long
+- data/cv-corpus-25.0-degraded-long-v2
+- data/fleurs-normalized
+dataset_dir: null
+sample_rate: 16000
+train_split: train
+valid_split: dev
+clean_target: bandwidth_aligned
+model_name: openai/whisper-small
+language: Persian
+task: transcribe
+generation_max_length: 225
+mixed_precision: auto
+device: auto
+seed: 1337
+resume_from_stage: 0
+enhancer:
+  type: residual_unet
+  base_channels: 48
+  depth: 3
+fusion:
+  type: cross_attention
+  num_layers: 3
+  num_heads: 12
+  ffn_ratio: 4.0
+stages:
+  warmup:
+    max_steps: 20000
+    batch_size: 8
+    segment_seconds: 4.0
+    lr_enhancer: 0.0002
+    lr_scheduler: cosine
+    warmup_steps: 500
+    lambda: 1.0
+    num_workers: 4
+    log_every: 50
+    eval_every: 1000
+    save_every: 1000
+    eval_max_batches: null
+  fusion:
+    max_steps: 30000
+    batch_size: 8
+    lr_frontend: 0.0002
+    lr_scheduler: cosine
+    warmup_steps: 1000
+    lambda: 0.3
+    eval_every: 2000
+    save_every: 1000
+    eval_max_batches: 50
+    grad_clip: 1.0
+  joint:
+    max_steps: 50000
+    batch_size: 4
+    lr_frontend: 0.0001
+    lr_whisper: 1.0e-05
+    lr_scheduler: cosine
+    warmup_steps: 2000
+    lambda: 0.1
+    eval_every: 2000
+    save_every: 1000
+    eval_max_batches: 16
+    grad_clip: 1.0
