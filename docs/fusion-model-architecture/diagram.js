@@ -11,9 +11,9 @@
       className: "fusion-group",
       x: 900,
       y: 135,
-      width: 505,
+      width: 535,
       height: 455,
-      label: "Bidirectional cross-attention fusion · 2 layers"
+      label: "Cross-attention fusion · 3 layers · 12 heads · FFN ×4"
     },
     {
       id: "training",
@@ -28,7 +28,7 @@
 
   const nodes = [
     {id: "noisy", x: 30, y: 305, width: 150, height: 100, kind: "input", title: ["Noisy log-Mel"], subtitle: ["input view"], symbol: "x_n"},
-    {id: "enhancer", x: 220, y: 290, width: 190, height: 130, kind: "enhancer", title: ["Residual U-Net", "enhancer E"], subtitle: ["log-Mel → log-Mel", "no temporal bottleneck"]},
+    {id: "enhancer", x: 220, y: 290, width: 210, height: 130, kind: "enhancer", title: ["Residual U-Net", "enhancer E"], subtitle: ["depth 3 · base channels 48", "Transformer: 2L · 4H · d256"]},
     {id: "enhanced", x: 450, y: 305, width: 150, height: 100, kind: "enhancer", title: ["Enhanced", "log-Mel"], symbol: "x_e"},
     {id: "encoder-noisy", x: 660, y: 185, width: 180, height: 110, kind: "encoder", title: ["Whisper encoder"], subtitle: ["noisy view"], symbol: "h_n"},
     {id: "encoder-enhanced", x: 660, y: 420, width: 180, height: 110, kind: "encoder", title: ["Whisper encoder"], subtitle: ["enhanced view"], symbol: "h_e"},
@@ -36,7 +36,7 @@
     {id: "tokens", x: 1645, y: 310, width: 125, height: 115, kind: "output", title: ["Predicted", "Persian tokens"], symbol: "\\hat{y}_{1:T}"},
     {id: "clean", x: 40, y: 675, width: 170, height: 100, kind: "input", title: ["Clean log-Mel"], subtitle: ["bandwidth-aligned", "training target"], symbol: "x_c"},
     {id: "loss-enh", x: 270, y: 655, width: 330, height: 140, kind: "loss", title: ["Enhancement loss"], equation: "L_{\\mathrm{enh}}=\\lVert E(x_n)-x_c\\rVert_1"},
-    {id: "loss-feat", x: 655, y: 655, width: 390, height: 140, kind: "loss disabled", title: ["Optional warm-up feature loss"], equation: "L_{\\mathrm{feat}}=\\lVert \\operatorname{Enc}(E(x_n))-\\operatorname{Enc}(x_c)\\rVert_1", subtitle: ["DISABLED · feature_match_weight = 0.0"]},
+    {id: "loss-feat", x: 655, y: 655, width: 390, height: 140, kind: "loss", title: ["Warm-up feature loss"], equation: "L_{\\mathrm{feat}}=\\lVert \\operatorname{Enc}(E(x_n))-\\operatorname{Enc}(x_c)\\rVert_1", subtitle: ["ENABLED · feature_match_weight = 0.5"]},
     {id: "targets", x: 1055, y: 710, width: 115, height: 85, kind: "input", title: ["Target tokens"], symbol: "y_{1:T}"},
     {id: "loss-asr", x: 1190, y: 645, width: 285, height: 140, kind: "loss", title: ["Autoregressive ASR loss"], equation: "L_{\\mathrm{ASR}}=-\\sum_t \\log p(y_t\\mid y_{<t},h_f)"},
     {id: "loss-total", x: 1515, y: 655, width: 245, height: 140, kind: "total-loss", title: ["Fusion / joint objective"], equation: "L=L_{\\mathrm{ASR}}+\\lambda L_{\\mathrm{enh}}", subtitle: ["λ is stage-configured"]}
@@ -44,17 +44,17 @@
 
   const edges = [
     {id: "noisy-enhancer", className: "", path: "M180 355 H220"},
-    {id: "enhancer-enhanced", className: "enhanced", path: "M410 355 H450"},
+    {id: "enhancer-enhanced", className: "enhanced", path: "M430 355 H450"},
     {id: "noisy-encoder", className: "noisy", path: "M105 305 V240 H660", label: "parallel noisy path", labelX: 380, labelY: 230},
     {id: "enhanced-encoder", className: "enhanced", path: "M600 355 H625 V475 H660"},
     {id: "encoder-noisy-fusion", className: "noisy", path: "M840 240 H930", label: "hₙ", labelX: 875, labelY: 227},
     {id: "encoder-enhanced-fusion", className: "enhanced", path: "M840 475 H930", label: "hₑ", labelX: 875, labelY: 462},
-    {id: "fusion-decoder", className: "", path: "M1380 355 H1450", label: "h_f", labelX: 1416, labelY: 342},
+    {id: "fusion-decoder", className: "", path: "M1420 355 H1450", label: "h_f", labelX: 1435, labelY: 342},
     {id: "decoder-tokens", className: "", path: "M1610 367.5 H1645"},
     {id: "clean-enh-loss", className: "training", path: "M210 725 H270"},
     {id: "enhanced-enh-loss", className: "training", path: "M525 405 V610 H435 V655"},
-    {id: "enhanced-feat-loss", className: "training disabled-edge", path: "M555 405 V595 H850 V655"},
-    {id: "clean-feat-loss", className: "training disabled-edge", path: "M125 775 V815 H850 V795"},
+    {id: "enhanced-feat-loss", className: "training", path: "M555 405 V595 H850 V655"},
+    {id: "clean-feat-loss", className: "training", path: "M125 775 V815 H850 V795"},
     {id: "decoder-asr-loss", className: "training", path: "M1530 425 V605 H1332 V645"},
     {id: "target-asr-loss", className: "training", path: "M1170 752 H1190"},
     {id: "enh-total", className: "training", path: "M600 725 V815 H1490 V760 H1515", label: "λL_enh", labelX: 1435, labelY: 804},
@@ -62,12 +62,13 @@
   ];
 
   const attentionLayers = [
-    {id: "attn-1", x: 955, y: 205, width: 130, height: 270, label: "Layer 1"},
-    {id: "attn-2", x: 1110, y: 205, width: 130, height: 270, label: "Layer 2"}
+    {id: "attn-1", x: 945, y: 205, width: 105, height: 270, label: "Layer 1"},
+    {id: "attn-2", x: 1060, y: 205, width: 105, height: 270, label: "Layer 2"},
+    {id: "attn-3", x: 1175, y: 205, width: 105, height: 270, label: "Layer 3"}
   ];
 
   const stageLegend = [
-    {stage: "Stage 0", color: "#0072b2", title: "Enhancer warm-up", copy: "Train E with L_enh; optional L_feat is off.", lambda: "current config: λ = 1.0"},
+    {stage: "Stage 0", color: "#0072b2", title: "ASR-aware enhancer warm-up", copy: "Train E with λL_enh + 0.5L_feat.", lambda: "current config: λ = 0.5 · feature weight = 0.5"},
     {stage: "Stage 1", color: "#d55e00", title: "Frozen-backbone fusion", copy: "Train E + fusion; freeze Whisper.", lambda: "current config: λ = 0.3"},
     {stage: "Stage 2", color: "#12805c", title: "End-to-end fine-tuning", copy: "Train E + fusion + complete Whisper stack.", lambda: "current config: λ = 0.1"}
   ];
@@ -77,7 +78,7 @@
     {id: "enhanced-symbol", tex: "x_e=E(x_n)", x: 482, y: 365, width: 86, height: 26},
     {id: "encoder-noisy-symbol", tex: "h_n=\\operatorname{Enc}(x_n)", x: 685, y: 250, width: 130, height: 25},
     {id: "encoder-enhanced-symbol", tex: "h_e=\\operatorname{Enc}(x_e)", x: 685, y: 485, width: 130, height: 25},
-    {id: "gate-equation", tex: "g=\\sigma(\\operatorname{MLP}([h'_n;h'_e]))", x: 1252, y: 325, width: 120, height: 35},
+    {id: "gate-equation", tex: "g=\\sigma(\\operatorname{MLP}([h'_n;h'_e]))", x: 1297, y: 325, width: 120, height: 35},
     {id: "fusion-equation", tex: "h_f=g\\odot h'_e+(1-g)\\odot h'_n", x: 1010, y: 510, width: 320, height: 40},
     {id: "token-symbol", tex: "\\hat{y}_{1:T}", x: 1681, y: 380, width: 54, height: 25},
     {id: "clean-symbol", tex: "x_c", x: 96, y: 712, width: 54, height: 22},
@@ -243,33 +244,36 @@
       const layer = d3.select(this);
       layer.append("line").attr("x1", d.x + 12).attr("x2", d.x + d.width - 12).attr("y1", 270).attr("y2", 270).attr("stroke", "#d1d7dc");
       layer.append("line").attr("x1", d.x + 12).attr("x2", d.x + d.width - 12).attr("y1", 405).attr("y2", 405).attr("stroke", "#d1d7dc");
-      layer.append("path").attr("class", "cross-edge noisy").attr("d", `M${d.x + 18} 270 C${d.x + 50} 285 ${d.x + 82} 385 ${d.x + 112} 405`);
-      layer.append("path").attr("class", "cross-edge enhanced").attr("d", `M${d.x + 18} 405 C${d.x + 50} 385 ${d.x + 82} 285 ${d.x + 112} 270`);
-      layer.append("text").attr("class", "lane-label noisy").attr("x", d.x + d.width / 2).attr("y", 255).text("N ← Attn(N,E)");
-      layer.append("text").attr("class", "lane-label enhanced").attr("x", d.x + d.width / 2).attr("y", 435).text("E ← Attn(E,N)");
+      layer.append("path").attr("class", "cross-edge noisy").attr("d", `M${d.x + 14} 270 C${d.x + 38} 285 ${d.x + 67} 385 ${d.x + d.width - 14} 405`);
+      layer.append("path").attr("class", "cross-edge enhanced").attr("d", `M${d.x + 14} 405 C${d.x + 38} 385 ${d.x + 67} 285 ${d.x + d.width - 14} 270`);
+      layer.append("text").attr("class", "lane-label noisy compact").attr("x", d.x + d.width / 2).attr("y", 255).text("N ← Attn(N,E)");
+      layer.append("text").attr("class", "lane-label enhanced compact").attr("x", d.x + d.width / 2).attr("y", 435).text("E ← Attn(E,N)");
       layer.append("text").attr("class", "small-label").attr("x", d.x + d.width / 2).attr("y", 345).text("cross-view");
       layer.append("text").attr("class", "small-label").attr("x", d.x + d.width / 2).attr("y", 362).text("refinement");
     });
 
-    root.append("path").attr("class", "edge noisy").attr("d", "M930 240 H955");
-    root.append("path").attr("class", "edge enhanced").attr("d", "M930 475 V440 H955");
-    root.append("path").attr("class", "edge noisy").attr("d", "M1085 270 H1110");
-    root.append("path").attr("class", "edge enhanced").attr("d", "M1085 405 H1110");
+    root.append("path").attr("class", "edge noisy").attr("d", "M930 240 H945");
+    root.append("path").attr("class", "edge enhanced").attr("d", "M930 475 V440 H945");
+    for (let index = 0; index < attentionLayers.length - 1; index += 1) {
+      const current = attentionLayers[index];
+      const next = attentionLayers[index + 1];
+      root.append("path").attr("class", "edge noisy").attr("d", `M${current.x + current.width} 270 H${next.x}`);
+      root.append("path").attr("class", "edge enhanced").attr("d", `M${current.x + current.width} 405 H${next.x}`);
+    }
 
     root.append("rect")
       .attr("class", "gate-box")
-      .attr("x", 1260)
+      .attr("x", 1295)
       .attr("y", 235)
-      .attr("width", 120)
+      .attr("width", 125)
       .attr("height", 240)
       .attr("rx", 7);
-    root.append("text").attr("class", "node-title").attr("x", 1320).attr("y", 270).text("Sigmoid gate");
-    root.append("text").attr("class", "node-subtitle").attr("x", 1320).attr("y", 292).text("learned per time");
-    root.append("text").attr("class", "node-subtitle").attr("x", 1320).attr("y", 310).text("and per channel");
-    root.append("path").attr("class", "edge noisy").attr("d", "M1240 270 H1260");
-    root.append("path").attr("class", "edge enhanced").attr("d", "M1240 405 H1260");
-    root.append("path").attr("class", "edge").attr("d", "M1380 355 H1405");
-    root.append("text").attr("class", "small-label").attr("x", 1160).attr("y", 493).text("gated merge of refined views");
+    root.append("text").attr("class", "node-title").attr("x", 1357.5).attr("y", 270).text("Sigmoid gate");
+    root.append("text").attr("class", "node-subtitle").attr("x", 1357.5).attr("y", 292).text("learned per time");
+    root.append("text").attr("class", "node-subtitle").attr("x", 1357.5).attr("y", 310).text("and per channel");
+    root.append("path").attr("class", "edge noisy").attr("d", "M1280 270 H1295");
+    root.append("path").attr("class", "edge enhanced").attr("d", "M1280 405 H1295");
+    root.append("text").attr("class", "small-label").attr("x", 1190).attr("y", 493).text("gated merge of refined views");
   }
 
   function drawLegend(root) {
@@ -297,7 +301,7 @@
       .attr("x", 1760)
       .attr("y", 1004)
       .attr("text-anchor", "end")
-      .text("λ values annotate configs/speech_enhancement/fusion_train.yaml; they are not architectural constants.");
+      .text("Snapshot: report/whisper-fusion-v2/fusion_train_v4.yaml · loss weights are not architectural constants.");
   }
 
   async function renderEquations(root) {
@@ -459,7 +463,7 @@
       .text("Dual-view speech enhancement and fusion model for robust Persian ASR");
     svg.append("desc")
       .attr("id", "svg-description")
-      .text("Noisy log-Mel features pass through a residual U-Net while a parallel noisy path is preserved. A shared Whisper encoder processes both views, two bidirectional cross-attention layers refine them, a sigmoid gate merges them, and a Whisper decoder predicts Persian tokens. Dashed training-only paths show enhancement, ASR, optional disabled feature, and combined losses, followed by a three-stage training legend.");
+      .text("Noisy log-Mel features pass through a three-level residual U-Net with a two-layer Transformer bottleneck while a parallel noisy path is preserved. A shared Whisper encoder processes both views, three bidirectional cross-attention layers refine them, a sigmoid gate merges them, and a Whisper decoder predicts Persian tokens. Dashed training-only paths show the enabled enhancement, feature-matching, ASR, and combined losses, followed by a three-stage training legend from fusion_train_v4.yaml.");
     addDefinitions(svg);
 
     const root = svg.append("g").attr("data-layer", "scene");

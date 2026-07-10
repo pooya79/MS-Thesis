@@ -301,6 +301,10 @@ figcaption {
   fill: #d55e00;
 }
 
+.figure-root .lane-label.compact {
+  font-size: 11px;
+}
+
 .figure-root .gate-box {
   fill: #f2edf5;
   stroke: #7a5195;

@@ -50,12 +50,14 @@
         <div id="diagram" class="diagram-frame"></div>
         <figcaption id="figure-caption">
           <span class="caption-label">Figure 1.</span>
-          Dual-view robust Persian ASR. A residual U-Net enhances the noisy log-Mel input;
-          one shared-weight Whisper encoder contextualizes both noisy and enhanced views;
-          two bidirectional cross-attention layers refine them before a learned gate merges
-          the streams. Dashed paths and hatched boxes denote training-only supervision and a
-          currently disabled optional objective, respectively. Stage-specific λ values are
-          configuration settings, not architectural constants.
+          Dual-view robust Persian ASR as trained with
+          <code>report/whisper-fusion-v2/fusion_train_v4.yaml</code>. A three-level residual
+          U-Net with a two-layer Transformer bottleneck enhances the noisy log-Mel input; one
+          shared-weight Whisper encoder contextualizes both noisy and enhanced views; three
+          bidirectional cross-attention layers refine them before a learned gate merges the
+          streams. Dashed paths denote training-only supervision, including the enabled
+          encoder-feature matching objective. Stage-specific loss weights are configuration
+          settings, not architectural constants.
         </figcaption>
       </figure>
 
