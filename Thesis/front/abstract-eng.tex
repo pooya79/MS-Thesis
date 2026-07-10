@@ -1,4 +1,3 @@
-
 % -------------------------------------------------------
 %  English Abstract
 % -------------------------------------------------------
@@ -10,12 +9,13 @@
 \end{center}
 \baselineskip=.8\baselineskip
 
-We present a standard template for typesetting theses in Persian. 
-The template is based on the \XePersian\ package for the \LaTeX\ typesetting system.
-This write-up shows a sample usage of this template.
+The mismatch between general-domain training speech and real telephone or Voice over IP (VoIP) audio remains a major obstacle to robust Persian automatic speech recognition. This thesis develops and evaluates a reproducible approach for adapting Whisper-small to such conditions. An aligned clean--degraded data pipeline applies environmental noise, gain variation, bandwidth restriction, real FFmpeg codec round-trips, and packet-loss simulation while recording per-example seeds and degradation metadata in JSONL manifests. Whisper-small is then fine-tuned either on ordinary Persian data or on a multi-condition mixture of ordinary and degraded speech.
 
+The thesis also evaluates a dual-view model that derives original and enhanced log-Mel representations from the same degraded input. The enhancer is a residual U-Net with temporal modeling at its bottleneck. Both views pass through a shared Whisper encoder and are combined using bidirectional cross-attention and a learned time--feature gate. Training proceeds in three stages: enhancer warm-up, fusion training with the Whisper backbone frozen, and joint end-to-end optimization.
+
+Evaluation on five Persian test sets, including real telephone and VoIP speech from AGFarsdat, shows that multi-condition training is the strongest method overall. Aggregate word error rate falls from 23.27\% for ordinary Whisper fine-tuning to 17.83\%. The fusion model reaches 18.44\%, improving on ordinary Whisper but not outperforming the multi-condition baseline; its 14.04\% character error rate is also worse than both single-stream systems. A mean gate weight of 0.9961 on the original view indicates collapse toward the noisy/original stream. Fusion attains the lowest numerical WER on AGFarsdat, but its 0.42 percentage-point margin over the multi-condition model is too small to claim a stable advantage without statistical testing. The central result is therefore that traceable telecom-oriented augmentation and multi-condition training are currently more effective than adding a complex enhancement-and-fusion path.
 
 \bigskip\noindent\textbf{Keywords}:
-Thesis, Typesetting, Template, \XePersian\
+Persian automatic speech recognition, telephone speech, Voice over IP, Whisper, multi-condition training, speech enhancement, dual-view fusion
 
 \end{latin}
