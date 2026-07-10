@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <title>Dual-view speech enhancement and fusion architecture</title>
+    <link rel="stylesheet" href="styles.css">
+    <script>
+      window.MathJax = {
+        output: {
+          font: "mathjax-tex",
+          linebreaks: {inline: false, width: "100%"}
+        },
+        svg: {fontCache: "none"},
+        startup: {typeset: false}
+      };
+    </script>
+    <script defer src="https://cdn.jsdelivr.net/npm/@mathjax/mathjax-tex-font@4.1.2/tex-mml-svg-mathjax-tex.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
+    <script defer src="diagram.js"></script>
+  </head>
+  <body>
+    <main class="page-shell">
+      <header class="page-header">
+        <div>
+          <p class="eyebrow">MS thesis · model overview</p>
+          <h1>Dual-view speech enhancement and fusion architecture</h1>
+          <p class="web-note">
+            A standalone, vector-first rendering of the implemented fusion model and its
+            staged training objectives. The exported files contain the mathematical glyphs.
+          </p>
+        </div>
+        <div class="controls" aria-label="Figure export controls">
+          <button id="export-svg" type="button" disabled>Export SVG</button>
+          <button id="export-png" type="button" disabled>Export PNG (3×)</button>
+        </div>
+      </header>
+
+      <p id="render-status" class="render-status" role="status" aria-live="polite">
+        Rendering figure…
+      </p>
+      <div id="dependency-error" class="dependency-error" role="alert" hidden>
+        <strong>The architecture figure could not be rendered.</strong>
+        D3 7.9.0 and MathJax 4.1.2 must be reachable from the pinned CDN URLs. Check the
+        network connection, then reload this page.
+      </div>
+
+      <figure class="architecture-figure" aria-labelledby="figure-caption">
+        <div id="diagram" class="diagram-frame"></div>
+        <figcaption id="figure-caption">
+          <span class="caption-label">Figure 1.</span>
+          Dual-view robust Persian ASR. A residual U-Net enhances the noisy log-Mel input;
+          one shared-weight Whisper encoder contextualizes both noisy and enhanced views;
+          two bidirectional cross-attention layers refine them before a learned gate merges
+          the streams. Dashed paths and hatched boxes denote training-only supervision and a
+          currently disabled optional objective, respectively. Stage-specific λ values are
+          configuration settings, not architectural constants.
+        </figcaption>
+      </figure>
+
+      <p class="web-note implementation-note">
+        Initial rendering requires CDN access. Once rendered, both exports are self-contained;
+        PNG output is rasterized from the finished SVG at exactly three times its viewBox size.
+      </p>
+
+      <noscript>
+        <p class="dependency-error">
+          JavaScript is required to construct this declarative SVG figure and its exports.
+        </p>
+      </noscript>
+    </main>
+    <div id="math-staging" class="math-staging" aria-hidden="true"></div>
+  </body>
+</html>
