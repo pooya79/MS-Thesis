@@ -9,6 +9,7 @@
 \usepackage[usenames,dvipsnames]{pstricks}
 \usepackage{graphicx,subfigure,wrapfig}
 \usepackage{geometry}
+\usepackage{pdflscape}
 \usepackage[mathscr]{euscript}
 \usepackage{multicol}
 \usepackage{multirow}
@@ -195,5 +196,4 @@ BoldFont=Sharif1.3-SemiBold,
 \NewDocumentCommand{\img}{m m o}
 	{\begin{wrapfigure}{l}{\IfValueTF{#3}{#3}{#2}}
 	\centering\includegraphics[width=#2]{figs/#1}\end{wrapfigure}}
-
 

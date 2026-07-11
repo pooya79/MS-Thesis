@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <title>Speech degradation pair-generation pipeline</title>
+    <link rel="stylesheet" href="styles.css">
+    <script defer src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
+    <script defer src="diagram.js"></script>
+  </head>
+  <body>
+    <main class="page-shell">
+      <header class="page-header">
+        <div>
+          <p class="eyebrow">MS thesis · data pipeline</p>
+          <h1>Speech degradation pair-generation pipeline</h1>
+          <p class="web-note">A configuration-independent view of the implemented clean-to-degraded audio workflow.</p>
+        </div>
+        <div class="controls" aria-label="Figure export controls">
+          <button id="export-svg" type="button" disabled>Export SVG</button>
+          <button id="export-png" type="button" disabled>Export PNG (3×)</button>
+        </div>
+      </header>
+
+      <p id="render-status" class="render-status" role="status" aria-live="polite">Rendering figure…</p>
+      <div id="dependency-error" class="dependency-error" role="alert" hidden>
+        <strong>The degradation pipeline figure could not be rendered.</strong>
+        D3 7.9.0 must be reachable from the pinned CDN URL. Check the network connection, then reload this page.
+      </div>
+
+      <figure class="architecture-figure" aria-labelledby="figure-caption">
+        <div id="diagram" class="diagram-frame"></div>
+        <figcaption id="figure-caption">
+          <span class="caption-label">Figure 1.</span>
+          General pair-generation architecture implemented by
+          <code>ml/speech_data/generate_degraded_pairs.py</code>, configured through
+          <code>configs/speech_enhancement/degradation.yaml</code>, and described in
+          <code>docs/speech-degradation-pipeline.md</code>. Dashed elements are conditional;
+          exact probabilities, codec weights, SNR buckets, and band limits remain configuration data.
+        </figcaption>
+      </figure>
+
+      <p class="web-note implementation-note">Initial rendering requires CDN access. Both exports are self-contained; PNG output is rasterized at exactly three times the SVG viewBox size.</p>
+      <noscript><p class="dependency-error">JavaScript is required to construct this declarative SVG figure and its exports.</p></noscript>
+    </main>
+  </body>
+</html>
