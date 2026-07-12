@@ -1,0 +1,24 @@
+model:
+  checkpoint: models/asr/whisper-large-v3-turbo/runs/whisper-large-v3-turbo-fa/final
+  processor: openai/whisper-large-v3-turbo
+  language: Persian
+  task: transcribe
+
+data:
+  root_dir: data
+  datasets:
+    - cv-corpus-25.0
+    - data/FarsSpon_train_dev
+    - data/fleurs-normalized
+  sample_rate: 16000
+  split: test
+
+eval:
+  output_dir: models/asr/whisper-large-v3-turbo/evals
+  name: whisper-large-v3-turbo-fa-test
+  batch_size: 1
+  num_workers: 4
+  device: auto
+  generation_max_length: 225
+  max_label_tokens: 448
+  eval_accumulation_steps: 1

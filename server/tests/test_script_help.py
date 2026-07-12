@@ -23,6 +23,8 @@ SCRIPT_MODULES = [
     "ml.speech_data.validate_degraded_dataset",
     "ml.asr.train_whisper_small",
     "ml.asr.eval_whisper_small",
+    "ml.asr.train_whisper_large_v3_turbo",
+    "ml.asr.eval_whisper_large_v3_turbo",
     "ml.asr.train_fastconformer",
     "ml.asr.eval_fastconformer",
     "ml.fusion.train_fusion",

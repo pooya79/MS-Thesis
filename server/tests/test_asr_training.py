@@ -33,6 +33,12 @@ from ml.asr.eval_whisper_small import (
     resolve_output_dir,
     resolve_processor_source,
 )
+from ml.asr.train_whisper_large_v3_turbo import (
+    load_training_config as load_large_v3_turbo_training_config,
+)
+from ml.asr.eval_whisper_large_v3_turbo import (
+    load_eval_config as load_large_v3_turbo_eval_config,
+)
 
 
 def write_yaml(path: Path, payload: dict) -> None:
@@ -129,6 +135,18 @@ def test_load_training_config_merges_yaml_with_defaults(tmp_path: Path) -> None:
     assert config["training"]["load_best_model_at_end"] is False
     assert resolve_run_dir(config) == tmp_path / "runs" / "smoke"
     assert resolve_dataset_dirs(config) == [tmp_path / "data" / "cv-corpus-25.0"]
+
+
+def test_large_v3_turbo_training_config_uses_model_specific_defaults(tmp_path: Path) -> None:
+    config_path = tmp_path / "train.yaml"
+    write_yaml(config_path, {"data": {"datasets": ["cv-corpus-25.0"]}})
+
+    config = load_large_v3_turbo_training_config(config_path)
+
+    assert config["model"]["name"] == "openai/whisper-large-v3-turbo"
+    assert config["run"]["output_dir"] == "models/asr/whisper-large-v3-turbo/runs"
+    assert config["training"]["gradient_checkpointing"] is True
+    assert config["training"]["per_device_train_batch_size"] == 1
 
 
 def test_resolve_pretrained_model_uses_existing_local_path(tmp_path: Path) -> None:
@@ -347,6 +365,23 @@ def test_load_eval_config_requires_checkpoint(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="model.checkpoint"):
         load_eval_config(config_path)
+
+
+def test_large_v3_turbo_eval_config_uses_model_specific_defaults(tmp_path: Path) -> None:
+    config_path = tmp_path / "eval.yaml"
+    write_yaml(
+        config_path,
+        {
+            "model": {"checkpoint": "a-model"},
+            "data": {"datasets": ["cv-test"]},
+        },
+    )
+
+    config = load_large_v3_turbo_eval_config(config_path)
+
+    assert config["model"]["processor"] == "openai/whisper-large-v3-turbo"
+    assert config["eval"]["output_dir"] == "models/asr/whisper-large-v3-turbo/evals"
+    assert config["eval"]["batch_size"] == 1
 
 
 def test_build_eval_arguments_flushes_predictions_during_eval(tmp_path: Path) -> None:

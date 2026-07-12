@@ -92,12 +92,15 @@ def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]
     return merged
 
 
-def load_training_config(config_path: Path) -> dict[str, Any]:
+def load_training_config(
+    config_path: Path,
+    defaults: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     with config_path.open("r", encoding="utf-8") as handle:
         loaded = yaml.safe_load(handle) or {}
     if not isinstance(loaded, dict):
         raise ValueError(f"{config_path} must contain a YAML mapping")
-    config = deep_merge(DEFAULT_CONFIG, loaded)
+    config = deep_merge(defaults or DEFAULT_CONFIG, loaded)
     validate_config(config)
     return config
 
@@ -139,6 +142,8 @@ def validate_config(config: dict[str, Any]) -> None:
         raise ValueError("training.device must be auto, cuda, or cpu")
     if not isinstance(training["load_best_model_at_end"], bool):
         raise ValueError("training.load_best_model_at_end must be true or false")
+    if not isinstance(training.get("gradient_checkpointing", False), bool):
+        raise ValueError("training.gradient_checkpointing must be true or false")
 
 
 def resolve_run_dir(config: dict[str, Any], override: Path | None = None) -> Path:
@@ -448,6 +453,7 @@ def build_training_arguments(config: dict[str, Any], run_dir: Path) -> Any:
         "remove_unused_columns": False,
         "dataloader_num_workers": int(training["num_workers"]),
         "load_best_model_at_end": bool(training["load_best_model_at_end"]),
+        "gradient_checkpointing": bool(training.get("gradient_checkpointing", False)),
         "metric_for_best_model": "wer",
         "greater_is_better": False,
     }
@@ -513,12 +519,18 @@ class WhisperDataCollator:
         return batch
 
 
-def run_training(config_path: Path, run_dir_override: Path | None = None, resume_override: str | None = None) -> int:
+def run_training(
+    config_path: Path,
+    run_dir_override: Path | None = None,
+    resume_override: str | None = None,
+    *,
+    defaults: dict[str, Any] | None = None,
+) -> int:
     from transformers import Seq2SeqTrainer, WhisperForConditionalGeneration, WhisperProcessor, set_seed
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     logging.info("loading config=%s", config_path)
-    config = load_training_config(config_path)
+    config = load_training_config(config_path, defaults)
     run_dir = resolve_run_dir(config, run_dir_override)
     run_dir.mkdir(parents=True, exist_ok=True)
     configure_logging(run_dir)

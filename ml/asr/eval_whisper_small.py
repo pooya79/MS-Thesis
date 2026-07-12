@@ -60,12 +60,15 @@ def run_id() -> str:
     return datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
 
 
-def load_eval_config(config_path: Path) -> dict[str, Any]:
+def load_eval_config(
+    config_path: Path,
+    defaults: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     with config_path.open("r", encoding="utf-8") as handle:
         loaded = yaml.safe_load(handle) or {}
     if not isinstance(loaded, dict):
         raise ValueError(f"{config_path} must contain a YAML mapping")
-    config = deep_merge(DEFAULT_EVAL_CONFIG, loaded)
+    config = deep_merge(defaults or DEFAULT_EVAL_CONFIG, loaded)
     validate_eval_config(config)
     return config
 
@@ -210,11 +213,16 @@ def build_eval_arguments(config: dict[str, Any], output_dir: Path) -> Any:
     return Seq2SeqTrainingArguments(**common_kwargs)
 
 
-def run_evaluation(config_path: Path, output_dir_override: Path | None = None) -> int:
+def run_evaluation(
+    config_path: Path,
+    output_dir_override: Path | None = None,
+    *,
+    defaults: dict[str, Any] | None = None,
+) -> int:
     from transformers import Seq2SeqTrainer, WhisperForConditionalGeneration, WhisperProcessor
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    config = load_eval_config(config_path)
+    config = load_eval_config(config_path, defaults)
     output_dir = resolve_output_dir(config, output_dir_override)
     output_dir.mkdir(parents=True, exist_ok=True)
     configure_logging(output_dir)
@@ -228,7 +236,7 @@ def run_evaluation(config_path: Path, output_dir_override: Path | None = None) -
     checkpoint = resolve_existing_path(str(model_config["checkpoint"]), config_path)
     processor_source = model_config.get("processor")
     processor_name = resolve_processor_source(
-        str(processor_source or DEFAULT_EVAL_CONFIG["model"]["processor"]),
+        str(processor_source or (defaults or DEFAULT_EVAL_CONFIG)["model"]["processor"]),
         config_path,
     )
 
