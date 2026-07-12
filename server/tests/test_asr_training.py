@@ -19,6 +19,7 @@ from ml.asr.train_whisper_small import (
     latest_checkpoint,
     load_split_examples,
     load_training_config,
+    prepare_model_for_training,
     resolve_pretrained_model,
     resolve_resume_checkpoint,
     resolve_run_dir,
@@ -147,6 +148,15 @@ def test_large_v3_turbo_training_config_uses_model_specific_defaults(tmp_path: P
     assert config["run"]["output_dir"] == "models/asr/whisper-large-v3-turbo/runs"
     assert config["training"]["gradient_checkpointing"] is True
     assert config["training"]["per_device_train_batch_size"] == 1
+
+
+def test_prepare_model_for_training_converts_half_parameters_to_float() -> None:
+    model = torch.nn.Linear(3, 2).half()
+
+    prepared = prepare_model_for_training(model)
+
+    assert prepared is model
+    assert all(parameter.dtype == torch.float32 for parameter in model.parameters())
 
 
 def test_resolve_pretrained_model_uses_existing_local_path(tmp_path: Path) -> None:

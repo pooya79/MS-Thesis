@@ -31,6 +31,10 @@ evaluate separately after training). If memory allows, increase the device batch
 size before changing accumulation so the intended effective batch size remains
 explicit.
 
+Trainable model parameters are normalized to FP32 when loaded, including from a
+local FP16 checkpoint. `training.mixed_precision` only controls Trainer
+autocasting; it does not change the stored parameter dtype.
+
 Set `model.pretrained_model` to a local Hugging Face model directory to continue
 fine-tuning from saved weights. Leave it empty to use `model.name`. Set
 `run.resume` or `--resume` to `auto` to resume the latest rolling Trainer

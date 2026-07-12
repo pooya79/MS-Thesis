@@ -476,6 +476,12 @@ def build_training_arguments(config: dict[str, Any], run_dir: Path) -> Any:
         )
 
 
+def prepare_model_for_training(model: Any) -> Any:
+    """Keep trainable parameters in FP32; Trainer controls mixed precision."""
+    model.float()
+    return model
+
+
 class WhisperDataset:
     def __init__(self, examples: list[WhisperExample], processor: Any, sample_rate: int) -> None:
         self.examples = examples
@@ -578,6 +584,7 @@ def run_training(
 
         logging.info("loading model=%s", pretrained_model)
         model = WhisperForConditionalGeneration.from_pretrained(pretrained_model)
+        model = prepare_model_for_training(model)
         model.config.forced_decoder_ids = None
         model.config.suppress_tokens = []
         max_label_tokens = model_max_target_positions(model)
