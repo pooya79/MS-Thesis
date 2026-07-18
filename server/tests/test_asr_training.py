@@ -40,6 +40,12 @@ from ml.asr.train_whisper_large_v3_turbo import (
 from ml.asr.eval_whisper_large_v3_turbo import (
     load_eval_config as load_large_v3_turbo_eval_config,
 )
+from ml.asr.train_whisper_medium import (
+    load_training_config as load_medium_training_config,
+)
+from ml.asr.eval_whisper_medium import (
+    load_eval_config as load_medium_eval_config,
+)
 
 
 def write_yaml(path: Path, payload: dict) -> None:
@@ -148,6 +154,20 @@ def test_large_v3_turbo_training_config_uses_model_specific_defaults(tmp_path: P
     assert config["run"]["output_dir"] == "models/asr/whisper-large-v3-turbo/runs"
     assert config["training"]["gradient_checkpointing"] is True
     assert config["training"]["per_device_train_batch_size"] == 1
+
+
+def test_medium_training_config_uses_model_specific_defaults(tmp_path: Path) -> None:
+    config_path = tmp_path / "train.yaml"
+    write_yaml(config_path, {"data": {"datasets": ["cv-corpus-25.0"]}})
+
+    config = load_medium_training_config(config_path)
+
+    assert config["model"]["name"] == "openai/whisper-medium"
+    assert config["run"]["output_dir"] == "models/asr/whisper-medium/runs"
+    assert config["training"]["gradient_checkpointing"] is True
+    assert config["training"]["per_device_train_batch_size"] == 1
+    assert config["training"]["per_device_eval_batch_size"] == 1
+    assert config["training"]["gradient_accumulation_steps"] == 8
 
 
 def test_prepare_model_for_training_converts_half_parameters_to_float() -> None:
@@ -391,6 +411,23 @@ def test_large_v3_turbo_eval_config_uses_model_specific_defaults(tmp_path: Path)
 
     assert config["model"]["processor"] == "openai/whisper-large-v3-turbo"
     assert config["eval"]["output_dir"] == "models/asr/whisper-large-v3-turbo/evals"
+    assert config["eval"]["batch_size"] == 1
+
+
+def test_medium_eval_config_uses_model_specific_defaults(tmp_path: Path) -> None:
+    config_path = tmp_path / "eval.yaml"
+    write_yaml(
+        config_path,
+        {
+            "model": {"checkpoint": "a-model"},
+            "data": {"datasets": ["cv-test"]},
+        },
+    )
+
+    config = load_medium_eval_config(config_path)
+
+    assert config["model"]["processor"] == "openai/whisper-medium"
+    assert config["eval"]["output_dir"] == "models/asr/whisper-medium/evals"
     assert config["eval"]["batch_size"] == 1
 
 

@@ -1,7 +1,7 @@
 # Script Guide 2
 
 This guide continues `docs/script-guide.md` and covers the Whisper
-large-v3-turbo training and evaluation commands.
+large-v3-turbo and Medium training and evaluation commands.
 
 ## Whisper Large-v3-turbo Training
 
@@ -76,4 +76,55 @@ Inspect every option without loading the model or data:
 
 ```bash
 uv run python -m ml.asr.eval_whisper_large_v3_turbo --help
+```
+
+## Whisper Medium Training
+
+Fine-tune `openai/whisper-medium` for Persian ASR with:
+
+```bash
+uv run python -m ml.asr.train_whisper_medium \
+  --config configs/whisper_medium_train.yaml \
+  --resume auto
+```
+
+The dataset layout, generated artifacts, metrics, and resume behavior match the
+large-v3-turbo workflow described above. The supplied config writes the run to
+`models/asr/whisper-medium/runs/whisper-medium-fa/` and uses Persian
+transcription decoder prompts.
+
+The conservative defaults use a device batch size of 1, 8 gradient-accumulation
+steps, and gradient checkpointing. If GPU memory allows, increase the device
+batch size before reducing accumulation so the effective batch size remains
+explicit. Set `model.pretrained_model` to a local Hugging Face model directory
+to continue from saved weights. `--run-dir` and `--resume` override their YAML
+counterparts.
+
+Inspect every option without loading the model or data:
+
+```bash
+uv run python -m ml.asr.train_whisper_medium --help
+```
+
+## Whisper Medium Evaluation
+
+Evaluate the saved model on the configured `test.tsv` files with:
+
+```bash
+uv run python -m ml.asr.eval_whisper_medium \
+  --config configs/whisper_medium_eval.yaml
+```
+
+The default checkpoint is the training run's `final` directory and the default
+processor is `openai/whisper-medium`. Keep the Hub processor when evaluating a
+Trainer checkpoint without processor files; point `model.processor` to a saved
+model directory when its tokenizer or processor was changed intentionally.
+Evaluation writes the same manifests, predictions, aggregate and per-dataset
+WER/CER metrics, effective config, and logs as the large-v3-turbo command. Use
+`--output-dir` to override the configured destination.
+
+Inspect every option without loading the model or data:
+
+```bash
+uv run python -m ml.asr.eval_whisper_medium --help
 ```

@@ -25,6 +25,8 @@ SCRIPT_MODULES = [
     "ml.asr.eval_whisper_small",
     "ml.asr.train_whisper_large_v3_turbo",
     "ml.asr.eval_whisper_large_v3_turbo",
+    "ml.asr.train_whisper_medium",
+    "ml.asr.eval_whisper_medium",
     "ml.asr.train_fastconformer",
     "ml.asr.eval_fastconformer",
     "ml.fusion.train_fusion",
