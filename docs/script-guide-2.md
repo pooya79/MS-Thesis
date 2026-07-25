@@ -22,6 +22,11 @@ transcription decoder prompts, and writes the run to
 `models/asr/whisper-large-v3-turbo/runs/whisper-large-v3-turbo-fa/`. The run
 contains the effective config, source and skipped-example manifests, JSONL
 metrics, logs, rolling checkpoints, `status.json`, and the final model.
+Audio files with unreadable headers are excluded before training and recorded
+in `manifests/skipped_unreadable_train.jsonl` or
+`manifests/skipped_unreadable_dev.jsonl`. If decoding still fails at batch-load
+time, the loader logs the path and substitutes the next readable example rather
+than terminating the run.
 
 `training.gradient_checkpointing` is enabled because large-v3-turbo needs much
 more GPU memory than Whisper-small. The default device batch size is 1 with 8

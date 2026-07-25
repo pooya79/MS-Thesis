@@ -74,6 +74,12 @@ class SkippedWhisperExample:
     reason: str
 
 
+@dataclass(frozen=True)
+class SkippedAudioExample:
+    example: WhisperExample
+    reason: str
+
+
 def utc_now() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -307,6 +313,44 @@ def write_skipped_examples_manifest(path: Path, skipped: list[SkippedWhisperExam
             )
 
 
+def write_skipped_audio_manifest(path: Path, skipped: list[SkippedAudioExample]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        for index, skipped_example in enumerate(skipped, start=1):
+            example = skipped_example.example
+            handle.write(
+                json.dumps(
+                    {
+                        "id": index,
+                        "audio_path": str(example.audio_path),
+                        "dataset": str(example.dataset_dir or example.audio_path.parent),
+                        "transcript": example.transcript,
+                        "reason": skipped_example.reason,
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+                + "\n"
+            )
+
+
+def filter_unreadable_audio_examples(
+    examples: list[WhisperExample],
+) -> tuple[list[WhisperExample], list[SkippedAudioExample]]:
+    readable: list[WhisperExample] = []
+    skipped: list[SkippedAudioExample] = []
+    for example in examples:
+        try:
+            sf.info(str(example.audio_path))
+        except sf.LibsndfileError as exc:
+            reason = str(exc)
+            logging.warning("skipping unreadable audio file=%s error=%s", example.audio_path, reason)
+            skipped.append(SkippedAudioExample(example=example, reason=reason))
+            continue
+        readable.append(example)
+    return readable, skipped
+
+
 def model_max_target_positions(model: Any) -> int | None:
     value = getattr(getattr(model, "config", None), "max_target_positions", None)
     return int(value) if value is not None else None
@@ -495,20 +539,29 @@ class WhisperDataset:
         import torch
         import torchaudio.functional as F
 
-        example = self.examples[index]
-        audio, source_rate = sf.read(str(example.audio_path), dtype="float32", always_2d=False)
-        if getattr(audio, "ndim", 1) > 1:
-            audio = audio.mean(axis=1)
-        waveform = torch.as_tensor(audio, dtype=torch.float32)
-        if int(source_rate) != self.sample_rate:
-            waveform = F.resample(waveform, int(source_rate), self.sample_rate)
-        features = self.processor.feature_extractor(
-            waveform.numpy(),
-            sampling_rate=self.sample_rate,
-            return_tensors="pt",
-        ).input_features[0]
-        labels = self.processor.tokenizer(example.transcript).input_ids
-        return {"input_features": features, "labels": labels}
+        read_failures: list[Path] = []
+        for offset in range(len(self.examples)):
+            example = self.examples[(index + offset) % len(self.examples)]
+            try:
+                audio, source_rate = sf.read(str(example.audio_path), dtype="float32", always_2d=False)
+            except sf.LibsndfileError as exc:
+                read_failures.append(example.audio_path)
+                logging.warning("skipping audio that failed during decoding file=%s error=%s", example.audio_path, exc)
+                continue
+            if getattr(audio, "ndim", 1) > 1:
+                audio = audio.mean(axis=1)
+            waveform = torch.as_tensor(audio, dtype=torch.float32)
+            if int(source_rate) != self.sample_rate:
+                waveform = F.resample(waveform, int(source_rate), self.sample_rate)
+            features = self.processor.feature_extractor(
+                waveform.numpy(),
+                sampling_rate=self.sample_rate,
+                return_tensors="pt",
+            ).input_features[0]
+            labels = self.processor.tokenizer(example.transcript).input_ids
+            return {"input_features": features, "labels": labels}
+        failed_paths = ", ".join(str(path) for path in read_failures)
+        raise RuntimeError(f"none of the dataset's audio files could be decoded: {failed_paths}")
 
 
 class WhisperDataCollator:
@@ -599,10 +652,12 @@ def run_training(
         eval_examples = load_split_examples(dataset_dirs, "dev")
         train_examples, skipped_train_examples = filter_examples_by_label_length(train_examples, processor.tokenizer, max_label_tokens)
         eval_examples, skipped_eval_examples = filter_examples_by_label_length(eval_examples, processor.tokenizer, max_label_tokens)
+        train_examples, unreadable_train_examples = filter_unreadable_audio_examples(train_examples)
+        eval_examples, unreadable_eval_examples = filter_unreadable_audio_examples(eval_examples)
         if not train_examples:
-            raise ValueError("no train examples remain after label length filtering")
+            raise ValueError("no train examples remain after label length and readable-audio filtering")
         if not eval_examples:
-            raise ValueError("no dev examples remain after label length filtering")
+            raise ValueError("no dev examples remain after label length and readable-audio filtering")
         skipped_count = len(skipped_train_examples) + len(skipped_eval_examples)
         if skipped_count:
             logging.warning(
@@ -610,11 +665,16 @@ def run_training(
                 skipped_count,
                 max_label_tokens,
             )
+        unreadable_count = len(unreadable_train_examples) + len(unreadable_eval_examples)
+        if unreadable_count:
+            logging.warning("skipped %s examples with unreadable audio", unreadable_count)
         logging.info("writing source manifests")
         write_examples_manifest(run_dir / "manifests" / "train.jsonl", train_examples)
         write_examples_manifest(run_dir / "manifests" / "dev.jsonl", eval_examples)
         write_skipped_examples_manifest(run_dir / "manifests" / "skipped_train.jsonl", skipped_train_examples)
         write_skipped_examples_manifest(run_dir / "manifests" / "skipped_dev.jsonl", skipped_eval_examples)
+        write_skipped_audio_manifest(run_dir / "manifests" / "skipped_unreadable_train.jsonl", unreadable_train_examples)
+        write_skipped_audio_manifest(run_dir / "manifests" / "skipped_unreadable_dev.jsonl", unreadable_eval_examples)
         update_status(
             run_dir,
             datasets=[str(path) for path in dataset_dirs],
@@ -622,6 +682,8 @@ def run_training(
             eval_examples=len(eval_examples),
             skipped_train_examples=len(skipped_train_examples),
             skipped_eval_examples=len(skipped_eval_examples),
+            skipped_unreadable_train_examples=len(unreadable_train_examples),
+            skipped_unreadable_eval_examples=len(unreadable_eval_examples),
             max_label_tokens=max_label_tokens,
         )
         logging.info("datasets=%s", ", ".join(str(path) for path in dataset_dirs))

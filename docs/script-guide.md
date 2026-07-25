@@ -276,6 +276,12 @@ uv run python -m ml.asr.train_whisper_small \
 
 Set `model.pretrained_model` to start from an existing local model directory, such as a previous run's `final` or `best` directory. Leave it empty to start from `model.name`, which defaults to `openai/whisper-small`.
 
+Audio files with unreadable headers are skipped before training and recorded in
+`manifests/skipped_unreadable_train.jsonl` or
+`manifests/skipped_unreadable_dev.jsonl`. If an audio file passes that header
+check but fails during full decoding, its path is logged and the loader
+substitutes the next readable example instead of stopping the run.
+
 ## Whisper-small Evaluation
 
 Run a saved Whisper-small checkpoint on the configured dataset `test.tsv` files. Outputs include `metrics.json`, `predictions.jsonl`, the effective config, logs, and a source manifest. `metrics.json` reports aggregate WER/CER and a `dataset_metrics` list with WER/CER per dataset directory:

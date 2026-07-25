@@ -16,6 +16,7 @@ from ml.asr.train_whisper_small import (
     WhisperExample,
     character_error_rate,
     filter_examples_by_label_length,
+    filter_unreadable_audio_examples,
     latest_checkpoint,
     load_split_examples,
     load_training_config,
@@ -455,6 +456,41 @@ def test_whisper_dataset_computes_features_in_getitem(tmp_path: Path) -> None:
 
     assert torch.equal(item["input_features"], torch.ones((2, 3), dtype=torch.float32))
     assert item["labels"] == list(range(10))
+
+
+def test_filter_unreadable_audio_examples_skips_corrupt_files(tmp_path: Path) -> None:
+    corrupt_dataset = write_dataset(tmp_path / "data", "corrupt")
+    readable_dataset = write_audio_dataset(tmp_path / "data", "readable")
+    examples = load_split_examples([corrupt_dataset, readable_dataset], "train")
+
+    readable, skipped = filter_unreadable_audio_examples(examples)
+
+    assert [example.dataset_dir for example in readable] == [readable_dataset.resolve()]
+    assert [item.example.dataset_dir for item in skipped] == [corrupt_dataset.resolve()]
+    assert skipped[0].reason
+
+
+def test_whisper_dataset_retries_after_runtime_audio_decode_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataset_dir = write_audio_dataset(tmp_path / "data", "cv-corpus-25.0")
+    examples = load_split_examples([dataset_dir], "train")
+    fallback_path = dataset_dir / "clips" / "fallback.wav"
+    sf.write(fallback_path, np.zeros(160, dtype=np.float32), 16000)
+    examples.append(WhisperExample(fallback_path, "fallback", dataset_dir.resolve()))
+    real_read = sf.read
+
+    def fail_first_file(path, *args, **kwargs):
+        if Path(path) == examples[0].audio_path:
+            raise sf.LibsndfileError(2, f"Error opening {path}: ")
+        return real_read(path, *args, **kwargs)
+
+    monkeypatch.setattr(sf, "read", fail_first_file)
+
+    item = WhisperDataset(examples, FakeProcessor(), 16000)[0]
+
+    assert item["labels"] == list(range(len("fallback")))
 
 
 def test_load_split_examples_rejects_missing_audio(tmp_path: Path) -> None:
