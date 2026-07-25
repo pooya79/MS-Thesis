@@ -5,12 +5,16 @@ Every maintained Python script exposes `--help`. Use the help output before runn
 ```bash
 uv run python -m ml.speech_data.scripts.download_common_voice_fa --help
 uv run python -m ml.speech_data.scripts.download_degradation_assets --help
+uv run python -m ml.speech_data.scripts.download_filimo_persian_asr --help
 uv run python -m ml.speech_data.scripts.download_fleurs_persian --help
 uv run python -m ml.speech_data.scripts.download_persian_eval_sets --help
+uv run python -m ml.speech_data.scripts.download_youtube_persian_asr --help
 uv run python -m ml.speech_data.scripts.prepare_common_voice_25 --help
 uv run python -m ml.speech_data.scripts.prepare_degradation_assets --help
+uv run python -m ml.speech_data.scripts.prepare_filimo_persian_asr --help
 uv run python -m ml.speech_data.scripts.prepare_fleurs_persian --help
 uv run python -m ml.speech_data.scripts.prepare_persian_eval_sets --help
+uv run python -m ml.speech_data.scripts.prepare_youtube_persian_asr --help
 uv run python -m ml.speech_data.scripts.generate_random_degraded_clip --help
 uv run python -m ml.speech_data.generate_degraded_dataset --help
 uv run python -m ml.speech_data.generate_degraded_pairs --help
@@ -42,6 +46,27 @@ Download and export the Persian FLEURS subset from Hugging Face:
 uv run python -m ml.speech_data.scripts.download_fleurs_persian \
   --output-root data/fleurs/fa_ir/source
 ```
+
+## PerSets YouTube and Filimo Downloads
+
+Download the public PerSets Persian ASR metadata and tar shards from Hugging
+Face. The download commands keep the upstream tar files intact and resume from
+valid locally cached files by default:
+
+```bash
+uv run python -m ml.speech_data.scripts.download_youtube_persian_asr \
+  --output-root data/youtube-persian-asr/source \
+  --workers 4
+
+uv run python -m ml.speech_data.scripts.download_filimo_persian_asr \
+  --output-root data/filimo-persian-asr/source \
+  --workers 4
+```
+
+Use `--force` to redownload cached artifacts and `--revision` to pin a Hugging
+Face revision. The upstream repositories are large (approximately 23 GB for
+YouTube and 36.7 GB for Filimo), and both contain raw, unvalidated
+transcriptions.
 
 ## Persian Evaluation Set Download
 
@@ -104,6 +129,32 @@ uv run python -m ml.speech_data.scripts.prepare_fleurs_persian \
   --output-root data/fleurs/fa_ir/normalized \
   --workers 4
 ```
+
+## PerSets YouTube and Filimo Preparation
+
+Prepare each downloaded PerSets corpus as a train-only project ASR dataset. The
+commands normalize Persian transcripts with the shared project rules, discard
+rejected or empty text, stream MP3 members from the source tar shards, and write
+mono 16 kHz PCM-16 WAV files with a `train.tsv` containing `path` and
+`sentence` columns:
+
+```bash
+uv run python -m ml.speech_data.scripts.prepare_youtube_persian_asr \
+  --source-root data/youtube-persian-asr/source \
+  --output-root data/youtube-persian-asr/normalized \
+  --workers 4
+
+uv run python -m ml.speech_data.scripts.prepare_filimo_persian_asr \
+  --source-root data/filimo-persian-asr/source \
+  --output-root data/filimo-persian-asr/normalized \
+  --workers 4
+```
+
+Preparation requires `ffmpeg`. It skips existing non-empty WAV files so an
+interrupted run can resume; pass `--force` to reconvert them. No `dev.tsv` or
+`test.tsv` is produced, so use the project's existing evaluation datasets for
+validation and testing. Keep enough free disk space for the downloaded tar
+cache and the converted WAV dataset.
 
 ## TSV Dataset Transcript Normalization
 
