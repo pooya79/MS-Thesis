@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import csv
 import io
+import subprocess
 import tarfile
+from concurrent.futures import Future
 from pathlib import Path
 from typing import Any, Callable
 
@@ -11,9 +13,11 @@ import pytest
 from ml.speech_data.scripts.download_filimo_persian_asr import download_filimo_persian_asr
 from ml.speech_data.scripts.download_youtube_persian_asr import download_youtube_persian_asr
 from ml.speech_data.scripts.persets_asr import (
+    ConversionResult,
     FILIMO_DATASET,
     YOUTUBE_DATASET,
     PreparationAudit,
+    _finish_futures,
     read_metadata,
 )
 from ml.speech_data.scripts.prepare_filimo_persian_asr import prepare_filimo_persian_asr
@@ -189,6 +193,115 @@ def test_prepare_filimo_accepts_tab_metadata_with_unnamed_index_and_resumes(tmp_
     assert forced_audit.wav_converted == 1
     assert conversions == [b"mp3"]
     assert existing.read_bytes() == b"converted"
+
+
+@pytest.mark.parametrize(
+    ("prepare", "delimiter"),
+    [
+        (prepare_youtube_persian_asr, ","),
+        (prepare_filimo_persian_asr, "\t"),
+    ],
+)
+def test_prepare_skips_failed_audio_and_records_ffmpeg_error(
+    tmp_path: Path,
+    prepare: Callable[..., PreparationAudit],
+    delimiter: str,
+) -> None:
+    source_root = tmp_path / "source"
+    output_root = tmp_path / "normalized"
+    source_root.mkdir()
+    (source_root / "unvalidated.csv").write_text(
+        delimiter.join(["file_name", "sentence"])
+        + "\n"
+        + delimiter.join(["good.mp3", "صدای سالم"])
+        + "\n"
+        + delimiter.join(["corrupt.mp3", "صدای خراب"])
+        + "\n",
+        encoding="utf-8",
+    )
+    write_tar(
+        source_root / "data" / "unvalidated_001.tar",
+        {
+            "clips/good.mp3": b"good",
+            "clips/corrupt.mp3": b"corrupt",
+        },
+    )
+
+    def fake_converter(audio_bytes: bytes, output_path: Path) -> None:
+        if audio_bytes == b"corrupt":
+            raise subprocess.CalledProcessError(
+                69,
+                ["ffmpeg"],
+                stderr=b"Decode error rate 1 exceeds maximum 0.666667",
+            )
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(b"wav")
+
+    audit = prepare(
+        source_root,
+        output_root,
+        converter=fake_converter,
+        show_progress=False,
+    )
+
+    assert read_tsv(output_root / "train.tsv") == [
+        {"path": "good.wav", "sentence": "صدای سالم"}
+    ]
+    assert read_tsv(output_root / "failed_audio.tsv") == [
+        {
+            "path": "corrupt.mp3",
+            "error": "Decode error rate 1 exceeds maximum 0.666667",
+        }
+    ]
+    assert not (output_root / "clips" / "corrupt.wav").exists()
+    assert audit.wav_converted == 1
+    assert audit.wav_failed == 1
+    assert audit.final_train_rows == 1
+
+
+def test_prepare_does_not_hide_non_ffmpeg_conversion_errors(tmp_path: Path) -> None:
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    (source_root / "unvalidated.csv").write_text(
+        "file_name,sentence\nclip.mp3,سلام\n",
+        encoding="utf-8",
+    )
+    write_tar(source_root / "data" / "unvalidated_001.tar", {"clips/clip.mp3": b"audio"})
+
+    def broken_converter(_audio_bytes: bytes, _output_path: Path) -> None:
+        raise OSError("output filesystem unavailable")
+
+    with pytest.raises(OSError, match="output filesystem unavailable"):
+        prepare_youtube_persian_asr(
+            source_root,
+            tmp_path / "normalized",
+            converter=broken_converter,
+            show_progress=False,
+        )
+
+
+def test_parallel_conversion_results_audit_failures_without_raising() -> None:
+    converted: Future[ConversionResult] = Future()
+    converted.set_result(ConversionResult("good.mp3"))
+    failed: Future[ConversionResult] = Future()
+    failed.set_result(ConversionResult("corrupt.mp3", "Decode error rate exceeded"))
+    successful: set[str] = set()
+    failures: dict[str, str] = {}
+    audit = PreparationAudit()
+
+    pending = _finish_futures(
+        {converted, failed},
+        successful,
+        failures,
+        audit,
+        wait_for_all=True,
+    )
+
+    assert pending == set()
+    assert successful == {"good.mp3"}
+    assert failures == {"corrupt.mp3": "Decode error rate exceeded"}
+    assert audit.wav_converted == 1
+    assert audit.wav_failed == 1
 
 
 def test_read_metadata_rejects_duplicate_filenames(tmp_path: Path) -> None:

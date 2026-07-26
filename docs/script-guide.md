@@ -153,8 +153,10 @@ uv run python -m ml.speech_data.scripts.prepare_filimo_persian_asr \
 Preparation requires `ffmpeg`. It skips existing non-empty WAV files so an
 interrupted run can resume; pass `--force` to reconvert them. No `dev.tsv` or
 `test.tsv` is produced, so use the project's existing evaluation datasets for
-validation and testing. Keep enough free disk space for the downloaded tar
-cache and the converted WAV dataset.
+validation and testing. MP3 files that ffmpeg cannot decode are excluded from
+`train.tsv` and recorded with the ffmpeg diagnostic in `failed_audio.tsv`.
+Keep enough free disk space for the downloaded tar cache and the converted WAV
+dataset.
 
 ## TSV Dataset Transcript Normalization
 

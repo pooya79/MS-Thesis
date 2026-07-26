@@ -59,6 +59,7 @@ class PreparationAudit:
     discarded_rows: int = 0
     missing_audio_rows: int = 0
     wav_converted: int = 0
+    wav_failed: int = 0
     wav_skipped_existing: int = 0
     final_train_rows: int = 0
 
@@ -68,6 +69,12 @@ class PreparedRow:
     source_name: str
     wav_name: str
     sentence: str
+
+
+@dataclass(frozen=True)
+class ConversionResult:
+    source_name: str
+    error: str | None = None
 
 
 SnapshotDownloader = Callable[..., str]
@@ -187,6 +194,7 @@ def convert_mp3_bytes(audio_bytes: bytes, output_path: Path) -> None:
                 str(partial_path),
             ],
             input=audio_bytes,
+            stderr=subprocess.PIPE,
             check=True,
         )
         partial_path.replace(output_path)
@@ -195,15 +203,28 @@ def convert_mp3_bytes(audio_bytes: bytes, output_path: Path) -> None:
         raise
 
 
-def _convert_job(job: tuple[str, bytes, str]) -> str:
+def _conversion_error_message(error: subprocess.CalledProcessError) -> str:
+    stderr = error.stderr
+    if isinstance(stderr, bytes):
+        detail = stderr.decode("utf-8", errors="replace").strip()
+    else:
+        detail = str(stderr or "").strip()
+    return detail or f"ffmpeg exited with status {error.returncode}"
+
+
+def _convert_job(job: tuple[str, bytes, str]) -> ConversionResult:
     source_name, audio_bytes, output_path = job
-    convert_mp3_bytes(audio_bytes, Path(output_path))
-    return source_name
+    try:
+        convert_mp3_bytes(audio_bytes, Path(output_path))
+    except subprocess.CalledProcessError as error:
+        return ConversionResult(source_name, _conversion_error_message(error))
+    return ConversionResult(source_name)
 
 
 def _finish_futures(
-    futures: set[Future[str]],
+    futures: set[Future[ConversionResult]],
     successful: set[str],
+    failures: dict[str, str],
     audit: PreparationAudit,
     *,
     wait_for_all: bool,
@@ -212,8 +233,13 @@ def _finish_futures(
         return futures
     done, pending = wait(futures, return_when=ALL_COMPLETED if wait_for_all else FIRST_COMPLETED)
     for future in done:
-        successful.add(future.result())
-        audit.wav_converted += 1
+        result = future.result()
+        if result.error is None:
+            successful.add(result.source_name)
+            audit.wav_converted += 1
+        else:
+            failures[result.source_name] = result.error
+            audit.wav_failed += 1
     return set(pending)
 
 
@@ -225,6 +251,17 @@ def _write_train_tsv(path: Path, rows: Iterable[PreparedRow]) -> None:
         writer.writeheader()
         for row in rows:
             writer.writerow({"path": row.wav_name, "sentence": row.sentence})
+    temporary_path.replace(path)
+
+
+def _write_failed_audio_tsv(path: Path, failures: dict[str, str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = path.with_suffix(".tsv.tmp")
+    with temporary_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["path", "error"], delimiter="\t", lineterminator="\n")
+        writer.writeheader()
+        for source_name in sorted(failures):
+            writer.writerow({"path": source_name, "error": failures[source_name]})
     temporary_path.replace(path)
 
 
@@ -258,7 +295,8 @@ def prepare_persets_dataset(
                 audit.wav_skipped_existing += 1
 
     seen_in_archives: set[str] = set()
-    pending: set[Future[str]] = set()
+    failures: dict[str, str] = {}
+    pending: set[Future[ConversionResult]] = set()
     executor = ProcessPoolExecutor(max_workers=workers) if converter is convert_mp3_bytes and workers > 1 else None
     try:
         shard_iterator = tqdm(
@@ -288,15 +326,32 @@ def prepare_persets_dataset(
                     audio_bytes = extracted.read()
                     output_path = output_root / "clips" / row.wav_name
                     if executor is None:
-                        converter(audio_bytes, output_path)
-                        successful.add(source_name)
-                        audit.wav_converted += 1
+                        try:
+                            converter(audio_bytes, output_path)
+                        except subprocess.CalledProcessError as error:
+                            failures[source_name] = _conversion_error_message(error)
+                            audit.wav_failed += 1
+                        else:
+                            successful.add(source_name)
+                            audit.wav_converted += 1
                     else:
                         pending.add(executor.submit(_convert_job, (source_name, audio_bytes, str(output_path))))
                         if len(pending) >= workers * 2:
-                            pending = _finish_futures(pending, successful, audit, wait_for_all=False)
+                            pending = _finish_futures(
+                                pending,
+                                successful,
+                                failures,
+                                audit,
+                                wait_for_all=False,
+                            )
 
-        pending = _finish_futures(pending, successful, audit, wait_for_all=True)
+        pending = _finish_futures(
+            pending,
+            successful,
+            failures,
+            audit,
+            wait_for_all=True,
+        )
     finally:
         if executor is not None:
             executor.shutdown(wait=True, cancel_futures=True)
@@ -305,6 +360,7 @@ def prepare_persets_dataset(
     final_rows = [row for row in rows if row.source_name in successful]
     audit.final_train_rows = len(final_rows)
     _write_train_tsv(output_root / "train.tsv", final_rows)
+    _write_failed_audio_tsv(output_root / "failed_audio.tsv", failures)
     return audit
 
 
