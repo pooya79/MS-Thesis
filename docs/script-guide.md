@@ -360,6 +360,12 @@ uv run python -m ml.asr.train_whisper_small \
 
 Set `model.pretrained_model` to start from an existing local model directory, such as a previous run's `final` or `best` directory. Leave it empty to start from `model.name`, which defaults to `openai/whisper-small`.
 
+Each configured dataset contributes `train.tsv` to training and `dev.tsv` to
+evaluation when those splits are present. A missing split is skipped for that
+dataset, and `test.tsv` is not used during training. Across the configured
+datasets, at least one must provide usable training rows and at least one must
+provide usable development rows.
+
 Audio files with unreadable headers are skipped before training and recorded in
 `manifests/skipped_unreadable_train.jsonl` or
 `manifests/skipped_unreadable_dev.jsonl`. If an audio file passes that header

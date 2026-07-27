@@ -19,6 +19,7 @@ from ml.asr.train_whisper_small import (
     filter_unreadable_audio_examples,
     latest_checkpoint,
     load_split_examples,
+    load_training_examples,
     load_training_config,
     prepare_model_for_training,
     resolve_pretrained_model,
@@ -334,6 +335,28 @@ def test_load_split_examples_reads_test_tsv_without_train_or_dev(tmp_path: Path)
 
     assert test_examples[0].audio_path == (dataset_dir / "clips" / "test.wav").resolve()
     assert test_examples[0].transcript == "test text"
+
+
+def test_load_training_examples_ignores_test_only_dataset(tmp_path: Path) -> None:
+    training_dataset = write_dataset(tmp_path / "data", "training")
+    test_dataset = write_test_only_dataset(tmp_path / "data", "test-only")
+
+    train_examples, eval_examples, eval_splits = load_training_examples(
+        [training_dataset, test_dataset]
+    )
+
+    assert [example.transcript for example in train_examples] == ["train text"]
+    assert [example.transcript for example in eval_examples] == ["dev text"]
+    assert eval_splits == {
+        str(training_dataset.resolve()): "dev",
+    }
+
+
+def test_load_training_examples_rejects_only_test_datasets(tmp_path: Path) -> None:
+    test_dataset = write_test_only_dataset(tmp_path / "data", "test-only")
+
+    with pytest.raises(ValueError, match="no usable train examples"):
+        load_training_examples([test_dataset])
 
 
 def test_filter_examples_by_label_length_skips_overlong_transcripts(tmp_path: Path) -> None:

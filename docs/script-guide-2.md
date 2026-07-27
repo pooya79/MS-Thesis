@@ -13,7 +13,11 @@ uv run python -m ml.asr.train_whisper_large_v3_turbo \
   --resume auto
 ```
 
-Each configured dataset must contain `train.tsv`, `dev.tsv`, and `clips/`.
+Each configured dataset must contain `clips/`. Its `train.tsv` and `dev.tsv`
+are loaded independently when present, so a missing split does not reject that
+dataset. `test.tsv` is not used during training. Across all configured
+datasets, at least one must provide usable training rows and at least one must
+provide usable development rows.
 The TSV files need `path` and `sentence` columns. Relative audio paths are
 looked up under `<dataset>/clips/` first and then under `<dataset>/`.
 

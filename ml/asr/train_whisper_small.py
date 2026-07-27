@@ -266,6 +266,42 @@ def load_split_examples(dataset_dirs: list[Path], split: str) -> list[WhisperExa
     return examples
 
 
+def load_training_examples(
+    dataset_dirs: list[Path],
+) -> tuple[list[WhisperExample], list[WhisperExample], dict[str, str]]:
+    """Load available training and evaluation rows from configured datasets.
+
+    A dataset contributes ``train.tsv`` and ``dev.tsv`` independently when
+    those splits exist. Missing splits are skipped so datasets without a
+    development split do not prevent other configured datasets from loading.
+    ``test.tsv`` is intentionally not used during training.
+    """
+    train_examples: list[WhisperExample] = []
+    eval_examples: list[WhisperExample] = []
+    eval_splits: dict[str, str] = {}
+
+    for dataset_dir in dataset_dirs:
+        validate_dataset_dir(dataset_dir, ())
+
+        if (dataset_dir / "train.tsv").is_file():
+            train_examples.extend(load_split_examples([dataset_dir], "train"))
+        else:
+            logging.info("dataset=%s has no train.tsv; using it for evaluation only", dataset_dir)
+
+        if (dataset_dir / "dev.tsv").is_file():
+            eval_examples.extend(load_split_examples([dataset_dir], "dev"))
+            eval_splits[str(dataset_dir.resolve())] = "dev"
+        else:
+            logging.info("dataset=%s has no dev.tsv; skipping it for evaluation", dataset_dir)
+
+    names = ", ".join(str(path) for path in dataset_dirs)
+    if not train_examples:
+        raise ValueError(f"no usable train examples found in configured datasets: {names}")
+    if not eval_examples:
+        raise ValueError(f"no usable dev examples found in configured datasets: {names}")
+    return train_examples, eval_examples, eval_splits
+
+
 def resolve_dataset_dirs(config: dict[str, Any]) -> list[Path]:
     data = config["data"]
     root_dir = Path(str(data["root_dir"]))
@@ -646,10 +682,8 @@ def run_training(
         logging.info("resolving dataset directories root=%s datasets=%s", data_config["root_dir"], data_config["datasets"])
         dataset_dirs = resolve_dataset_dirs(config)
         logging.info("resolved dataset directories=%s", ", ".join(str(path) for path in dataset_dirs))
-        logging.info("loading training examples")
-        train_examples = load_split_examples(dataset_dirs, "train")
-        logging.info("loading evaluation examples")
-        eval_examples = load_split_examples(dataset_dirs, "dev")
+        logging.info("loading training and evaluation examples")
+        train_examples, eval_examples, eval_splits = load_training_examples(dataset_dirs)
         train_examples, skipped_train_examples = filter_examples_by_label_length(train_examples, processor.tokenizer, max_label_tokens)
         eval_examples, skipped_eval_examples = filter_examples_by_label_length(eval_examples, processor.tokenizer, max_label_tokens)
         train_examples, unreadable_train_examples = filter_unreadable_audio_examples(train_examples)
@@ -657,7 +691,7 @@ def run_training(
         if not train_examples:
             raise ValueError("no train examples remain after label length and readable-audio filtering")
         if not eval_examples:
-            raise ValueError("no dev examples remain after label length and readable-audio filtering")
+            raise ValueError("no evaluation examples remain after label length and readable-audio filtering")
         skipped_count = len(skipped_train_examples) + len(skipped_eval_examples)
         if skipped_count:
             logging.warning(
@@ -678,6 +712,7 @@ def run_training(
         update_status(
             run_dir,
             datasets=[str(path) for path in dataset_dirs],
+            eval_splits=eval_splits,
             train_examples=len(train_examples),
             eval_examples=len(eval_examples),
             skipped_train_examples=len(skipped_train_examples),
