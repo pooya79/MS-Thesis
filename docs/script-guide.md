@@ -3,6 +3,8 @@
 Every maintained Python script exposes `--help`. Use the help output before running a script with custom paths:
 
 ```bash
+uv run python -m ml.speech_data.data_scraping.iranseda_audiobooks --help
+uv run python -m ml.speech_data.data_scraping.iranseda_radio --help
 uv run python -m ml.speech_data.scripts.download_common_voice_fa --help
 uv run python -m ml.speech_data.scripts.download_degradation_assets --help
 uv run python -m ml.speech_data.scripts.download_filimo_persian_asr --help
@@ -28,6 +30,35 @@ uv run python -m ml.fusion.train_fusion --help
 uv run python -m ml.fusion.eval_fusion --help
 uv run python -m ml.enhancement.diagnose_enhancement --help
 ```
+
+## IranSeda Raw Audio Discovery
+
+Discover public audiobook metadata without requesting audio:
+
+```bash
+uv run python -m ml.speech_data.data_scraping.iranseda_audiobooks \
+  --output-root data/iranseda/audiobooks/raw
+```
+
+Discover completed radio archive metadata for an inclusive Gregorian date
+range:
+
+```bash
+uv run python -m ml.speech_data.data_scraping.iranseda_radio \
+  --start-date 2026-07-01 \
+  --end-date 2026-07-07 \
+  --output-root data/iranseda/radio/raw
+```
+
+Both commands are metadata-only by default. Add `--download` to fetch only
+explicit public MP3 links exposed by the corresponding IranSeda page. Use
+`--book-id`, `--category-code`, `--max-pages`, and `--max-books` to bound an
+audiobook run, or repeat `--channel-id` to override radio station discovery.
+Existing audio is reused only when its recorded SHA-256 checksum matches; use
+`--force` to replace selected files. These commands write raw JSONL metadata
+and clips and never create `train.tsv`. See
+[`scraper_guides/iranseda-scrapers.md`](scraper_guides/iranseda-scrapers.md)
+for routes, manifests, classification, and safety behavior.
 
 ## Common Voice Persian Download
 
