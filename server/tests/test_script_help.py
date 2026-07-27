@@ -6,6 +6,7 @@ import pytest
 
 
 SCRIPT_MODULES = [
+    "ml.speech_data.data_scraping.voa_persian",
     "ml.speech_data.scripts.download_common_voice_fa",
     "ml.speech_data.scripts.download_degradation_assets",
     "ml.speech_data.scripts.download_filimo_persian_asr",
