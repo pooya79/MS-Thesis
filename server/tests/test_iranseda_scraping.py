@@ -76,9 +76,18 @@ def modal(attachment_id: str, *, mp3: bool = True) -> str:
 
 
 class FakeResponse:
-    def __init__(self, url: str, payload: bytes, media_type: str = "audio/mpeg") -> None:
+    def __init__(
+        self,
+        url: str,
+        payload: bytes,
+        media_type: str = "audio/mpeg",
+        *,
+        include_length: bool = False,
+    ) -> None:
         self.url = httpx.URL(url)
         self.headers = {"Content-Type": media_type}
+        if include_length:
+            self.headers["Content-Length"] = str(len(payload))
         self.payload = payload
 
     def iter_bytes(self, chunk_size: int = 1024 * 1024) -> Iterator[bytes]:
@@ -553,6 +562,44 @@ def test_downloader_requires_force_for_untracked_existing_file(tmp_path: Path) -
     assert clip.read_bytes() == b"replacement"
 
 
+def test_downloader_stops_when_total_download_traffic_limit_is_reached(tmp_path: Path) -> None:
+    urls = [
+        "http://player.iranseda.ir/downloadfile?attid=451",
+        "http://player.iranseda.ir/downloadfile?attid=452",
+        "http://player.iranseda.ir/downloadfile?attid=453",
+    ]
+    write_jsonl(
+        tmp_path / "tracks.jsonl",
+        [
+            {
+                "id": f"10:{451 + index}",
+                "book_id": "10",
+                "attachment_id": str(451 + index),
+                "is_sample": False,
+                "is_full_book": False,
+                "mp3_url": url,
+            }
+            for index, url in enumerate(urls)
+        ],
+    )
+    client = FakeClient({}, {url: (b"audio", "audio/mpeg") for url in urls})
+
+    audit = downloader.download_discovered(
+        tmp_path,
+        max_download_bytes=7,
+        client=client,  # type: ignore[arg-type]
+    )
+
+    assert audit.downloaded == 1
+    assert audit.bytes_downloaded == 5
+    assert audit.failed == 1
+    assert client.audio_requests == urls[:2]
+    assert not (tmp_path / "clips" / "10" / "452.mp3.part").exists()
+    assert "download_traffic_limit_exceeded" in jsonl(
+        tmp_path / "download_skipped.jsonl"
+    )[0]["reason"]
+
+
 def test_downloader_rejects_malformed_manifest(tmp_path: Path) -> None:
     (tmp_path / "tracks.jsonl").write_text("{not-json}\n", encoding="utf-8")
 
@@ -604,6 +651,34 @@ def test_downloader_cli_returns_nonzero_for_partial_failure(
     )
 
     assert downloader.main(["--source-root", str(tmp_path)]) == 1
+
+
+def test_downloader_cli_help_documents_traffic_limit(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        downloader.main(["--help"])
+
+    assert exc_info.value.code == 0
+    assert "--max-download-gib" in capsys.readouterr().out
+
+
+def test_downloader_cli_converts_fractional_gib_to_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    received_limit: int | None = None
+
+    def fake_download(*args: object, **kwargs: object) -> downloader.DownloadAudit:
+        nonlocal received_limit
+        received_limit = kwargs["max_download_bytes"]  # type: ignore[assignment]
+        return downloader.DownloadAudit(0, 0, 0, 0, 0)
+
+    monkeypatch.setattr(downloader, "download_discovered", fake_download)
+
+    assert downloader.main(
+        ["--source-root", str(tmp_path), "--max-download-gib", "0.5"]
+    ) == 0
+    assert received_limit == 512 * 1024 * 1024
 
 
 def test_discovery_cli_help_has_no_download_option(capsys: pytest.CaptureFixture[str]) -> None:

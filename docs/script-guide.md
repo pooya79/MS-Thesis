@@ -59,7 +59,8 @@ dataset-eligible records afterward, once per discovery root:
 
 ```bash
 uv run python -m ml.speech_data.data_scraping.iranseda_download \
-  --source-root data/iranseda/audiobooks/raw
+  --source-root data/iranseda/audiobooks/raw \
+  --max-download-gib 10
 
 uv run python -m ml.speech_data.data_scraping.iranseda_download \
   --source-root data/iranseda/radio/raw
@@ -68,6 +69,8 @@ uv run python -m ml.speech_data.data_scraping.iranseda_download \
 The downloader records paths and SHA-256 checksums in `downloads.jsonl` and
 current-run failures in `download_skipped.jsonl`. Existing audio is reused only
 when its recorded checksum matches; use `--force` to replace selected files.
+`--max-download-gib` limits newly transferred audio per run; exceeding the
+remaining allowance removes the partial file and stops the batch.
 None of these commands creates `train.tsv`. See
 [`scraper_guides/iranseda-scrapers.md`](scraper_guides/iranseda-scrapers.md)
 for routes, manifests, classification, and safety behavior.

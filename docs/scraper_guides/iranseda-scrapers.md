@@ -93,6 +93,13 @@ uv run python -m ml.speech_data.data_scraping.iranseda_download \
   --source-root data/iranseda/radio/raw
 ```
 
+Use `--max-download-gib N` to cap newly transferred audio in one invocation.
+Checksum-verified files reused from disk do not count. If the next response
+would cross the remaining allowance, its partial file is removed, the event is
+recorded in `download_skipped.jsonl`, and the batch stops with a nonzero exit.
+For example, `--max-download-gib 10` limits a run to 10 GiB; decimal values such
+as `0.5` are accepted.
+
 The source root must contain exactly one of `tracks.jsonl` or `episodes.jsonl`.
 The downloader does not revisit catalogue, EPG, archive, or program pages. It
 selects the audiobook and eligible Persian-speech radio records described

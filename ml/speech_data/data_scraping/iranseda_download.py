@@ -7,6 +7,7 @@ from collections import defaultdict
 from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, timezone
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Literal
 
@@ -14,6 +15,7 @@ from .iranseda_common import (
     DEFAULT_DELAY_SECONDS,
     DEFAULT_TIMEOUT_SECONDS,
     DEFAULT_USER_AGENT,
+    DownloadTrafficLimitError,
     PoliteHttpClient,
     ScrapeError,
     download_audio,
@@ -191,13 +193,29 @@ def _ordered(records: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(records, key=lambda record: str(record["id"]))
 
 
+def _gib_to_bytes(value: str) -> int:
+    try:
+        gibibytes = Decimal(value)
+    except InvalidOperation as error:
+        raise argparse.ArgumentTypeError("must be a positive number") from error
+    if not gibibytes.is_finite() or gibibytes <= 0:
+        raise argparse.ArgumentTypeError("must be a positive number")
+    byte_count = int(gibibytes * (1024**3))
+    if byte_count < 1:
+        raise argparse.ArgumentTypeError("must represent at least one byte")
+    return byte_count
+
+
 def download_discovered(
     source_root: Path,
     *,
     force: bool = False,
+    max_download_bytes: int | None = None,
     client: PoliteHttpClient | None = None,
     retrieved_at: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
 ) -> DownloadAudit:
+    if max_download_bytes is not None and max_download_bytes <= 0:
+        raise ValueError("max_download_bytes must be greater than zero")
     source_kind, manifest_path = detect_source(source_root)
     manifest_records = _read_jsonl(manifest_path)
     candidates, selection_failures = discover_candidates(source_kind, manifest_records)
@@ -224,9 +242,19 @@ def download_discovered(
     client = client or PoliteHttpClient()
     try:
         for index, candidate in enumerate(candidates, start=1):
+            remaining_bytes = (
+                None
+                if max_download_bytes is None
+                else max_download_bytes - bytes_downloaded
+            )
             print(
                 f"[download] item {index}/{len(candidates)} id={candidate.id} "
-                f"path={candidate.relative_path.as_posix()}",
+                f"path={candidate.relative_path.as_posix()}"
+                + (
+                    ""
+                    if remaining_bytes is None
+                    else f" remaining_bytes={remaining_bytes}"
+                ),
                 flush=True,
             )
             old = states.get(candidate.id)
@@ -238,7 +266,21 @@ def download_discovered(
                     output_path=source_root / candidate.relative_path,
                     expected_checksum=expected_checksum,
                     force=force,
+                    max_download_bytes=remaining_bytes,
                 )
+            except DownloadTrafficLimitError as error:
+                failures.append(
+                    {
+                        "id": candidate.id,
+                        "source_kind": source_kind,
+                        "url": candidate.url,
+                        "reason": str(error),
+                        "failed_at": timestamp(),
+                    }
+                )
+                write_jsonl_atomic(failure_path, _ordered(failures))
+                print(f"[download] stopped id={candidate.id}: {error}", flush=True)
+                break
             except (ScrapeError, FileExistsError, OSError) as error:
                 failures.append(
                     {
@@ -321,6 +363,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--force", action="store_true", help="Replace selected audio instead of checksum-based reuse."
     )
+    parser.add_argument(
+        "--max-download-gib",
+        dest="max_download_bytes",
+        type=_gib_to_bytes,
+        default=None,
+        metavar="GIB",
+        help="Maximum audio GiB to transfer in this run; accepts decimals and is unlimited by default.",
+    )
     args = parser.parse_args(argv)
     if args.delay_seconds < 0:
         parser.error("--delay-seconds must be non-negative")
@@ -332,7 +382,12 @@ def main(argv: list[str] | None = None) -> int:
             delay_seconds=args.delay_seconds,
             timeout_seconds=args.timeout_seconds,
         ) as client:
-            audit = download_discovered(args.source_root, force=args.force, client=client)
+            audit = download_discovered(
+                args.source_root,
+                force=args.force,
+                max_download_bytes=args.max_download_bytes,
+                client=client,
+            )
     except ScrapeError as error:
         parser.error(str(error))
     print("IranSeda download summary")

@@ -75,6 +75,10 @@ class TransientResponseError(ScrapeError):
     """Raised when an origin returns a successful but incomplete response."""
 
 
+class DownloadTrafficLimitError(ScrapeError):
+    """Raised before an audio download would exceed the configured traffic cap."""
+
+
 @dataclass(frozen=True)
 class RobotsRules:
     parser: urllib.robotparser.RobotFileParser
@@ -362,6 +366,7 @@ def download_audio(
     output_path: Path,
     expected_checksum: str | None = None,
     force: bool = False,
+    max_download_bytes: int | None = None,
 ) -> DownloadResult:
     audio_url = normalized_url(url, audio=True)
     if output_path.exists() and not force:
@@ -381,8 +386,24 @@ def download_audio(
             media_type = response.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
             if media_type not in ALLOWED_AUDIO_TYPES:
                 raise ScrapeError(f"unexpected_audio_content_type:{media_type or 'missing'}")
+            content_length = response.headers.get("Content-Length")
+            if content_length is not None and max_download_bytes is not None:
+                try:
+                    declared_bytes = int(content_length)
+                except ValueError:
+                    declared_bytes = -1
+                if declared_bytes > max_download_bytes:
+                    raise DownloadTrafficLimitError(
+                        "download_traffic_limit_exceeded:"
+                        f"remaining={max_download_bytes}:declared={declared_bytes}"
+                    )
             for chunk in response.iter_bytes(chunk_size=1024 * 1024):
                 if chunk:
+                    if max_download_bytes is not None and size + len(chunk) > max_download_bytes:
+                        raise DownloadTrafficLimitError(
+                            "download_traffic_limit_exceeded:"
+                            f"remaining={max_download_bytes}:received_at_least={size + len(chunk)}"
+                        )
                     handle.write(chunk)
                     digest.update(chunk)
                     size += len(chunk)
