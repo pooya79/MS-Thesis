@@ -401,8 +401,9 @@ def scrape_audiobooks(
                     checkpoint(f"book {index}/{len(links)}")
                 continue
             print(f"[audiobooks] book {index}/{len(links)} id={link.id}", flush=True)
+            page_html = client.get_text(link.url)
             try:
-                book = parse_book_page(client.get_text(link.url), link)
+                book = parse_book_page(page_html, link)
             except ScrapeError as error:
                 skipped.append({"id": link.id, "source_url": link.url, "reason": str(error)})
                 discovery_checkpoints[link.id] = {

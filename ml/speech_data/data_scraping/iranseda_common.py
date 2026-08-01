@@ -27,6 +27,7 @@ ALLOWED_AUDIO_TYPES = {
     "audio/x-mpeg",
 }
 MAX_REDIRECTS = 5
+INCOMPLETE_HTML_RETRY_SECONDS = 60.0
 
 # These are the public routes linked by the IranSeda catalogue/archive pages.
 # Matching is case-insensitive; unknown routes and hosts fail closed.
@@ -68,6 +69,10 @@ class ScrapeError(RuntimeError):
 
 class RobotsDeniedError(ScrapeError):
     """Raised when an origin's verified robots policy denies a request."""
+
+
+class TransientResponseError(ScrapeError):
+    """Raised when an origin returns a successful but incomplete response."""
 
 
 @dataclass(frozen=True)
@@ -283,11 +288,29 @@ class PoliteHttpClient:
         return rules.crawl_delay
 
     def get_text(self, url: str) -> str:
-        response = self._request(url)
-        try:
-            return response.text
-        finally:
-            response.close()
+        for attempt in range(self.max_retries + 1):
+            response = self._request(url)
+            try:
+                text = response.text
+                media_type = response.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+            finally:
+                response.close()
+            normalized = text.strip().lower()
+            incomplete_html = (
+                media_type == "text/html"
+                and len(text) < 256
+                and normalized.startswith(("<!doctype html", "<html"))
+                and "</html>" not in normalized
+            )
+            if not incomplete_html:
+                return text
+            if attempt == self.max_retries:
+                raise TransientResponseError(f"incomplete HTML response after retries: {url}")
+            # IranSeda sometimes answers a burst with a 200 response containing
+            # only the document declaration. Give its server-side throttle a
+            # real cooldown instead of immediately extending the block.
+            self.sleeper(INCOMPLETE_HTML_RETRY_SECONDS)
+        raise AssertionError("unreachable")
 
     @contextmanager
     def stream(self, url: str) -> Iterator[httpx.Response]:

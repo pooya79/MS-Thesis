@@ -682,6 +682,62 @@ def test_common_client_honors_retry_after() -> None:
     assert 2.0 in sleeps
 
 
+def test_common_client_retries_truncated_successful_html() -> None:
+    attempts = 0
+    sleeps: list[float] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        if request.url.path == "/robots.txt":
+            return httpx.Response(404, request=request)
+        attempts += 1
+        if attempts == 1:
+            return httpx.Response(
+                200,
+                text="<!DOCTYPE html>\r\n",
+                headers={"Content-Type": "text/html"},
+                request=request,
+            )
+        return httpx.Response(
+            200,
+            text="<!DOCTYPE html><html><title>book</title></html>",
+            headers={"Content-Type": "text/html"},
+            request=request,
+        )
+
+    with common.PoliteHttpClient(
+        delay_seconds=0,
+        transport=httpx.MockTransport(handler),
+        sleeper=sleeps.append,
+    ) as client:
+        page = client.get_text("http://book.iranseda.ir/DetailsAlbum/?g=1")
+
+    assert "<title>book</title>" in page
+    assert attempts == 2
+    assert sleeps == [common.INCOMPLETE_HTML_RETRY_SECONDS]
+
+
+def test_common_client_rejects_persistently_truncated_successful_html() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/robots.txt":
+            return httpx.Response(404, request=request)
+        return httpx.Response(
+            200,
+            text="<!DOCTYPE html>\r\n",
+            headers={"Content-Type": "text/html"},
+            request=request,
+        )
+
+    with common.PoliteHttpClient(
+        delay_seconds=0,
+        max_retries=1,
+        transport=httpx.MockTransport(handler),
+        sleeper=lambda _: None,
+    ) as client:
+        with pytest.raises(common.TransientResponseError, match="incomplete HTML"):
+            client.get_text("http://book.iranseda.ir/DetailsAlbum/?g=1")
+
+
 def test_download_rejects_invalid_mime_and_removes_partial(tmp_path: Path) -> None:
     client = FakeClient({}, {FULL_MP3: (b"<html>blocked</html>", "text/html")})
     output = tmp_path / "clip.mp3"
