@@ -189,7 +189,14 @@ class PoliteHttpClient:
         request = self.client.build_request("GET", url, headers={"Accept": "*/*"})
         return self.client.send(request, stream=stream)
 
-    def _request(self, url: str, *, stream: bool = False, check_robots: bool = True) -> httpx.Response:
+    def _request(
+        self,
+        url: str,
+        *,
+        stream: bool = False,
+        check_robots: bool = True,
+        accept_client_error: bool = False,
+    ) -> httpx.Response:
         current = normalized_url(url)
         crawl_delay = 0.0
         if check_robots:
@@ -218,6 +225,8 @@ class PoliteHttpClient:
             if response.status_code not in REDIRECT_STATUS_CODES:
                 if response.status_code >= 400:
                     status = response.status_code
+                    if accept_client_error and 400 <= status < 500:
+                        return response
                     response.close()
                     raise ScrapeError(f"request returned {status}: {current}")
                 return response
@@ -236,9 +245,22 @@ class PoliteHttpClient:
             return self.robots_cache[origin]
         robots_url = normalized_url(f"{origin}/robots.txt")
         try:
-            response = self._request(robots_url, check_robots=False)
+            response = self._request(
+                robots_url,
+                check_robots=False,
+                accept_client_error=True,
+            )
         except ScrapeError as error:
             raise ScrapeError(f"could not verify robots.txt for {origin}") from error
+        if 400 <= response.status_code < 500:
+            response.close()
+            # RFC 9309 section 2.3.1.3 defines 4xx robots responses as
+            # unavailable and permits crawlers to access server resources.
+            parser = urllib.robotparser.RobotFileParser(robots_url)
+            parser.parse(["User-agent: *", "Allow: /"])
+            rules = RobotsRules(parser, 0.0)
+            self.robots_cache[origin] = rules
+            return rules
         try:
             lines = response.text.splitlines()
         finally:

@@ -4,6 +4,7 @@ Every maintained Python script exposes `--help`. Use the help output before runn
 
 ```bash
 uv run python -m ml.speech_data.data_scraping.iranseda_audiobooks --help
+uv run python -m ml.speech_data.data_scraping.iranseda_download --help
 uv run python -m ml.speech_data.data_scraping.iranseda_radio --help
 uv run python -m ml.speech_data.scripts.download_common_voice_fa --help
 uv run python -m ml.speech_data.scripts.download_degradation_assets --help
@@ -50,15 +51,34 @@ uv run python -m ml.speech_data.data_scraping.iranseda_radio \
   --output-root data/iranseda/radio/raw
 ```
 
-Both commands are metadata-only by default. Add `--download` to fetch only
-explicit public MP3 links exposed by the corresponding IranSeda page. Use
+Both commands are strictly metadata-only. Use
 `--book-id`, `--category-code`, `--max-pages`, and `--max-books` to bound an
 audiobook run, or repeat `--channel-id` to override radio station discovery.
-Existing audio is reused only when its recorded SHA-256 checksum matches; use
-`--force` to replace selected files. These commands write raw JSONL metadata
-and clips and never create `train.tsv`. See
+They save explicit public MP3 URLs without requesting the audio. Download the
+dataset-eligible records afterward, once per discovery root:
+
+```bash
+uv run python -m ml.speech_data.data_scraping.iranseda_download \
+  --source-root data/iranseda/audiobooks/raw
+
+uv run python -m ml.speech_data.data_scraping.iranseda_download \
+  --source-root data/iranseda/radio/raw
+```
+
+The downloader records paths and SHA-256 checksums in `downloads.jsonl` and
+current-run failures in `download_skipped.jsonl`. Existing audio is reused only
+when its recorded checksum matches; use `--force` to replace selected files.
+None of these commands creates `train.tsv`. See
 [`scraper_guides/iranseda-scrapers.md`](scraper_guides/iranseda-scrapers.md)
 for routes, manifests, classification, and safety behavior.
+
+Discovery prints live category/station/item progress and writes atomic
+checkpoints during the crawl. Audiobooks checkpoint every 10 processed books
+by default; radio checkpoints every station-day. Set `--checkpoint-every 1` for
+the most frequent audiobook checkpoints, or increase the value to reduce disk
+writes. Reruns skip completed work recorded in `discovery_checkpoints.jsonl`;
+use `--refresh` to deliberately revisit it. The downloader checkpoints and logs
+every selected audio item.
 
 ## Common Voice Persian Download
 

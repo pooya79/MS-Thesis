@@ -16,7 +16,6 @@ from .iranseda_common import (
     DEFAULT_USER_AGENT,
     PoliteHttpClient,
     ScrapeError,
-    download_audio,
     normalize_space,
     normalized_url,
     read_jsonl_by_id,
@@ -26,6 +25,7 @@ from .iranseda_common import (
 
 DEFAULT_OUTPUT_ROOT = Path("data/iranseda/audiobooks/raw")
 BOOK_BASE_URL = "http://book.iranseda.ir/"
+DEFAULT_CHECKPOINT_EVERY = 10
 
 
 @dataclass(frozen=True)
@@ -71,10 +71,8 @@ class Book:
 class ScrapeAudit:
     books: int
     tracks: int
-    downloaded: int
-    reused: int
+    resumed: int
     skipped: int
-    bytes_downloaded: int
 
 
 def _strip_tags(value: str) -> str:
@@ -148,17 +146,39 @@ def _field_values(page_html: str, labels: tuple[str, ...]) -> tuple[str, ...]:
 
 
 def _meta_content(page_html: str, property_name: str) -> str:
-    pattern = (
-        rf"<meta\b(?=[^>]*\bproperty=[\"']{re.escape(property_name)}[\"'])"
-        rf"(?=[^>]*\bcontent=[\"']([^\"']*)[\"'])[^>]*>"
+    for tag in re.findall(r"<meta\b[^>]*>", page_html, re.I):
+        attributes = {
+            name.lower(): html.unescape(value)
+            for name, _, value in re.findall(
+                r"([^\s=/>]+)\s*=\s*([\"'])(.*?)\2",
+                tag,
+                re.S,
+            )
+        }
+        if attributes.get("property", "").lower() == property_name.lower():
+            return normalize_space(attributes.get("content", ""))
+    return ""
+
+
+def _book_title(page_html: str) -> str:
+    title_match = re.search(
+        r"<h1\b(?=[^>]*\bitemprop=[\"']name[\"'])[^>]*>(.*?)</h1>",
+        page_html,
+        re.I | re.S,
     )
-    match = re.search(pattern, page_html, re.I)
-    return normalize_space(html.unescape(match.group(1))) if match else ""
+    if title_match:
+        title = _strip_tags(title_match.group(1))
+        if title:
+            return title
+    title = _meta_content(page_html, "og:title")
+    if title:
+        return title
+    document_title = re.search(r"<title\b[^>]*>(.*?)</title>", page_html, re.I | re.S)
+    return _strip_tags(document_title.group(1)) if document_title else ""
 
 
 def parse_book_page(page_html: str, link: BookLink) -> Book:
-    title_match = re.search(r"<h1\b[^>]*itemprop=[\"']name[\"'][^>]*>(.*?)</h1>", page_html, re.I | re.S)
-    title = _strip_tags(title_match.group(1)) if title_match else _meta_content(page_html, "og:title")
+    title = _book_title(page_html)
     if not title:
         raise ScrapeError("missing_book_title")
     total_duration: str | None = None
@@ -231,14 +251,6 @@ def parse_download_modal(page_html: str, modal_url: str) -> tuple[str | None, st
     return None, None
 
 
-def selected_download_tracks(tracks: Iterable[Track]) -> list[Track]:
-    tracks = list(tracks)
-    full = [track for track in tracks if track.is_full_book and track.mp3_url]
-    if full:
-        return full[:1]
-    return [track for track in tracks if not track.is_sample and track.mp3_url]
-
-
 def _category_url(code: str, page: int) -> str:
     route = "categorylist" if len(code) >= 3 else "category"
     return normalized_url(f"{BOOK_BASE_URL}{route}/?VALID=TRUE&c={urllib.parse.quote(code)}&pn={page}")
@@ -261,14 +273,20 @@ def _discover_book_links(
             BookLink(book_id, normalized_url(f"{BOOK_BASE_URL}DetailsAlbum/?VALID=TRUE&g={book_id}"))
             for book_id in dict.fromkeys(book_ids)
         ]
+    print("[audiobooks] discovering catalogue categories", flush=True)
     codes = list(dict.fromkeys(category_codes or discover_category_codes(client.get_text(BOOK_BASE_URL))))
+    print(f"[audiobooks] discovered {len(codes)} categories", flush=True)
     links: dict[str, BookLink] = {}
-    for code in codes:
+    for category_index, code in enumerate(codes, start=1):
         if not re.fullmatch(r"[a-z]+", code, re.I):
             raise ValueError("category_codes must contain only ASCII letters")
         page = 1
         page_signatures: set[tuple[tuple[str, str], ...]] = set()
         while max_pages is None or page <= max_pages:
+            print(
+                f"[audiobooks] category {category_index}/{len(codes)} code={code} page={page}",
+                flush=True,
+            )
             page_links = parse_catalogue_links(client.get_text(_category_url(code, page)), _category_url(code, page))
             signature = tuple(sorted((link.id, link.url) for link in page_links))
             if not page_links or signature in page_signatures:
@@ -285,6 +303,7 @@ def _discover_book_links(
     expanded: dict[str, BookLink] = {}
     for link in links.values():
         if link.id.startswith("serial:"):
+            print(f"[audiobooks] expanding {link.id}", flush=True)
             for child in parse_serial_page(client.get_text(link.url), link.url):
                 expanded.setdefault(child.id, child)
         else:
@@ -299,8 +318,8 @@ def scrape_audiobooks(
     category_codes: Iterable[str] | None = None,
     max_pages: int | None = None,
     max_books: int | None = None,
-    download: bool = False,
-    force: bool = False,
+    checkpoint_every: int = DEFAULT_CHECKPOINT_EVERY,
+    refresh: bool = False,
     client: PoliteHttpClient | None = None,
     retrieved_at: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
 ) -> ScrapeAudit:
@@ -308,16 +327,42 @@ def scrape_audiobooks(
         raise ValueError("max_pages must be greater than zero")
     if max_books is not None and max_books <= 0:
         raise ValueError("max_books must be greater than zero")
+    if checkpoint_every <= 0:
+        raise ValueError("checkpoint_every must be greater than zero")
     output_root.mkdir(parents=True, exist_ok=True)
     existing_books = read_jsonl_by_id(output_root / "books.jsonl")
     existing_tracks = read_jsonl_by_id(output_root / "tracks.jsonl")
+    discovery_checkpoints = read_jsonl_by_id(output_root / "discovery_checkpoints.jsonl")
     book_records: dict[str, dict[str, Any]] = dict(existing_books)
     track_records: dict[str, dict[str, Any]] = dict(existing_tracks)
     skipped: list[dict[str, Any]] = []
-    downloaded = reused = bytes_downloaded = 0
-    books_seen = tracks_seen = 0
+    books_seen = tracks_seen = resumed = 0
     owns_client = client is None
     client = client or PoliteHttpClient()
+
+    def checkpoint(label: str) -> None:
+        write_jsonl_atomic(
+            output_root / "books.jsonl",
+            sorted(book_records.values(), key=lambda item: item["id"]),
+        )
+        write_jsonl_atomic(
+            output_root / "tracks.jsonl",
+            sorted(track_records.values(), key=lambda item: item["id"]),
+        )
+        write_jsonl_atomic(
+            output_root / "skipped.jsonl",
+            sorted(skipped, key=lambda item: (item["id"], item["reason"])),
+        )
+        write_jsonl_atomic(
+            output_root / "discovery_checkpoints.jsonl",
+            sorted(discovery_checkpoints.values(), key=lambda item: item["id"]),
+        )
+        print(
+            f"[audiobooks] checkpoint {label}: books={len(book_records)} "
+            f"tracks={len(track_records)} skipped={len(skipped)}",
+            flush=True,
+        )
+
     try:
         links = _discover_book_links(
             client,
@@ -328,11 +373,47 @@ def scrape_audiobooks(
         )
         if max_books is not None:
             links = links[:max_books]
-        for link in links:
+        print(f"[audiobooks] processing {len(links)} book detail pages", flush=True)
+        for index, link in enumerate(links, start=1):
+            legacy_book = existing_books.get(link.id)
+            legacy_tracks = legacy_book.get("tracks", []) if legacy_book else []
+            legacy_complete = bool(legacy_book) and isinstance(legacy_tracks, list) and all(
+                isinstance(track_id, str) and track_id in existing_tracks for track_id in legacy_tracks
+            )
+            checkpoint_record = discovery_checkpoints.get(link.id, {})
+            checkpoint_complete = checkpoint_record.get("status") == "discovered"
+            if not refresh and (checkpoint_complete or legacy_complete):
+                resumed += 1
+                print(
+                    f"[audiobooks] resume skip {index}/{len(links)} id={link.id} already processed",
+                    flush=True,
+                )
+                discovery_checkpoints.setdefault(
+                    link.id,
+                    {
+                        "id": link.id,
+                        "status": "discovered",
+                        "completed_at": retrieved_at().astimezone(timezone.utc).isoformat(),
+                        "inferred_from_legacy_manifest": True,
+                    },
+                )
+                if index % checkpoint_every == 0:
+                    checkpoint(f"book {index}/{len(links)}")
+                continue
+            print(f"[audiobooks] book {index}/{len(links)} id={link.id}", flush=True)
             try:
                 book = parse_book_page(client.get_text(link.url), link)
             except ScrapeError as error:
                 skipped.append({"id": link.id, "source_url": link.url, "reason": str(error)})
+                discovery_checkpoints[link.id] = {
+                    "id": link.id,
+                    "status": "skipped",
+                    "reason": str(error),
+                    "completed_at": retrieved_at().astimezone(timezone.utc).isoformat(),
+                }
+                print(f"[audiobooks] skipped id={link.id}: {error}", flush=True)
+                if index % checkpoint_every == 0:
+                    checkpoint(f"book {index}/{len(links)}")
                 continue
             enriched_tracks: list[Track] = []
             for track in book.tracks:
@@ -358,67 +439,66 @@ def scrape_audiobooks(
                 "tracks": [track.id for track in book.tracks],
                 "retrieved_at": timestamp,
             }
-            chosen = {track.id for track in selected_download_tracks(book.tracks)} if download else set()
             for track in book.tracks:
                 record: dict[str, Any] = {
                     **existing_tracks.get(track.id, {}),
                     **asdict(track),
                     "retrieved_at": timestamp,
                 }
-                if track.id in chosen and track.mp3_url:
-                    relative = Path("clips") / book.id / f"{track.attachment_id}.mp3"
-                    old = existing_tracks.get(track.id, {})
-                    try:
-                        result = download_audio(
-                            client,
-                            url=track.mp3_url,
-                            output_path=output_root / relative,
-                            expected_checksum=old.get("checksum"),
-                            force=force,
-                        )
-                    except (ScrapeError, FileExistsError) as error:
-                        skipped.append({"id": track.id, "source_url": track.mp3_url, "reason": str(error)})
-                    else:
-                        record.update(
-                            path=relative.as_posix(),
-                            checksum=result.checksum,
-                            bytes=result.bytes,
-                            media_type=result.media_type,
-                        )
-                        if result.reused:
-                            reused += 1
-                        else:
-                            downloaded += 1
-                            bytes_downloaded += result.bytes
                 track_records[track.id] = record
+            discovery_checkpoints[link.id] = {
+                "id": link.id,
+                "status": "discovered",
+                "tracks": len(book.tracks),
+                "completed_at": timestamp,
+            }
+            print(
+                f"[audiobooks] discovered id={book.id} title={book.title!r} "
+                f"tracks={len(book.tracks)}",
+                flush=True,
+            )
+            if index % checkpoint_every == 0:
+                checkpoint(f"book {index}/{len(links)}")
+    except BaseException:
+        checkpoint("interrupted")
+        raise
     finally:
         if owns_client:
             client.close()
-    write_jsonl_atomic(output_root / "books.jsonl", sorted(book_records.values(), key=lambda item: item["id"]))
-    write_jsonl_atomic(output_root / "tracks.jsonl", sorted(track_records.values(), key=lambda item: item["id"]))
-    write_jsonl_atomic(output_root / "skipped.jsonl", sorted(skipped, key=lambda item: (item["id"], item["reason"])))
-    return ScrapeAudit(books_seen, tracks_seen, downloaded, reused, len(skipped), bytes_downloaded)
+    checkpoint("complete")
+    return ScrapeAudit(books_seen, tracks_seen, resumed, len(skipped))
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Discover public IranSeda audiobook metadata; download explicit MP3 links only with --download."
+        description="Discover public IranSeda audiobook metadata and explicit MP3 links without downloading audio."
     )
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT, help=f"Output directory (default: {DEFAULT_OUTPUT_ROOT}).")
     parser.add_argument("--book-id", action="append", dest="book_ids", help="Book/album ID to inspect; repeat to override category discovery.")
     parser.add_argument("--category-code", action="append", dest="category_codes", help="IranSeda category code to crawl; repeat for multiple categories.")
     parser.add_argument("--max-pages", type=int, help="Maximum category pages per category (default: all exposed pages).")
     parser.add_argument("--max-books", type=int, help="Maximum unique detail pages to inspect (default: all discovered books).")
-    parser.add_argument("--download", action="store_true", help="Download selected explicit MP3s; default is metadata only.")
+    parser.add_argument(
+        "--checkpoint-every",
+        type=int,
+        default=DEFAULT_CHECKPOINT_EVERY,
+        help=f"Write manifests after this many processed books (default: {DEFAULT_CHECKPOINT_EVERY}).",
+    )
+    parser.add_argument(
+        "--refresh",
+        action="store_true",
+        help="Revisit books already recorded in discovery checkpoints.",
+    )
     parser.add_argument("--delay-seconds", type=float, default=DEFAULT_DELAY_SECONDS, help="Minimum per-origin delay in seconds (default: 1.0).")
     parser.add_argument("--timeout-seconds", type=float, default=DEFAULT_TIMEOUT_SECONDS, help="Per-request timeout in seconds (default: 30.0).")
     parser.add_argument("--user-agent", default=DEFAULT_USER_AGENT, help=f"HTTP User-Agent (default: {DEFAULT_USER_AGENT}).")
-    parser.add_argument("--force", action="store_true", help="Replace selected audio instead of checksum-based reuse.")
     args = parser.parse_args(argv)
     if args.delay_seconds < 0:
         parser.error("--delay-seconds must be non-negative")
     if args.timeout_seconds <= 0:
         parser.error("--timeout-seconds must be greater than zero")
+    if args.checkpoint_every <= 0:
+        parser.error("--checkpoint-every must be greater than zero")
     with PoliteHttpClient(
         user_agent=args.user_agent,
         delay_seconds=args.delay_seconds,
@@ -430,8 +510,8 @@ def main(argv: list[str] | None = None) -> int:
             category_codes=args.category_codes,
             max_pages=args.max_pages,
             max_books=args.max_books,
-            download=args.download,
-            force=args.force,
+            checkpoint_every=args.checkpoint_every,
+            refresh=args.refresh,
             client=client,
         )
     print("IranSeda audiobook scrape summary")

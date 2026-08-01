@@ -4,7 +4,6 @@ import hashlib
 import json
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import replace
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -14,6 +13,7 @@ import pytest
 
 from ml.speech_data.data_scraping import iranseda_audiobooks as books
 from ml.speech_data.data_scraping import iranseda_common as common
+from ml.speech_data.data_scraping import iranseda_download as downloader
 from ml.speech_data.data_scraping import iranseda_radio as radio
 
 
@@ -28,6 +28,14 @@ FULL_MP3 = "http://player.iranseda.ir/downloadfile?attid=101&VALID=TRUE&q=11"
 def jsonl(path: Path) -> list[dict[str, Any]]:
     with path.open(encoding="utf-8") as handle:
         return [json.loads(line) for line in handle if line.strip()]
+
+
+def write_jsonl(path: Path, records: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "".join(json.dumps(record, ensure_ascii=False) + "\n" for record in records),
+        encoding="utf-8",
+    )
 
 
 def book_page() -> str:
@@ -116,6 +124,28 @@ def test_audiobook_parses_details_tracks_and_explicit_modal() -> None:
     assert size == "10.5 MB"
 
 
+def test_audiobook_title_falls_back_to_order_independent_open_graph_metadata() -> None:
+    page = book_page().replace(
+        '<h1 itemprop="name">کتاب آزمایشی</h1>',
+        '<meta content="عنوان از فراداده" data-source="catalogue" property="og:title">',
+    )
+
+    parsed = books.parse_book_page(page, books.BookLink(BOOK_ID, BOOK_URL))
+
+    assert parsed.title == "عنوان از فراداده"
+
+
+def test_audiobook_title_falls_back_to_document_title() -> None:
+    page = book_page().replace(
+        '<h1 itemprop="name">کتاب آزمایشی</h1>',
+        "<title>عنوان صفحه</title>",
+    )
+
+    parsed = books.parse_book_page(page, books.BookLink(BOOK_ID, BOOK_URL))
+
+    assert parsed.title == "عنوان صفحه"
+
+
 def test_serial_expansion_and_catalogue_deduplication() -> None:
     serial_url = "http://book.iranseda.ir/SerialHome/?VALID=TRUE&p=55&g=60"
     page = (
@@ -129,7 +159,9 @@ def test_serial_expansion_and_catalogue_deduplication() -> None:
     assert all(link.serial_parent_id == "55" for link in links)
 
 
-def test_audiobook_metadata_only_reads_modals_but_never_audio(tmp_path: Path) -> None:
+def test_audiobook_metadata_only_reads_modals_but_never_audio(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     client = FakeClient(
         {
             BOOK_URL: book_page(),
@@ -138,18 +170,90 @@ def test_audiobook_metadata_only_reads_modals_but_never_audio(tmp_path: Path) ->
             CHAPTER_MODAL: modal("102"),
         }
     )
-    audit = books.scrape_audiobooks(tmp_path, book_ids=[BOOK_ID], client=client)  # type: ignore[arg-type]
+    audit = books.scrape_audiobooks(
+        tmp_path,
+        book_ids=[BOOK_ID],
+        checkpoint_every=1,
+        client=client,  # type: ignore[arg-type]
+    )
 
     assert audit.books == 1
     assert audit.tracks == 3
-    assert audit.downloaded == 0
     assert client.audio_requests == []
     assert len(jsonl(tmp_path / "books.jsonl")) == 1
     assert all("path" not in track for track in jsonl(tmp_path / "tracks.jsonl"))
+    assert jsonl(tmp_path / "discovery_checkpoints.jsonl")[0]["status"] == "discovered"
     assert not (tmp_path / "train.tsv").exists()
+    output = capsys.readouterr().out
+    assert "[audiobooks] book 1/1" in output
+    assert "[audiobooks] checkpoint book 1/1" in output
+
+    resumed_client = FakeClient({})
+    resumed = books.scrape_audiobooks(
+        tmp_path,
+        book_ids=[BOOK_ID],
+        client=resumed_client,  # type: ignore[arg-type]
+    )
+    assert resumed.resumed == 1
+    assert resumed_client.text_requests == []
 
 
-def test_audiobook_download_prefers_full_book_and_reuses_checksum(tmp_path: Path) -> None:
+def test_audiobook_interruption_checkpoints_completed_books(tmp_path: Path) -> None:
+    interrupted_url = "http://book.iranseda.ir/DetailsAlbum/?VALID=TRUE&g=2"
+
+    class InterruptingClient(FakeClient):
+        def get_text(self, url: str) -> str:
+            if url == interrupted_url:
+                raise KeyboardInterrupt
+            return super().get_text(url)
+
+    client = InterruptingClient(
+        {
+            BOOK_URL: book_page(),
+            SAMPLE_MODAL: modal("100"),
+            FULL_MODAL: modal("101"),
+            CHAPTER_MODAL: modal("102"),
+        }
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        books.scrape_audiobooks(
+            tmp_path,
+            book_ids=[BOOK_ID, "2"],
+            checkpoint_every=10,
+            client=client,  # type: ignore[arg-type]
+        )
+
+    assert [record["id"] for record in jsonl(tmp_path / "books.jsonl")] == [BOOK_ID]
+    assert len(jsonl(tmp_path / "tracks.jsonl")) == 3
+
+
+def test_audiobook_retries_skipped_checkpoint(tmp_path: Path) -> None:
+    write_jsonl(
+        tmp_path / "discovery_checkpoints.jsonl",
+        [{"id": BOOK_ID, "status": "skipped", "reason": "missing_book_title"}],
+    )
+    client = FakeClient(
+        {
+            BOOK_URL: book_page(),
+            SAMPLE_MODAL: modal("100"),
+            FULL_MODAL: modal("101"),
+            CHAPTER_MODAL: modal("102"),
+        }
+    )
+
+    audit = books.scrape_audiobooks(
+        tmp_path,
+        book_ids=[BOOK_ID],
+        client=client,  # type: ignore[arg-type]
+    )
+
+    assert audit.books == 1
+    assert audit.resumed == 0
+    assert jsonl(tmp_path / "discovery_checkpoints.jsonl")[0]["status"] == "discovered"
+
+
+def test_audiobook_downloader_prefers_full_book_and_reuses_checksum(tmp_path: Path) -> None:
     payload = b"ID3-full-book"
     texts = {
         BOOK_URL: book_page(),
@@ -157,35 +261,45 @@ def test_audiobook_download_prefers_full_book_and_reuses_checksum(tmp_path: Path
         FULL_MODAL: modal("101"),
         CHAPTER_MODAL: modal("102"),
     }
-    client = FakeClient(texts, {FULL_MP3: (payload, "audio/mpeg")})
-    audit = books.scrape_audiobooks(
-        tmp_path, book_ids=[BOOK_ID], download=True, client=client  # type: ignore[arg-type]
-    )
+    discovery_client = FakeClient(texts)
+    books.scrape_audiobooks(tmp_path, book_ids=[BOOK_ID], client=discovery_client)  # type: ignore[arg-type]
+    tracks_before = jsonl(tmp_path / "tracks.jsonl")
+
+    client = FakeClient({}, {FULL_MP3: (payload, "audio/mpeg")})
+    audit = downloader.download_discovered(tmp_path, client=client)  # type: ignore[arg-type]
 
     assert audit.downloaded == 1
+    assert audit.failed == 0
     assert client.audio_requests == [FULL_MP3]
     clip = tmp_path / "clips" / BOOK_ID / "101.mp3"
     assert clip.read_bytes() == payload
-    record = next(item for item in jsonl(tmp_path / "tracks.jsonl") if item["attachment_id"] == "101")
+    assert jsonl(tmp_path / "tracks.jsonl") == tracks_before
+    record = jsonl(tmp_path / "downloads.jsonl")[0]
     assert record["checksum"] == f"sha256:{hashlib.sha256(payload).hexdigest()}"
 
-    second = FakeClient(texts)
-    audit = books.scrape_audiobooks(
-        tmp_path, book_ids=[BOOK_ID], download=True, client=second  # type: ignore[arg-type]
-    )
+    second = FakeClient({})
+    audit = downloader.download_discovered(tmp_path, client=second)  # type: ignore[arg-type]
     assert audit.reused == 1
     assert second.audio_requests == []
 
 
-def test_audiobook_selection_falls_back_to_non_sample_chapters() -> None:
-    parsed = books.parse_book_page(book_page(), books.BookLink(BOOK_ID, BOOK_URL))
-    enriched = [
-        replace(track, mp3_url=f"http://player.iranseda.ir/downloadfile?attid={track.attachment_id}")
-        for track in parsed.tracks
-        if not track.is_full_book
-    ]
+def test_audiobook_downloader_falls_back_to_non_sample_chapters(tmp_path: Path) -> None:
+    sample_url = "http://player.iranseda.ir/downloadfile?attid=100"
+    chapter_url = "http://player.iranseda.ir/downloadfile?attid=102"
+    write_jsonl(
+        tmp_path / "tracks.jsonl",
+        [
+            {"id": "7:100", "book_id": "7", "attachment_id": "100", "is_sample": True, "is_full_book": False, "mp3_url": sample_url},
+            {"id": "7:102", "book_id": "7", "attachment_id": "102", "is_sample": False, "is_full_book": False, "mp3_url": chapter_url},
+        ],
+    )
+    client = FakeClient({}, {chapter_url: (b"chapter", "audio/mpeg")})
 
-    assert [track.attachment_id for track in books.selected_download_tracks(enriched)] == ["102"]
+    audit = downloader.download_discovered(tmp_path, client=client)  # type: ignore[arg-type]
+
+    assert audit.selected == 1
+    assert client.audio_requests == [chapter_url]
+    assert (tmp_path / "clips" / "7" / "102.mp3").read_bytes() == b"chapter"
 
 
 def station_list() -> str:
@@ -276,7 +390,9 @@ def test_radio_rejects_invalid_date_ranges(start: str, end: str, message: str) -
         radio.validate_date_range(start, end, today=date(2026, 7, 27))
 
 
-def test_radio_metadata_only_keeps_eligible_episode_without_audio_request(tmp_path: Path) -> None:
+def test_radio_metadata_only_keeps_eligible_episode_without_audio_request(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     station_url = "http://radio.iranseda.ir/radiolist/?VALID=TRUE"
     epg_url = "http://radio.iranseda.ir/epglist/?VALID=TRUE&ch=11&d=7/1/2026"
     client = FakeClient(
@@ -300,15 +416,234 @@ def test_radio_metadata_only_keeps_eligible_episode_without_audio_request(tmp_pa
     assert audit.eligible == 1
     assert client.audio_requests == []
     assert jsonl(tmp_path / "episodes.jsonl")[0]["mp3_url"] == RADIO_MP3
+    assert jsonl(tmp_path / "discovery_checkpoints.jsonl")[0]["id"] == "11:2026-07-01"
     assert not (tmp_path / "train.tsv").exists()
+    output = capsys.readouterr().out
+    assert "[radio] fetching station=11 date=2026-07-01" in output
+    assert "[radio] checkpoint station=11 date=2026-07-01" in output
+
+    resumed_client = FakeClient({station_url: station_list()})
+    resumed = radio.scrape_radio(
+        date(2026, 7, 1),
+        date(2026, 7, 1),
+        tmp_path,
+        channel_ids=["11"],
+        client=resumed_client,  # type: ignore[arg-type]
+        now=lambda: datetime(2026, 7, 27, 12, tzinfo=radio.TEHRAN),
+    )
+    assert resumed.resumed == 1
+    assert resumed_client.text_requests == [station_url]
 
 
-def test_common_client_fails_closed_on_unverifiable_robots() -> None:
+def test_radio_downloader_selects_only_eligible_and_reports_missing_mp3(tmp_path: Path) -> None:
+    write_jsonl(
+        tmp_path / "episodes.jsonl",
+        [
+            {"id": "700", "station_id": "11", "date": "2026-07-01", "eligible": True, "mp3_url": RADIO_MP3},
+            {"id": "701", "station_id": "11", "date": "2026-07-01", "eligible": False, "mp3_url": "http://headend2.iranseda.ir/DLFile/?vid=301"},
+            {"id": "702", "station_id": "11", "date": "2026-07-01", "eligible": True, "mp3_url": None},
+        ],
+    )
+    client = FakeClient({}, {RADIO_MP3: (b"radio", "audio/mpeg")})
+
+    audit = downloader.download_discovered(tmp_path, client=client)  # type: ignore[arg-type]
+
+    assert audit.selected == 2
+    assert audit.downloaded == 1
+    assert audit.failed == 1
+    assert client.audio_requests == [RADIO_MP3]
+    assert jsonl(tmp_path / "download_skipped.jsonl")[0]["reason"] == "missing_explicit_mp3"
+
+
+def test_downloader_rejects_missing_or_ambiguous_source_root(tmp_path: Path) -> None:
+    with pytest.raises(common.ScrapeError, match="exactly one"):
+        downloader.detect_source(tmp_path)
+
+    write_jsonl(tmp_path / "tracks.jsonl", [])
+    write_jsonl(tmp_path / "episodes.jsonl", [])
+    with pytest.raises(common.ScrapeError, match="exactly one"):
+        downloader.detect_source(tmp_path)
+
+
+def test_downloader_continues_after_failure_and_checkpoints_success(tmp_path: Path) -> None:
+    bad_url = "http://player.iranseda.ir/downloadfile?attid=201"
+    good_url = "http://player.iranseda.ir/downloadfile?attid=202"
+    write_jsonl(
+        tmp_path / "tracks.jsonl",
+        [
+            {"id": "8:201", "book_id": "8", "attachment_id": "201", "is_sample": False, "is_full_book": False, "mp3_url": bad_url},
+            {"id": "8:202", "book_id": "8", "attachment_id": "202", "is_sample": False, "is_full_book": False, "mp3_url": good_url},
+        ],
+    )
+    client = FakeClient(
+        {},
+        {
+            bad_url: (b"not audio", "text/html"),
+            good_url: (b"good", "audio/mpeg"),
+        },
+    )
+
+    audit = downloader.download_discovered(tmp_path, client=client)  # type: ignore[arg-type]
+
+    assert audit.downloaded == 1
+    assert audit.failed == 1
+    assert client.audio_requests == [bad_url, good_url]
+    assert jsonl(tmp_path / "downloads.jsonl")[0]["id"] == "8:202"
+    assert jsonl(tmp_path / "download_skipped.jsonl")[0]["id"] == "8:201"
+
+
+def test_downloader_imports_matching_legacy_checksum(tmp_path: Path) -> None:
+    payload = b"legacy"
+    checksum = f"sha256:{hashlib.sha256(payload).hexdigest()}"
+    relative = "clips/9/301.mp3"
+    write_jsonl(
+        tmp_path / "tracks.jsonl",
+        [
+            {
+                "id": "9:301",
+                "book_id": "9",
+                "attachment_id": "301",
+                "is_sample": False,
+                "is_full_book": True,
+                "mp3_url": "http://player.iranseda.ir/downloadfile?attid=301",
+                "path": relative,
+                "checksum": checksum,
+            }
+        ],
+    )
+    clip = tmp_path / relative
+    clip.parent.mkdir(parents=True)
+    clip.write_bytes(payload)
+    client = FakeClient({})
+
+    audit = downloader.download_discovered(tmp_path, client=client)  # type: ignore[arg-type]
+
+    assert audit.reused == 1
+    assert client.audio_requests == []
+    assert jsonl(tmp_path / "downloads.jsonl")[0]["checksum"] == checksum
+
+
+def test_downloader_requires_force_for_untracked_existing_file(tmp_path: Path) -> None:
+    url = "http://player.iranseda.ir/downloadfile?attid=401"
+    write_jsonl(
+        tmp_path / "tracks.jsonl",
+        [
+            {
+                "id": "10:401",
+                "book_id": "10",
+                "attachment_id": "401",
+                "is_sample": False,
+                "is_full_book": True,
+                "mp3_url": url,
+            }
+        ],
+    )
+    clip = tmp_path / "clips" / "10" / "401.mp3"
+    clip.parent.mkdir(parents=True)
+    clip.write_bytes(b"untracked")
+
+    failed = downloader.download_discovered(tmp_path, client=FakeClient({}))  # type: ignore[arg-type]
+    assert failed.failed == 1
+    assert clip.read_bytes() == b"untracked"
+
+    client = FakeClient({}, {url: (b"replacement", "audio/mpeg")})
+    replaced = downloader.download_discovered(tmp_path, force=True, client=client)  # type: ignore[arg-type]
+    assert replaced.downloaded == 1
+    assert replaced.failed == 0
+    assert clip.read_bytes() == b"replacement"
+
+
+def test_downloader_rejects_malformed_manifest(tmp_path: Path) -> None:
+    (tmp_path / "tracks.jsonl").write_text("{not-json}\n", encoding="utf-8")
+
+    with pytest.raises(common.ScrapeError, match="invalid_json:tracks.jsonl:1"):
+        downloader.download_discovered(tmp_path, client=FakeClient({}))  # type: ignore[arg-type]
+
+
+def test_downloader_checkpoints_before_interruption(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    write_jsonl(
+        tmp_path / "tracks.jsonl",
+        [
+            {
+                "id": f"11:{attachment_id}",
+                "book_id": "11",
+                "attachment_id": attachment_id,
+                "is_sample": False,
+                "is_full_book": False,
+                "mp3_url": f"http://player.iranseda.ir/downloadfile?attid={attachment_id}",
+            }
+            for attachment_id in ("501", "502")
+        ],
+    )
+    calls = 0
+
+    def interrupted_download(*args: object, **kwargs: object) -> common.DownloadResult:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise KeyboardInterrupt
+        return common.DownloadResult(5, "sha256:first", "audio/mpeg", False)
+
+    monkeypatch.setattr(downloader, "download_audio", interrupted_download)
+
+    with pytest.raises(KeyboardInterrupt):
+        downloader.download_discovered(tmp_path, client=FakeClient({}))  # type: ignore[arg-type]
+
+    assert [record["id"] for record in jsonl(tmp_path / "downloads.jsonl")] == ["11:501"]
+
+
+def test_downloader_cli_returns_nonzero_for_partial_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        downloader,
+        "download_discovered",
+        lambda *args, **kwargs: downloader.DownloadAudit(1, 0, 0, 1, 0),
+    )
+
+    assert downloader.main(["--source-root", str(tmp_path)]) == 1
+
+
+def test_discovery_cli_help_has_no_download_option(capsys: pytest.CaptureFixture[str]) -> None:
+    for module in (books, radio):
+        with pytest.raises(SystemExit) as exc_info:
+            module.main(["--help"])
+        assert exc_info.value.code == 0
+        assert "--download" not in capsys.readouterr().out
+
+
+def test_common_client_allows_resources_when_robots_is_unavailable() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(404, request=request)
+        if request.url.path == "/robots.txt":
+            return httpx.Response(404, request=request)
+        return httpx.Response(200, text="ok", request=request)
 
     with common.PoliteHttpClient(delay_seconds=0, transport=httpx.MockTransport(handler)) as client:
+        assert client.get_text("http://book.iranseda.ir/DetailsAlbum/?g=1") == "ok"
+
+
+@pytest.mark.parametrize("status", [429, 500, 503])
+def test_common_client_fails_closed_on_unreachable_robots(status: int) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status, request=request)
+
+    with common.PoliteHttpClient(
+        delay_seconds=0,
+        max_retries=0,
+        transport=httpx.MockTransport(handler),
+    ) as client:
         with pytest.raises(common.ScrapeError, match="could not verify robots"):
+            client.get_text("http://book.iranseda.ir/DetailsAlbum/?g=1")
+
+
+def test_common_client_fails_closed_on_invalid_successful_robots() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="not a robots policy", request=request)
+
+    with common.PoliteHttpClient(delay_seconds=0, transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(common.ScrapeError, match="invalid policy"):
             client.get_text("http://book.iranseda.ir/DetailsAlbum/?g=1")
 
 

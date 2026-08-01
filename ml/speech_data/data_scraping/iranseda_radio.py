@@ -17,7 +17,6 @@ from .iranseda_common import (
     DEFAULT_USER_AGENT,
     PoliteHttpClient,
     ScrapeError,
-    download_audio,
     normalize_space,
     normalized_url,
     read_jsonl_by_id,
@@ -28,6 +27,7 @@ from .iranseda_common import (
 DEFAULT_OUTPUT_ROOT = Path("data/iranseda/radio/raw")
 RADIO_BASE_URL = "http://radio.iranseda.ir/"
 TEHRAN = ZoneInfo("Asia/Tehran")
+DEFAULT_CHECKPOINT_EVERY = 1
 
 # IDs and labels explicitly identify formats/languages unsuitable for Persian ASR.
 DEFAULT_EXCLUDED_CHANNELS: dict[str, str] = {
@@ -82,10 +82,8 @@ class ScrapeAudit:
     programs: int
     episodes: int
     eligible: int
-    downloaded: int
-    reused: int
+    resumed: int
     skipped: int
-    bytes_downloaded: int
 
 
 def _strip_tags(value: str) -> str:
@@ -319,8 +317,8 @@ def scrape_radio(
     output_root: Path = DEFAULT_OUTPUT_ROOT,
     *,
     channel_ids: Iterable[str] | None = None,
-    download: bool = False,
-    force: bool = False,
+    checkpoint_every: int = DEFAULT_CHECKPOINT_EVERY,
+    refresh: bool = False,
     client: PoliteHttpClient | None = None,
     retrieved_at: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     now: Callable[[], datetime] = lambda: datetime.now(TEHRAN),
@@ -329,43 +327,121 @@ def scrape_radio(
         raise ValueError("start_date must not be after end_date")
     if end_date > now().astimezone(TEHRAN).date():
         raise ValueError("date range cannot include future dates")
+    if checkpoint_every <= 0:
+        raise ValueError("checkpoint_every must be greater than zero")
     output_root.mkdir(parents=True, exist_ok=True)
     existing_stations = read_jsonl_by_id(output_root / "stations.jsonl")
     existing_programs = read_jsonl_by_id(output_root / "programs.jsonl")
     existing_episodes = read_jsonl_by_id(output_root / "episodes.jsonl")
+    discovery_checkpoints = read_jsonl_by_id(output_root / "discovery_checkpoints.jsonl")
     station_records: dict[str, dict[str, Any]] = dict(existing_stations)
     programs: dict[str, dict[str, Any]] = dict(existing_programs)
     episode_records: dict[str, dict[str, Any]] = dict(existing_episodes)
     skipped: list[dict[str, Any]] = []
-    downloaded_count = reused = eligible_count = bytes_downloaded = 0
+    eligible_count = 0
     programs_seen: set[str] = set()
     episodes_seen = 0
+    resumed = 0
+    work_units = 0
     owns_client = client is None
     client = client or PoliteHttpClient()
+
+    def checkpoint(label: str) -> None:
+        write_jsonl_atomic(
+            output_root / "stations.jsonl",
+            sorted(station_records.values(), key=lambda item: int(item["id"])),
+        )
+        write_jsonl_atomic(
+            output_root / "programs.jsonl",
+            sorted(programs.values(), key=lambda item: item["id"]),
+        )
+        write_jsonl_atomic(
+            output_root / "episodes.jsonl",
+            sorted(
+                episode_records.values(),
+                key=lambda item: (
+                    item["date"],
+                    item["station_id"],
+                    item["start_time"],
+                    item["id"],
+                ),
+            ),
+        )
+        write_jsonl_atomic(
+            output_root / "skipped.jsonl",
+            sorted(skipped, key=lambda item: (item["id"], item["reason"])),
+        )
+        write_jsonl_atomic(
+            output_root / "discovery_checkpoints.jsonl",
+            sorted(discovery_checkpoints.values(), key=lambda item: item["id"]),
+        )
+        print(
+            f"[radio] checkpoint {label}: stations={len(station_records)} "
+            f"programs={len(programs)} episodes={len(episode_records)} "
+            f"skipped={len(skipped)}",
+            flush=True,
+        )
+
     try:
+        print("[radio] discovering stations", flush=True)
         station_page = client.get_text(normalized_url(f"{RADIO_BASE_URL}radiolist/?VALID=TRUE"))
         stations = parse_station_list(station_page, overrides=channel_ids)
         for station in stations:
             station_records[station.id] = {**existing_stations.get(station.id, {}), **asdict(station)}
-        for station in stations:
+        print(f"[radio] discovered {len(stations)} selected station records", flush=True)
+        checkpoint("stations discovered")
+        for station_index, station in enumerate(stations, start=1):
+            print(
+                f"[radio] station {station_index}/{len(stations)} "
+                f"id={station.id} name={station.name!r}",
+                flush=True,
+            )
             if not station.included:
                 skipped.append({"id": station.id, "source_url": station.epg_url, "reason": station.classification_reason})
+                print(
+                    f"[radio] excluded station id={station.id}: {station.classification_reason}",
+                    flush=True,
+                )
+                checkpoint(f"excluded station {station.id}")
                 continue
             for day in inclusive_dates(start_date, end_date):
+                checkpoint_id = f"{station.id}:{day.isoformat()}"
+                if not refresh and checkpoint_id in discovery_checkpoints:
+                    resumed += 1
+                    work_units += 1
+                    print(
+                        f"[radio] resume skip station={station.id} "
+                        f"date={day.isoformat()} already processed",
+                        flush=True,
+                    )
+                    if work_units % checkpoint_every == 0:
+                        checkpoint(f"station={station.id} date={day.isoformat()}")
+                    continue
+                print(f"[radio] fetching station={station.id} date={day.isoformat()}", flush=True)
                 epg_url = dated_epg_url(station.id, day)
                 try:
                     entries = parse_epg_page(client.get_text(epg_url), station_id=station.id, day=day)
                 except ScrapeError as error:
                     skipped.append({"id": f"{station.id}:{day}", "source_url": epg_url, "reason": str(error)})
+                    work_units += 1
+                    print(
+                        f"[radio] skipped station={station.id} date={day.isoformat()}: {error}",
+                        flush=True,
+                    )
+                    if work_units % checkpoint_every == 0:
+                        checkpoint(f"station={station.id} date={day.isoformat()}")
                     continue
+                day_had_errors = False
                 for entry in entries:
                     if not entry_completed(entry, now=now()):
                         skipped.append({"id": entry.id, "source_url": entry.archive_url, "reason": "episode_not_completed"})
+                        day_had_errors = True
                         continue
                     try:
                         archive = parse_archive_page(client.get_text(entry.archive_url), entry)
                     except ScrapeError as error:
                         skipped.append({"id": entry.id, "source_url": entry.archive_url, "reason": str(error)})
+                        day_had_errors = True
                         continue
                     program: dict[str, Any] | None = None
                     if archive.program_id and archive.program_url:
@@ -379,6 +455,7 @@ def scrape_radio(
                                     station_id=station.id,
                                 )
                             except ScrapeError as error:
+                                day_had_errors = True
                                 skipped.append(
                                     {"id": archive.program_id, "source_url": archive.program_url, "reason": str(error)}
                                 )
@@ -413,64 +490,61 @@ def scrape_radio(
                         skipped.append({"id": entry.id, "source_url": entry.archive_url, "reason": classification_reason})
                     elif archive.mp3_url is None:
                         skipped.append({"id": entry.id, "source_url": entry.archive_url, "reason": "missing_explicit_mp3"})
-                    elif download:
-                        relative = Path("clips") / station.id / day.isoformat() / f"{entry.id}.mp3"
-                        old = existing_episodes.get(entry.id, {})
-                        try:
-                            result = download_audio(
-                                client,
-                                url=archive.mp3_url,
-                                output_path=output_root / relative,
-                                expected_checksum=old.get("checksum"),
-                                force=force,
-                            )
-                        except (ScrapeError, FileExistsError) as error:
-                            skipped.append({"id": entry.id, "source_url": archive.mp3_url, "reason": str(error)})
-                        else:
-                            record.update(
-                                path=relative.as_posix(),
-                                checksum=result.checksum,
-                                bytes=result.bytes,
-                                media_type=result.media_type,
-                            )
-                            if result.reused:
-                                reused += 1
-                            else:
-                                downloaded_count += 1
-                                bytes_downloaded += result.bytes
                     episode_records[entry.id] = record
+                if not day_had_errors:
+                    discovery_checkpoints[checkpoint_id] = {
+                        "id": checkpoint_id,
+                        "status": "discovered",
+                        "epg_entries": len(entries),
+                        "completed_at": retrieved_at().astimezone(timezone.utc).isoformat(),
+                    }
+                work_units += 1
+                print(
+                    f"[radio] processed station={station.id} date={day.isoformat()} "
+                    f"epg_entries={len(entries)} total_episodes={episodes_seen}",
+                    flush=True,
+                )
+                if work_units % checkpoint_every == 0:
+                    checkpoint(f"station={station.id} date={day.isoformat()}")
+    except BaseException:
+        checkpoint("interrupted")
+        raise
     finally:
         if owns_client:
             client.close()
-    write_jsonl_atomic(output_root / "stations.jsonl", sorted(station_records.values(), key=lambda item: int(item["id"])))
-    write_jsonl_atomic(output_root / "programs.jsonl", sorted(programs.values(), key=lambda item: item["id"]))
-    write_jsonl_atomic(output_root / "episodes.jsonl", sorted(episode_records.values(), key=lambda item: (item["date"], item["station_id"], item["start_time"], item["id"])))
-    write_jsonl_atomic(output_root / "skipped.jsonl", sorted(skipped, key=lambda item: (item["id"], item["reason"])))
+    checkpoint("complete")
     return ScrapeAudit(
         len(stations),
         len(programs_seen),
         episodes_seen,
         eligible_count,
-        downloaded_count,
-        reused,
+        resumed,
         len(skipped),
-        bytes_downloaded,
     )
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Discover completed IranSeda radio archives in an inclusive Gregorian date range; download only with --download."
+        description="Discover completed IranSeda radio archive metadata and explicit MP3 links without downloading audio."
     )
     parser.add_argument("--start-date", required=True, help="Inclusive Gregorian start date in YYYY-MM-DD format.")
     parser.add_argument("--end-date", required=True, help="Inclusive Gregorian end date in YYYY-MM-DD format.")
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT, help=f"Output directory (default: {DEFAULT_OUTPUT_ROOT}).")
     parser.add_argument("--channel-id", action="append", dest="channel_ids", help="IranSeda channel ID; repeat to override default station discovery.")
-    parser.add_argument("--download", action="store_true", help="Download eligible completed explicit MP3s; default is metadata only.")
+    parser.add_argument(
+        "--checkpoint-every",
+        type=int,
+        default=DEFAULT_CHECKPOINT_EVERY,
+        help="Write manifests after this many processed station-days (default: 1).",
+    )
+    parser.add_argument(
+        "--refresh",
+        action="store_true",
+        help="Revisit station-days already recorded in discovery checkpoints.",
+    )
     parser.add_argument("--delay-seconds", type=float, default=DEFAULT_DELAY_SECONDS, help="Minimum per-origin delay in seconds (default: 1.0).")
     parser.add_argument("--timeout-seconds", type=float, default=DEFAULT_TIMEOUT_SECONDS, help="Per-request timeout in seconds (default: 30.0).")
     parser.add_argument("--user-agent", default=DEFAULT_USER_AGENT, help=f"HTTP User-Agent (default: {DEFAULT_USER_AGENT}).")
-    parser.add_argument("--force", action="store_true", help="Replace selected audio instead of checksum-based reuse.")
     args = parser.parse_args(argv)
     try:
         start_date, end_date = validate_date_range(args.start_date, args.end_date)
@@ -480,6 +554,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--delay-seconds must be non-negative")
     if args.timeout_seconds <= 0:
         parser.error("--timeout-seconds must be greater than zero")
+    if args.checkpoint_every <= 0:
+        parser.error("--checkpoint-every must be greater than zero")
     with PoliteHttpClient(
         user_agent=args.user_agent,
         delay_seconds=args.delay_seconds,
@@ -490,8 +566,8 @@ def main(argv: list[str] | None = None) -> int:
             end_date,
             args.output_root,
             channel_ids=args.channel_ids,
-            download=args.download,
-            force=args.force,
+            checkpoint_every=args.checkpoint_every,
+            refresh=args.refresh,
             client=client,
         )
     print("IranSeda radio scrape summary")
