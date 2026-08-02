@@ -140,6 +140,16 @@ atomically replaces its destination.
 Saved MP3 URLs may become stale. If IranSeda changes or invalidates them, rerun
 discovery before retrying the downloader.
 
+## Preparing Whisper training data
+
+The downloaded MP3s are raw source recordings, not ready-to-train ASR examples.
+The proposed pipeline for VAD-based segmentation, Whisper Medium
+pseudo-transcription without word timestamps, constrained LLM cleanup, quality
+filtering, source-grouped splits, and repository-compatible TSV output is
+documented in
+[`../iranseda-whisper-dataset-pipeline.md`](../iranseda-whisper-dataset-pipeline.md).
+No preparation command has been implemented yet.
+
 Review the site's current terms and robots policy before a real crawl. In
 particular, an unreachable `robots.txt` still stops the commands rather than
 assuming permission.

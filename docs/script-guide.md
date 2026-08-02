@@ -78,6 +78,10 @@ remaining allowance removes the partial file and stops the batch.
 None of these commands creates `train.tsv`. See
 [`scraper_guides/iranseda-scrapers.md`](scraper_guides/iranseda-scrapers.md)
 for routes, manifests, classification, and safety behavior.
+The proposed long-audio segmentation, Whisper pseudo-labelling, LLM cleanup,
+quality-control, and split-generation workflow is specified in
+[`iranseda-whisper-dataset-pipeline.md`](iranseda-whisper-dataset-pipeline.md).
+It is not yet an implemented CLI command.
 
 Discovery prints live category/station/item progress and writes atomic
 checkpoints during the crawl. Audiobooks checkpoint every 10 processed books
