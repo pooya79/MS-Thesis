@@ -1,8 +1,21 @@
 audio:
+  # All final clips are mono 16 kHz, regardless of the source format.
   channels: 1
-  format: WAV
   sample_rate: 16000
+
+  # FLAC is the recommended default: it is lossless and smaller than PCM WAV.
+  # WAV is also supported; change format to WAV and keep subtype: PCM_16.
+  format: FLAC
   subtype: PCM_16
+
+  # For the smallest output, replace the two lines above with:
+  # format: MP3
+  # bitrate_kbps: 48
+  #
+  # MP3 is re-encoded with FFmpeg, so it introduces another lossy codec pass.
+  # bitrate_kbps must be an integer from 8 through 160. At 48 kbps, output is
+  # about 22 MB per hour, compared with about 115 MB per hour for PCM WAV.
+  # Do not leave subtype enabled for MP3; MP3 uses bitrate_kbps instead.
 
 vad:
   backend: silero

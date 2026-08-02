@@ -10,15 +10,36 @@ uv run python -m ml.speech_data.long_audio_asr_pipeline.segment_audio --help
 ## Segment Long Audio with VAD
 
 The first reusable stage of the long-audio ASR pipeline detects speech and
-exports deterministic, non-overlapping WAV clips. It is dataset-independent:
+exports deterministic, non-overlapping audio clips. It is dataset-independent:
 it accepts individual audio files, recursively scanned directories, or a JSONL
 source manifest. It does not transcribe clips or create train/dev/test TSVs.
 
 The stage uses the packaged Silero VAD model, decodes every input through
-FFmpeg to mono 16 kHz working audio, and exports mono 16 kHz PCM-16 WAV. Source
-audio is never modified. The default policy targets 20 seconds, prefers 15–25
-seconds, and retains natural speech clips shorter than 15 seconds when they
-contain at least two seconds of detected speech.
+FFmpeg to mono 16 kHz working audio, and exports mono 16 kHz PCM-16 FLAC by
+default. Source audio is never modified. The default policy targets 20 seconds,
+prefers 15–25 seconds, and retains natural speech clips shorter than 15 seconds
+when they contain at least two seconds of detected speech.
+
+FLAC is the default because it is smaller than WAV without introducing another
+lossy codec pass. The comments in the segmentation configuration show every
+supported output option. When disk space is the overriding constraint, edit a
+working copy of its `audio` block to export 48-kbps MP3:
+
+```yaml
+audio:
+  bitrate_kbps: 48
+  channels: 1
+  format: MP3
+  sample_rate: 16000
+```
+
+MP3 clips are accurately cut and re-encoded from the decoded working audio;
+they are not copied at approximate MP3 frame boundaries. To choose another
+rate, set `audio.bitrate_kbps` to an integer from 8 through 160. Do not include
+`subtype` for MP3; that setting applies only to FLAC and WAV. A 48-kbps mono
+output occupies about 22 MB per hour, versus about 115 MB per hour for PCM WAV.
+The temporary working WAV still requires about 115 MB per hour of the one
+source currently being processed and is deleted when that source finishes.
 
 ## Installation
 
@@ -104,7 +125,7 @@ The output has this layout:
 ```text
 output-root/
 ├── clips/
-│   └── episode-42_000000.wav
+│   └── episode-42_000000.flac
 ├── effective_config.yaml
 ├── run.json
 ├── sources.jsonl
@@ -123,8 +144,9 @@ reasons such as `checksum_mismatch`, `audio_decode_failed`, and
 
 Rerunning with the same effective configuration reuses a source only when its
 checksum matches and every recorded clip still has the expected checksum,
-sample rate, channel count, and PCM subtype. Missing or corrupt clips are
-regenerated. A different configuration is rejected unless `--force` is used.
+format, sample rate, channel count, and codec subtype. Missing or corrupt clips
+are regenerated. A different configuration, including an output format or MP3
+bitrate change, is rejected unless `--force` is used.
 Forced generation happens in a staging directory and replaces the existing
 output only after all sources finish without operational failures.
 

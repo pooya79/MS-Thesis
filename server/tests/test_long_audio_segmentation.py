@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import soundfile as sf
+import yaml
 
 from ml.speech_data.long_audio_asr_pipeline.segment_audio import (
     SileroVadDetector,
@@ -201,7 +202,7 @@ def test_directory_inputs_reject_empty_discovery_and_nested_output(tmp_path: Pat
         validate_output_location([tmp_path], tmp_path / "prepared")
 
 
-def test_pipeline_exports_wav_manifests_and_resumes_verified_clips(tmp_path: Path) -> None:
+def test_pipeline_exports_flac_manifests_and_resumes_verified_clips(tmp_path: Path) -> None:
     source = tmp_path / "source.wav"
     output = tmp_path / "prepared"
     make_audio(source)
@@ -229,7 +230,7 @@ def test_pipeline_exports_wav_manifests_and_resumes_verified_clips(tmp_path: Pat
     assert jsonl(output / "sources.jsonl")[0]["source_metadata"] == {"kind": "fixture"}
     for record in records:
         info = sf.info(output / str(record["path"]))
-        assert info.format == "WAV"
+        assert info.format == "FLAC"
         assert info.subtype == "PCM_16"
         assert info.channels == 1
         assert info.samplerate == 16000
@@ -249,14 +250,51 @@ def test_corrupt_clip_is_regenerated_instead_of_reused(tmp_path: Path) -> None:
 
     sources = [SourceRecord("one", source, None, {})]
     run_pipeline(sources, output, config, digest, detector_factory=factory)
-    clip = next((output / "clips").glob("*.wav"))
+    clip = next((output / "clips").glob("*.flac"))
     clip.write_bytes(b"corrupt")
 
     audit = run_pipeline(sources, output, config, digest, detector_factory=factory)
 
     assert audit.sources_processed == 1
     assert calls == 2
-    assert sf.info(clip).format == "WAV"
+    assert sf.info(clip).format == "FLAC"
+
+
+def test_pipeline_exports_configured_mp3_and_reuses_it(tmp_path: Path) -> None:
+    source = tmp_path / "source.wav"
+    output = tmp_path / "prepared"
+    make_audio(source, duration=8.0)
+    config = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
+    config["audio"] = {
+        "bitrate_kbps": 48,
+        "channels": 1,
+        "format": "MP3",
+        "sample_rate": 16000,
+    }
+    mp3_config_path = tmp_path / "segmentation-mp3.yaml"
+    mp3_config_path.write_text(yaml.safe_dump(config, sort_keys=True), encoding="utf-8")
+    config, digest = load_config(mp3_config_path)
+    calls = 0
+
+    def factory() -> FakeVad:
+        nonlocal calls
+        calls += 1
+        return FakeVad([SpeechInterval(0.5, 7.0)])
+
+    sources = [SourceRecord("one", source, None, {})]
+    first = run_pipeline(sources, output, config, digest, detector_factory=factory)
+    second = run_pipeline(sources, output, config, digest, detector_factory=factory)
+
+    clip = next((output / "clips").glob("*.mp3"))
+    info = sf.info(clip)
+    assert first.sources_processed == 1
+    assert second.sources_reused == 1
+    assert calls == 1
+    assert info.format == "MP3"
+    assert info.subtype == "MPEG_LAYER_III"
+    assert info.channels == 1
+    assert info.samplerate == 16000
+    assert jsonl(output / "segments.jsonl")[0]["path"].endswith(".mp3")
 
 
 def test_config_change_requires_force_and_failed_force_preserves_output(tmp_path: Path) -> None:

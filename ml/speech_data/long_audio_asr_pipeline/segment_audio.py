@@ -23,6 +23,11 @@ from .segmentation import SegmentationSettings, SpeechInterval, construct_segmen
 
 
 SUPPORTED_EXTENSIONS = {".aac", ".flac", ".m4a", ".mp3", ".ogg", ".opus", ".wav", ".wma"}
+OUTPUT_FORMATS = {
+    "FLAC": {"extension": ".flac", "subtype": "PCM_16"},
+    "MP3": {"extension": ".mp3", "subtype": "MPEG_LAYER_III"},
+    "WAV": {"extension": ".wav", "subtype": "PCM_16"},
+}
 OPERATIONAL_REASONS = {
     "audio_decode_failed",
     "checksum_mismatch",
@@ -194,10 +199,25 @@ def load_config(path: Path) -> tuple[dict[str, Any], str]:
     required = {"audio", "vad", "segmentation"}
     if not required.issubset(value):
         raise ValueError(f"configuration must contain: {', '.join(sorted(required))}")
-    if value["audio"].get("sample_rate") != 16000 or value["audio"].get("channels") != 1:
+    audio = value["audio"]
+    if not isinstance(audio, dict):
+        raise ValueError("audio configuration must be a mapping")
+    if audio.get("sample_rate") != 16000 or audio.get("channels") != 1:
         raise ValueError("audio output must use one channel at 16000 Hz")
-    if value["audio"].get("subtype") != "PCM_16" or value["audio"].get("format") != "WAV":
-        raise ValueError("audio output must use WAV PCM_16")
+    output_format = audio.get("format")
+    if output_format not in OUTPUT_FORMATS:
+        raise ValueError("audio.format must be one of: FLAC, MP3, WAV")
+    if output_format in {"FLAC", "WAV"}:
+        if audio.get("subtype") != "PCM_16":
+            raise ValueError(f"{output_format} audio output must use subtype PCM_16")
+        if "bitrate_kbps" in audio:
+            raise ValueError(f"{output_format} audio output must not set bitrate_kbps")
+    else:
+        if "subtype" in audio:
+            raise ValueError("MP3 audio output must not set subtype")
+        bitrate = audio.get("bitrate_kbps")
+        if isinstance(bitrate, bool) or not isinstance(bitrate, int) or not 8 <= bitrate <= 160:
+            raise ValueError("MP3 audio output requires integer bitrate_kbps between 8 and 160")
     vad = value["vad"]
     if vad.get("backend") != "silero":
         raise ValueError("vad.backend must be silero")
@@ -356,17 +376,45 @@ def energy_boundary(path: Path, start: float, end: float, window_seconds: float)
     return min(end, midpoint), dip_db
 
 
-def export_clip(working_audio: Path, output: Path, start_sec: float, end_sec: float) -> None:
+def export_clip(
+    working_audio: Path,
+    output: Path,
+    start_sec: float,
+    end_sec: float,
+    audio_config: dict[str, Any],
+) -> None:
+    output_format = str(audio_config["format"])
+    output.parent.mkdir(parents=True, exist_ok=True)
+    temporary = output.with_name(f".{output.name}.part{output.suffix}")
+    if output_format == "MP3":
+        duration = end_sec - start_sec
+        try:
+            result = subprocess.run(
+                [
+                    "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+                    "-i", str(working_audio), "-ss", f"{start_sec:.9f}", "-t", f"{duration:.9f}",
+                    "-map", "0:a:0", "-ac", "1", "-ar", "16000", "-c:a", "libmp3lame",
+                    "-b:a", f"{audio_config['bitrate_kbps']}k", str(temporary),
+                ],
+                text=True,
+                capture_output=True,
+            )
+            if result.returncode != 0:
+                detail = result.stderr.strip().splitlines()[-1] if result.stderr.strip() else f"exit {result.returncode}"
+                raise RuntimeError(f"ffmpeg MP3 export failed: {detail}")
+            temporary.replace(output)
+        finally:
+            temporary.unlink(missing_ok=True)
+        return
+
     with sf.SoundFile(working_audio) as source:
         source.seek(int(round(start_sec * source.samplerate)))
         samples = source.read(int(round((end_sec - start_sec) * source.samplerate)), dtype="float32")
         sample_rate = source.samplerate
     if not len(samples) or not np.isfinite(samples).all():
         raise ValueError("clip is empty or contains non-finite samples")
-    output.parent.mkdir(parents=True, exist_ok=True)
-    temporary = output.with_name(f".{output.name}.part.wav")
     try:
-        sf.write(temporary, samples, sample_rate, format="WAV", subtype="PCM_16")
+        sf.write(temporary, samples, sample_rate, format=output_format, subtype="PCM_16")
         temporary.replace(output)
     finally:
         temporary.unlink(missing_ok=True)
@@ -376,7 +424,13 @@ def _load_existing(path: Path) -> list[dict[str, Any]]:
     return read_jsonl(path) if path.is_file() else []
 
 
-def _verified_reusable(record: dict[str, Any], source_checksum: str, config_digest: str, output_root: Path) -> bool:
+def _verified_reusable(
+    record: dict[str, Any],
+    source_checksum: str,
+    config_digest: str,
+    output_root: Path,
+    audio_config: dict[str, Any],
+) -> bool:
     if record.get("status") != "complete" or record.get("source_checksum") != source_checksum or record.get("config_digest") != config_digest:
         return False
     clips = record.get("clips")
@@ -389,7 +443,13 @@ def _verified_reusable(record: dict[str, Any], source_checksum: str, config_dige
         if not path.is_file() or sha256_file(path) != clip.get("checksum"):
             return False
         info = sf.info(path)
-        if info.samplerate != 16000 or info.channels != 1 or info.subtype != "PCM_16":
+        expected = OUTPUT_FORMATS[str(audio_config["format"])]
+        if (
+            info.samplerate != audio_config["sample_rate"]
+            or info.channels != audio_config["channels"]
+            or info.format != audio_config["format"]
+            or info.subtype != expected["subtype"]
+        ):
             return False
     return True
 
@@ -430,7 +490,9 @@ def process_pipeline(
                 reason, detail = "checksum_mismatch", f"expected {source.expected_checksum}, got {source_checksum}"
 
         previous = existing_sources.get(source.id)
-        if reason is None and previous and _verified_reusable(previous, source_checksum, config_digest, output_root):
+        if reason is None and previous and _verified_reusable(
+            previous, source_checksum, config_digest, output_root, config["audio"]
+        ):
             reused += 1
             clips = previous["clips"]
             clips_written += len(clips)
@@ -484,10 +546,11 @@ def process_pipeline(
                         reason, detail = "no_usable_speech", "no segment met the configured minimum speech duration"
                     for segment_index, boundary in enumerate(boundaries):
                         clip_id = f"{safe_id(source.id)}_{segment_index:06d}"
-                        relative = Path("clips") / f"{clip_id}.wav"
+                        extension = str(OUTPUT_FORMATS[str(config["audio"]["format"])]["extension"])
+                        relative = Path("clips") / f"{clip_id}{extension}"
                         clip_path = output_root / relative
                         try:
-                            export_clip(working, clip_path, boundary.start_sec, boundary.end_sec)
+                            export_clip(working, clip_path, boundary.start_sec, boundary.end_sec, config["audio"])
                         except Exception as error:
                             raise ClipExportError(f"could not export {clip_id}: {error}") from error
                         checksum = sha256_file(clip_path)
@@ -607,10 +670,10 @@ def print_audit(audit: PipelineAudit, output_root: Path) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Use Silero VAD to split generic long audio into deterministic non-overlapping WAV clips."
+        description="Use Silero VAD to split generic long audio into deterministic non-overlapping audio clips."
     )
     parser.add_argument("--config", required=True, type=Path, help="YAML segmentation configuration file.")
-    parser.add_argument("--output-root", required=True, type=Path, help="Directory for WAV clips and audit manifests.")
+    parser.add_argument("--output-root", required=True, type=Path, help="Directory for clips and audit manifests.")
     inputs = parser.add_mutually_exclusive_group(required=True)
     inputs.add_argument("--input", type=Path, action="append", help="Audio file or recursively scanned directory; repeat as needed.")
     inputs.add_argument("--manifest", type=Path, help="JSONL manifest containing string id/path and optional sha256 checksum.")

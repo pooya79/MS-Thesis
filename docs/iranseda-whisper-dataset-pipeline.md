@@ -63,7 +63,7 @@ strict LLM orthographic cleanup with structured output
 quality gates and rejection manifest
         |
         v
-lossless clips + segments.jsonl + train/dev/test TSV files
+versioned clips + segments.jsonl + train/dev/test TSV files
         |
         v
 human audit and training-set release
@@ -220,8 +220,11 @@ audit trail.
 ## 5. Exporting final audio clips
 
 Export final intervals from the decoded lossless working audio, not by copying
-arbitrary MP3 frames. Use mono 16 kHz PCM WAV or lossless FLAC. FLAC is
-preferred when storage is important.
+arbitrary MP3 frames. Use mono 16 kHz PCM WAV or lossless FLAC. FLAC is the
+default when storage is important. If available disk space cannot accommodate
+FLAC, the implemented segmenter also supports explicitly versioned MP3 output
+at a configured bitrate; this adds another lossy codec pass and should be
+recorded as part of the experiment configuration.
 
 Names must be stable and derived from the source ID plus a zero-padded segment
 index, for example:
