@@ -19,6 +19,7 @@ uv run python -m ml.speech_data.scripts.prepare_fleurs_persian --help
 uv run python -m ml.speech_data.scripts.prepare_persian_eval_sets --help
 uv run python -m ml.speech_data.scripts.prepare_youtube_persian_asr --help
 uv run python -m ml.speech_data.scripts.convert_dataset_to_flac --help
+uv run python -m ml.speech_data.scripts.verify_flac_conversion --help
 uv run python -m ml.speech_data.scripts.generate_random_degraded_clip --help
 uv run python -m ml.speech_data.generate_degraded_dataset --help
 uv run python -m ml.speech_data.generate_degraded_pairs --help
@@ -54,6 +55,24 @@ cumulative savings. The default `PCM_16` FLAC
 subtype is appropriate for typical speech datasets; use `--subtype PCM_24` if
 the source contains audio with more than 16 bits of meaningful precision. Use
 `--overwrite` to deliberately replace an existing output directory.
+
+Verify a completed conversion against its original dataset:
+
+```bash
+uv run python -m ml.speech_data.scripts.verify_flac_conversion \
+  --source-root data/my-dataset \
+  --converted-root data/my-dataset-flac
+```
+
+The verifier logs every selected split file, referenced audio pair, and copied
+metadata file as it checks it. It requires matching TSV columns and rows (apart
+from the expected FLAC path rewrite), byte-identical metadata, FLAC output, and
+matching audio frame count, channel count, sample rate, and decoded samples.
+Decoded samples may differ only by one least-significant bit at the output
+FLAC's PCM bit depth. Missing and unexpected output files fail verification.
+Pass the same `--splits` selection used for conversion when only a subset was
+converted. A successful command exits with status 0; a mismatch exits with
+status 1 and lists all detected failures.
 
 ## IranSeda Raw Audio Discovery
 
