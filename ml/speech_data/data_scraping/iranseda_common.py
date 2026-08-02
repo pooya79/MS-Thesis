@@ -53,12 +53,14 @@ ALLOWED_ROUTES: dict[str, set[str]] = {
         "/book-player/",
         "/epg-player/",
         "/downloadfile",
+        "/downloadfile/",
         "/robots.txt",
     },
     "headend2.iranseda.ir": {"/dlfile/", "/robots.txt"},
 }
 AUDIO_ROUTES = {
     ("player.iranseda.ir", "/downloadfile"),
+    ("player.iranseda.ir", "/downloadfile/"),
     ("headend2.iranseda.ir", "/dlfile/"),
 }
 
