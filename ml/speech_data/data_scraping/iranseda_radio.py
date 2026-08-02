@@ -543,7 +543,7 @@ def main(argv: list[str] | None = None) -> int:
         help="Revisit station-days already recorded in discovery checkpoints.",
     )
     parser.add_argument("--delay-seconds", type=float, default=DEFAULT_DELAY_SECONDS, help="Minimum per-origin delay in seconds (default: 1.0).")
-    parser.add_argument("--timeout-seconds", type=float, default=DEFAULT_TIMEOUT_SECONDS, help="Per-request timeout in seconds (default: 30.0).")
+    parser.add_argument("--timeout-seconds", type=float, default=DEFAULT_TIMEOUT_SECONDS, help="Per-request timeout in seconds (default: 120.0).")
     parser.add_argument("--user-agent", default=DEFAULT_USER_AGENT, help=f"HTTP User-Agent (default: {DEFAULT_USER_AGENT}).")
     args = parser.parse_args(argv)
     try:

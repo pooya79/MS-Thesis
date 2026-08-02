@@ -69,6 +69,10 @@ uv run python -m ml.speech_data.data_scraping.iranseda_download \
 The downloader records paths and SHA-256 checksums in `downloads.jsonl` and
 current-run failures in `download_skipped.jsonl`. Existing audio is reused only
 when its recorded checksum matches; use `--force` to replace selected files.
+Requests use a 120-second timeout by default. If an audio stream times out, its
+partial file is removed, the timeout is recorded in `download_skipped.jsonl`,
+and the downloader continues with the next selected item. Use
+`--timeout-seconds` to override the default.
 `--max-download-gib` limits newly transferred audio per run; exceeding the
 remaining allowance removes the partial file and stops the batch.
 None of these commands creates `train.tsv`. See

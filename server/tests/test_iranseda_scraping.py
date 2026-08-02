@@ -94,6 +94,12 @@ class FakeResponse:
         yield self.payload
 
 
+class TimeoutResponse(FakeResponse):
+    def iter_bytes(self, chunk_size: int = 1024 * 1024) -> Iterator[bytes]:
+        yield b"partial"
+        raise httpx.ReadTimeout("timed out")
+
+
 class FakeClient:
     def __init__(self, texts: dict[str, str], audio: dict[str, tuple[bytes, str]] | None = None) -> None:
         self.texts = texts
@@ -499,6 +505,41 @@ def test_downloader_continues_after_failure_and_checkpoints_success(tmp_path: Pa
     assert client.audio_requests == [bad_url, good_url]
     assert jsonl(tmp_path / "downloads.jsonl")[0]["id"] == "8:202"
     assert jsonl(tmp_path / "download_skipped.jsonl")[0]["id"] == "8:201"
+
+
+def test_downloader_skips_stream_timeout_and_continues(tmp_path: Path) -> None:
+    timeout_url = "http://player.iranseda.ir/downloadfile?attid=211"
+    good_url = "http://player.iranseda.ir/downloadfile?attid=212"
+    write_jsonl(
+        tmp_path / "tracks.jsonl",
+        [
+            {"id": "8:211", "book_id": "8", "attachment_id": "211", "is_sample": False, "is_full_book": False, "mp3_url": timeout_url},
+            {"id": "8:212", "book_id": "8", "attachment_id": "212", "is_sample": False, "is_full_book": False, "mp3_url": good_url},
+        ],
+    )
+
+    class TimeoutClient(FakeClient):
+        @contextmanager
+        def stream(self, url: str) -> Iterator[FakeResponse]:
+            self.audio_requests.append(url)
+            if url == timeout_url:
+                yield TimeoutResponse(url, b"")
+            else:
+                payload, media_type = self.audio[url]
+                yield FakeResponse(url, payload, media_type)
+
+    client = TimeoutClient({}, {good_url: (b"good", "audio/mpeg")})
+
+    audit = downloader.download_discovered(tmp_path, client=client)  # type: ignore[arg-type]
+
+    assert audit.downloaded == 1
+    assert audit.failed == 1
+    assert client.audio_requests == [timeout_url, good_url]
+    failure = jsonl(tmp_path / "download_skipped.jsonl")[0]
+    assert failure["id"] == "8:211"
+    assert failure["reason"].startswith("audio_download_timeout:")
+    assert not (tmp_path / "clips" / "8" / "211.mp3.part").exists()
+    assert (tmp_path / "clips" / "8" / "212.mp3").read_bytes() == b"good"
 
 
 def test_downloader_imports_matching_legacy_checksum(tmp_path: Path) -> None:

@@ -353,7 +353,7 @@ def main(argv: list[str] | None = None) -> int:
         "--timeout-seconds",
         type=float,
         default=DEFAULT_TIMEOUT_SECONDS,
-        help="Per-request timeout in seconds (default: 30.0).",
+        help="Per-request timeout in seconds (default: 120.0).",
     )
     parser.add_argument(
         "--user-agent",

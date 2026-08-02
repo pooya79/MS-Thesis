@@ -17,7 +17,7 @@ import httpx
 
 
 DEFAULT_DELAY_SECONDS = 1.0
-DEFAULT_TIMEOUT_SECONDS = 30.0
+DEFAULT_TIMEOUT_SECONDS = 120.0
 DEFAULT_USER_AGENT = "MS-Thesis-IranSeda-Research/1.0"
 TRANSIENT_STATUS_CODES = {429, 500, 502, 503, 504}
 REDIRECT_STATUS_CODES = {301, 302, 303, 307, 308}
@@ -412,6 +412,9 @@ def download_audio(
         if size == 0:
             raise ScrapeError("empty_audio_response")
         temporary.replace(output_path)
+    except httpx.TimeoutException as error:
+        temporary.unlink(missing_ok=True)
+        raise ScrapeError(f"audio_download_timeout:{audio_url}") from error
     except Exception:
         temporary.unlink(missing_ok=True)
         raise
