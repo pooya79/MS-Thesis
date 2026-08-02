@@ -155,10 +155,47 @@ the command fail. Missing files, checksum failures, decoding failures, VAD
 errors, and export errors are operational failures: processing continues, but
 the command exits nonzero after writing its audit manifests.
 
-## Next Pipeline Stages
+## Whisper Transcription and Normalization
 
-The generated clips and `segments.jsonl` are the inputs for future Whisper
-pseudo-transcription. Transcript normalization, constrained LLM cleanup,
-content filtering, leakage-safe source grouping, TSV generation, and human
-audit remain separate stages described in
+After segmentation, transcribe every manifest-backed clip with the fine-tuned
+Whisper Medium model and apply the repository's shared Persian ASR text rules:
+
+```bash
+uv run python -m ml.speech_data.long_audio_asr_pipeline.transcribe_segments \
+  --config configs/long_audio_asr_pipeline/transcription.yaml \
+  --input-root data/iranseda/segmented
+```
+
+Set `model.checkpoint` in the YAML to the trained final model or Trainer
+checkpoint. The processor defaults to `openai/whisper-medium`, allowing a
+weights-only Trainer checkpoint to be used. The inference section controls
+device selection, mixed precision, batch size, and maximum generation length;
+decoding is deterministic and explicitly uses Persian transcription mode.
+
+The input root must be an unchanged `segment_audio` output containing
+`run.json`, `segments.jsonl`, and `clips/`. The stage verifies clip paths,
+checksums, readability, channel count, and 16 kHz sample rate before inference.
+It writes:
+
+```text
+transcription.tsv
+transcriptions.jsonl
+transcription_rejected.jsonl
+transcription_summary.json
+transcription_run.json
+transcription_effective_config.yaml
+```
+
+`transcription.tsv` contains `path` and `sentence`, with paths relative to
+`clips/`. The accepted JSONL preserves raw and normalized transcripts plus the
+model and decoding identity. Rejected normalization and operational failures
+are recorded separately; operational failures make the command exit nonzero.
+
+An identical rerun reuses records whose clip checksum and transcription digest
+still match. Changed settings require `--force`. A forced run stages its output
+and preserves the previous transcription artifacts if an operational failure
+occurs. `--force` never changes clips or segmentation manifests.
+
+Constrained LLM cleanup, content filtering, leakage-safe source grouping,
+train/dev/test publication, and human audit remain later stages described in
 [`iranseda-whisper-dataset-pipeline.md`](iranseda-whisper-dataset-pipeline.md).

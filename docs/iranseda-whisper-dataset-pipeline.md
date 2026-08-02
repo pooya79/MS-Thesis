@@ -11,8 +11,11 @@ This remains the design for the complete preparation pipeline. The downloader
 is responsible only for acquiring and verifying raw audio. The reusable VAD
 and chunk-export stage is now implemented as
 `ml.speech_data.long_audio_asr_pipeline.segment_audio`; see
-[`long-audio-asr-pipeline-guide.md`](long-audio-asr-pipeline-guide.md). The
-transcription and later dataset-publication stages remain future work.
+[`long-audio-asr-pipeline-guide.md`](long-audio-asr-pipeline-guide.md). Whisper
+pseudo-transcription plus deterministic Persian normalization are now
+implemented together as
+`ml.speech_data.long_audio_asr_pipeline.transcribe_segments`. Constrained LLM
+cleanup and the later dataset-publication stages remain future work.
 
 The fine-tuned Whisper model is not required to produce word timestamps. Final
 audio boundaries are chosen before transcription by voice activity detection
@@ -268,6 +271,13 @@ ratio, transcript heuristics, LLM edit checks, and human auditing.
 Transcription failures go to a retry/rejection manifest with the exception and
 model configuration. They must not create an empty `sentence` entry.
 
+The implemented command consumes the directory produced by `segment_audio`,
+uses its `segments.jsonl` as the authoritative clip list, and writes
+`transcription.tsv` beside that manifest. Model and inference settings come
+from `configs/long_audio_asr_pipeline/transcription.yaml`; see
+[`long-audio-asr-pipeline-guide.md`](long-audio-asr-pipeline-guide.md) for the
+command and artifact details.
+
 ## 7. Deterministic Persian normalization
 
 Apply deterministic normalization before using an LLM where possible. Reuse
@@ -283,6 +293,11 @@ do not disagree. Typical operations include:
 Do not remove spoken repetitions, incomplete phrases, filled pauses, names, or
 numbers merely because they look unusual. Save the raw Whisper output and the
 deterministically normalized value separately.
+
+The implemented transcription command applies
+`ml.speech_data.text_normalization.normalize_persian_asr_text` immediately
+after decoding. It stores both forms in `transcriptions.jsonl` and includes
+only successfully normalized, non-empty labels in `transcription.tsv`.
 
 ## 8. Constrained LLM cleanup
 
