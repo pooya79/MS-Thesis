@@ -18,6 +18,7 @@ uv run python -m ml.speech_data.scripts.prepare_filimo_persian_asr --help
 uv run python -m ml.speech_data.scripts.prepare_fleurs_persian --help
 uv run python -m ml.speech_data.scripts.prepare_persian_eval_sets --help
 uv run python -m ml.speech_data.scripts.prepare_youtube_persian_asr --help
+uv run python -m ml.speech_data.scripts.convert_dataset_to_flac --help
 uv run python -m ml.speech_data.scripts.generate_random_degraded_clip --help
 uv run python -m ml.speech_data.generate_degraded_dataset --help
 uv run python -m ml.speech_data.generate_degraded_pairs --help
@@ -31,6 +32,28 @@ uv run python -m ml.fusion.train_fusion --help
 uv run python -m ml.fusion.eval_fusion --help
 uv run python -m ml.enhancement.diagnose_enhancement --help
 ```
+
+## Convert an ASR Dataset to FLAC
+
+Create a new copy of a convention-style ASR dataset in which every clip
+referenced by the selected split TSVs is stored as lossless FLAC:
+
+```bash
+uv run python -m ml.speech_data.scripts.convert_dataset_to_flac \
+  --source-root data/my-dataset \
+  --output-root data/my-dataset-flac
+```
+
+The source dataset is not changed. By default, the converter includes every
+existing standard split (`train.tsv`, `dev.tsv`, and `test.tsv`), preserves all
+TSV columns, rewrites only the `path` values, and copies non-clip dataset
+metadata. Only referenced clips are copied, so orphaned audio does not consume
+space in the output. Shared clips are encoded once. During conversion, stdout
+reports the current clip plus its input size, FLAC size, per-file savings, and
+cumulative savings. The default `PCM_16` FLAC
+subtype is appropriate for typical speech datasets; use `--subtype PCM_24` if
+the source contains audio with more than 16 bits of meaningful precision. Use
+`--overwrite` to deliberately replace an existing output directory.
 
 ## IranSeda Raw Audio Discovery
 
