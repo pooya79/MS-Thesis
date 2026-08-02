@@ -28,6 +28,7 @@ SCRIPT_MODULES = [
     "ml.speech_data.generate_degraded_pairs",
     "ml.speech_data.concatenate_long_variants",
     "ml.speech_data.inspect_manifest",
+    "ml.speech_data.long_audio_asr_pipeline.segment_audio",
     "ml.speech_data.validate_degraded_dataset",
     "ml.asr.train_whisper_small",
     "ml.asr.eval_whisper_small",

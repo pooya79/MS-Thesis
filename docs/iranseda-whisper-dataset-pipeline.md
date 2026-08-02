@@ -7,11 +7,12 @@ downloaded by the IranSeda scrapers into a pseudo-labelled Persian ASR dataset.
 The labels are produced by a fine-tuned Whisper Medium model and may be
 orthographically cleaned by an LLM.
 
-This is a pipeline design, not documentation for an existing command. The
-downloader remains responsible only for acquiring and verifying raw audio. A
-future implementation should live in a separate module such as
-`ml.speech_data.scripts.prepare_iranseda_asr` and follow the repository rule
-that scripts expose documented `--help` output and have CLI tests.
+This remains the design for the complete preparation pipeline. The downloader
+is responsible only for acquiring and verifying raw audio. The reusable VAD
+and chunk-export stage is now implemented as
+`ml.speech_data.long_audio_asr_pipeline.segment_audio`; see
+[`long-audio-asr-pipeline-guide.md`](long-audio-asr-pipeline-guide.md). The
+transcription and later dataset-publication stages remain future work.
 
 The fine-tuned Whisper model is not required to produce word timestamps. Final
 audio boundaries are chosen before transcription by voice activity detection
@@ -477,8 +478,11 @@ the quantity of generated hours.
 
 ## 14. Reproducibility and resume behavior
 
-The future preparation command should accept a configuration file containing
-all segmentation, model, cleanup, filtering, and split parameters. It should:
+The complete future preparation command should accept a configuration file
+containing all segmentation, model, cleanup, filtering, and split parameters.
+The implemented segmentation stage already applies the corresponding source,
+configuration-digest, resume, and atomic-manifest requirements. The complete
+pipeline should:
 
 - record the configuration and its digest in every run;
 - use explicit seeds for split assignment and any stochastic operation;

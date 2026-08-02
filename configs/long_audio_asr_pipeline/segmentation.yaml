@@ -1,0 +1,25 @@
+audio:
+  channels: 1
+  format: WAV
+  sample_rate: 16000
+  subtype: PCM_16
+
+vad:
+  backend: silero
+  frame_samples: 512
+  merge_silence_seconds: 0.5
+  minimum_speech_seconds: 0.25
+  sample_rate: 16000
+  threshold: 0.5
+
+segmentation:
+  boundary_padding_seconds: 0.15
+  energy_search_start_seconds: 18.0
+  energy_window_seconds: 0.2
+  hard_max_seconds: 28.0
+  minimum_clip_seconds: 2.0
+  minimum_energy_dip_db: 6.0
+  preferred_max_seconds: 25.0
+  preferred_min_seconds: 15.0
+  target_seconds: 20.0
+  useful_boundary_silence_seconds: 0.3
