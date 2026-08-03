@@ -1,10 +1,11 @@
-# Long-Audio ASR Pipeline: VAD Segmentation Guide
+# Long-Audio ASR Pipeline Guide
 
 Every maintained script in this pipeline exposes `--help`. Inspect the command
 before running it with custom paths or configuration:
 
 ```bash
 uv run python -m ml.speech_data.long_audio_asr_pipeline.segment_audio --help
+uv run python -m ml.speech_data.long_audio_asr_pipeline.transcribe_segments --help
 ```
 
 ## Segment Long Audio with VAD
