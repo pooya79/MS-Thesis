@@ -127,8 +127,13 @@ uv run python -m ml.speech_data.long_audio_asr_pipeline.segment_audio \
   --config configs/long_audio_asr_pipeline/segmentation.yaml \
   --manifest data/iranseda/radio/raw/downloads.jsonl \
   --source-root data/iranseda/radio/raw \
-  --output-root data/iranseda/segmented/flac-v1
+  --output-root data/iranseda/segmented/flac-v1 \
+  --workers 4
 ```
+
+`--workers` processes independent source files concurrently. Each worker owns
+its own Silero VAD model instance, while audit-manifest writes remain
+serialized. Start with 2–4 workers and adjust for available CPU and memory.
 
 For smaller lossy outputs, follow the inline comments in
 `configs/long_audio_asr_pipeline/segmentation.yaml`: change the `audio` block

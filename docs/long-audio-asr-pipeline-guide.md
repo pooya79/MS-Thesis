@@ -39,8 +39,8 @@ they are not copied at approximate MP3 frame boundaries. To choose another
 rate, set `audio.bitrate_kbps` to an integer from 8 through 160. Do not include
 `subtype` for MP3; that setting applies only to FLAC and WAV. A 48-kbps mono
 output occupies about 22 MB per hour, versus about 115 MB per hour for PCM WAV.
-The temporary working WAV still requires about 115 MB per hour of the one
-source currently being processed and is deleted when that source finishes.
+Each active worker also needs about 115 MB of temporary WAV space per hour of
+source audio. Its working WAV is deleted when that source finishes.
 
 ## Installation
 
@@ -64,12 +64,18 @@ uv run python -m ml.speech_data.long_audio_asr_pipeline.segment_audio \
   --config configs/long_audio_asr_pipeline/segmentation.yaml \
   --input data/recordings/episode-001.mp3 \
   --input data/more-recordings \
-  --output-root data/long-audio-segments/v1
+  --output-root data/long-audio-segments/v1 \
+  --workers 4
 ```
 
 Supported discovery extensions are AAC, FLAC, M4A, MP3, OGG, Opus, WAV, and
 WMA. Directory inputs receive deterministic IDs derived from their relative
 paths. Use a manifest when IDs must remain stable after files are moved.
+`--workers` controls how many source files are decoded, analyzed, and exported
+concurrently. Each worker owns a Silero VAD model instance; start with 2–4
+workers and reduce the value if memory or CPU contention becomes excessive.
+Manifest updates remain serialized and deterministic. The default is one
+worker.
 
 For manifest input, each non-empty JSONL row must contain string `id` and
 `path` fields. An optional `checksum` must use `sha256:<64 lowercase hex>`.
@@ -87,7 +93,8 @@ uv run python -m ml.speech_data.long_audio_asr_pipeline.segment_audio \
   --config configs/long_audio_asr_pipeline/segmentation.yaml \
   --manifest data/iranseda/radio/raw/downloads.jsonl \
   --source-root data/iranseda/radio/raw \
-  --output-root data/iranseda/segmented/v1
+  --output-root data/iranseda/segmented/v1 \
+  --workers 4
 ```
 
 IranSeda `downloads.jsonl` files already satisfy this interface; the command

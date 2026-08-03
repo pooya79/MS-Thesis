@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from threading import Barrier
 
 import numpy as np
 import pytest
@@ -234,6 +235,50 @@ def test_pipeline_exports_flac_manifests_and_resumes_verified_clips(tmp_path: Pa
         assert info.subtype == "PCM_16"
         assert info.channels == 1
         assert info.samplerate == 16000
+
+
+def test_multiple_workers_process_sources_and_keep_manifests_deterministic(tmp_path: Path) -> None:
+    sources_root = tmp_path / "sources"
+    first_source = sources_root / "first.wav"
+    second_source = sources_root / "second.wav"
+    make_audio(first_source, duration=8.0)
+    make_audio(second_source, duration=8.0)
+    output = tmp_path / "prepared"
+    config, digest = load_config(CONFIG_PATH)
+    barrier = Barrier(2)
+
+    class ConcurrentFakeVad(FakeVad):
+        def detect(self, path: Path, settings: dict[str, object]) -> list[SpeechInterval]:
+            barrier.wait(timeout=5)
+            return super().detect(path, settings)
+
+    sources = [
+        SourceRecord("second", second_source, None, {}),
+        SourceRecord("first", first_source, None, {}),
+    ]
+    audit = run_pipeline(
+        sources,
+        output,
+        config,
+        digest,
+        detector_factory=lambda: ConcurrentFakeVad([SpeechInterval(0.5, 7.0)]),
+        workers=2,
+    )
+
+    assert audit.sources_processed == 2
+    assert audit.clips_written == 2
+    assert [record["id"] for record in jsonl(output / "sources.jsonl")] == ["first", "second"]
+    assert [record["id"] for record in jsonl(output / "segments.jsonl")] == [
+        "first_000000",
+        "second_000000",
+    ]
+
+
+def test_pipeline_rejects_invalid_worker_count(tmp_path: Path) -> None:
+    config, digest = load_config(CONFIG_PATH)
+
+    with pytest.raises(ValueError, match="workers must be >= 1"):
+        run_pipeline([], tmp_path / "prepared", config, digest, workers=0)
 
 
 def test_corrupt_clip_is_regenerated_instead_of_reused(tmp_path: Path) -> None:

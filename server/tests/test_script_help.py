@@ -67,3 +67,15 @@ def test_generate_degraded_dataset_help_documents_workers(capsys: pytest.Capture
     captured = capsys.readouterr()
     assert exc_info.value.code == 0
     assert "--workers" in captured.out
+
+
+def test_long_audio_segmentation_help_documents_workers(capsys: pytest.CaptureFixture[str]) -> None:
+    module = importlib.import_module("ml.speech_data.long_audio_asr_pipeline.segment_audio")
+
+    with pytest.raises(SystemExit) as exc_info:
+        module.main(["--help"])
+
+    captured = capsys.readouterr()
+    assert exc_info.value.code == 0
+    assert "--workers" in captured.out
+    assert "concurrently" in captured.out
