@@ -66,15 +66,28 @@ class SegmentationSettings:
 EnergyBoundary = Callable[[float, float, float], tuple[float, float]]
 
 
-def _speech_seconds(intervals: Iterable[SpeechInterval], start: float, end: float) -> float:
+def _speech_seconds(
+    intervals: list[SpeechInterval],
+    start: float,
+    end: float,
+    start_index: int = 0,
+) -> float:
     return sum(
         max(0.0, min(end, interval.end_sec) - max(start, interval.start_sec))
-        for interval in intervals
+        for interval in intervals[start_index:]
+        if interval.start_sec < end
     )
 
 
-def _next_speech(intervals: list[SpeechInterval], at_or_after: float) -> SpeechInterval | None:
-    return next((interval for interval in intervals if interval.end_sec > at_or_after), None)
+def _next_speech_index(
+    intervals: list[SpeechInterval],
+    at_or_after: float,
+    start_index: int,
+) -> int | None:
+    for index in range(start_index, len(intervals)):
+        if intervals[index].end_sec > at_or_after:
+            return index
+    return None
 
 
 def construct_segments(
@@ -95,11 +108,14 @@ def construct_segments(
     results: list[SegmentBoundary] = []
     cursor = max(0.0, speech[0].start_sec - settings.boundary_padding_seconds)
     final_speech_end = min(duration_sec, speech[-1].end_sec)
+    active_index = 0
 
     while cursor < final_speech_end:
-        active = _next_speech(speech, cursor)
-        if active is None:
+        next_index = _next_speech_index(speech, cursor, active_index)
+        if next_index is None:
             break
+        active_index = next_index
+        active = speech[active_index]
         if active.start_sec - cursor > settings.preferred_max_seconds:
             cursor = max(cursor, active.start_sec - settings.boundary_padding_seconds)
 
@@ -112,14 +128,18 @@ def construct_segments(
         else:
             minimum = cursor + settings.preferred_min_seconds
             maximum = min(cursor + settings.preferred_max_seconds, duration_sec)
-            speech_before_min = [
-                item for item in speech if item.start_sec < minimum and item.end_sec > cursor
-            ]
-            next_after = next((item for item in speech if item.start_sec >= minimum), None)
+            speech_before_min: SpeechInterval | None = None
+            next_after: SpeechInterval | None = None
+            for item in speech[active_index:]:
+                if item.start_sec >= minimum:
+                    next_after = item
+                    break
+                if item.end_sec > cursor:
+                    speech_before_min = item
             natural_end = (
-                min(duration_sec, speech_before_min[-1].end_sec + settings.boundary_padding_seconds)
+                min(duration_sec, speech_before_min.end_sec + settings.boundary_padding_seconds)
                 if speech_before_min
-                and speech_before_min[-1].end_sec <= minimum
+                and speech_before_min.end_sec <= minimum
                 and (next_after is None or next_after.start_sec > maximum)
                 else None
             )
@@ -160,7 +180,7 @@ def construct_segments(
         end = min(end, duration_sec, cursor + settings.hard_max_seconds)
         if end <= cursor:
             raise RuntimeError("segment construction did not advance")
-        speech_seconds = _speech_seconds(speech, cursor, end)
+        speech_seconds = _speech_seconds(speech, cursor, end, active_index)
         duration = end - cursor
         if speech_seconds >= settings.minimum_clip_seconds:
             results.append(
@@ -175,9 +195,11 @@ def construct_segments(
                 )
             )
 
-        next_interval = _next_speech(speech, end)
-        if next_interval is None:
+        next_index = _next_speech_index(speech, end, active_index)
+        if next_index is None:
             break
+        active_index = next_index
+        next_interval = speech[active_index]
         cursor = end
         if next_interval.start_sec - cursor > settings.preferred_max_seconds:
             cursor = max(cursor, next_interval.start_sec - settings.boundary_padding_seconds)

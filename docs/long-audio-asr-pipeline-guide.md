@@ -39,8 +39,8 @@ they are not copied at approximate MP3 frame boundaries. To choose another
 rate, set `audio.bitrate_kbps` to an integer from 8 through 160. Do not include
 `subtype` for MP3; that setting applies only to FLAC and WAV. A 48-kbps mono
 output occupies about 22 MB per hour, versus about 115 MB per hour for PCM WAV.
-Each active worker also needs about 115 MB of temporary WAV space per hour of
-source audio. Its working WAV is deleted when that source finishes.
+Each in-flight source also needs about 115 MB of temporary WAV space per hour
+of source audio. Working WAVs are deleted when their source cohort finishes.
 
 ## Installation
 
@@ -71,11 +71,13 @@ uv run python -m ml.speech_data.long_audio_asr_pipeline.segment_audio \
 Supported discovery extensions are AAC, FLAC, M4A, MP3, OGG, Opus, WAV, and
 WMA. Directory inputs receive deterministic IDs derived from their relative
 paths. Use a manifest when IDs must remain stable after files are moved.
-`--workers` controls how many source files are decoded, analyzed, and exported
-concurrently. Each worker owns a Silero VAD model instance; start with 2–4
-workers and reduce the value if memory or CPU contention becomes excessive.
-Manifest updates remain serialized and deterministic. The default is one
-worker.
+`--workers` controls how many source cohorts are decoded, analyzed, and
+exported concurrently. With the reproducible default `vad_batch_size: 1`, a
+cohort is one source and behavior is equivalent to processing that many source
+files concurrently. Each worker owns a Silero VAD model instance; start with
+2–4 workers and reduce the value if memory, CPU, or disk contention becomes
+excessive. Manifest updates remain serialized and deterministic. The default
+is one worker.
 
 For manifest input, each non-empty JSONL row must contain string `id` and
 `path` fields. An optional `checksum` must use `sha256:<64 lowercase hex>`.
@@ -109,6 +111,7 @@ place. Important defaults in
 - Silero speech threshold: `0.5`.
 - Minimum VAD speech event: `0.25` seconds.
 - Merge speech across gaps shorter than `0.5` seconds.
+- PyTorch VAD runtime with batch size `1` and one Torch compute thread.
 - Useful silence boundary: `0.3` seconds.
 - Target/preferred duration: `20` seconds within `15–25` seconds.
 - Minimum accepted detected speech: `2` seconds.
@@ -125,6 +128,59 @@ than being padded with silence or joined to unrelated speech.
 Tune VAD thresholds on an audited sample from the target domain. A changed
 configuration produces a new digest and is intentionally treated as a
 different preparation run.
+
+## VAD Execution and Performance
+
+Execution settings live in the segmentation YAML so every run records the
+runtime choices in `effective_config.yaml` and its configuration digest:
+
+```yaml
+execution:
+  vad_engine: pytorch
+  vad_batch_size: 1
+  torch_threads: 1
+```
+
+The detector reads 2,048 VAD frames per audio read, but still sends the model
+the required 512 samples in temporal order. Inference mode covers the complete
+recording, FFmpeg version discovery is cached once per run, and interval
+construction advances through speech intervals instead of restarting its
+search for every output clip. These changes preserve single-source VAD
+probabilities, boundaries, and exported audio.
+
+Keep `vad_batch_size: 1` for reproducible dataset generation. PyTorch batching
+of independent recordings is implemented for controlled experiments, but a
+representative Persian sample produced mean/max VAD probability differences
+around `1e-7`. Start/end decisions were unchanged in that check, but the audit
+records were not scientifically identical. A batch size above one therefore
+requires a new output root and an explicit quality audit. The maximum number
+of in-flight decoded sources is approximately `--workers × vad_batch_size`, so
+temporary disk demand grows by the same factor.
+
+Small Silero calls can become slower with large Torch thread pools. The checked
+configuration uses one Torch thread so file/cohort workers provide the outer
+parallelism. Benchmark `torch_threads` together with `--workers`; changing
+any YAML execution value changes the configuration digest.
+
+For a reproducible wall-time profile, use a fixed source and a new temporary
+output root, record the source duration with `ffprobe`, and time the complete
+command:
+
+```bash
+ffprobe -v error -show_entries format=duration \
+  -of default=nw=1:nk=1 data/recordings/profile.mp3
+/usr/bin/time -v uv run python \
+  -m ml.speech_data.long_audio_asr_pipeline.segment_audio \
+  --config configs/long_audio_asr_pipeline/segmentation.yaml \
+  --input data/recordings/profile.mp3 \
+  --output-root /tmp/long-audio-profile \
+  --workers 1
+```
+
+ONNX Runtime is not a supported engine. It should be added only if a
+representative comparison is at least 20% faster end-to-end, produces
+identical VAD interval records and clip checksums, and does not materially
+regress memory use or per-source failure isolation.
 
 ## Output and Resume Behavior
 

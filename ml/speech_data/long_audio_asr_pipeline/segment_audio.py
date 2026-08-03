@@ -13,7 +13,7 @@ from collections.abc import Callable, Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from threading import local
+from threading import Lock, local
 from typing import Any, Protocol
 
 import numpy as np
@@ -44,10 +44,6 @@ class AudioDecodeError(RuntimeError):
     """The source could not be decoded into valid working audio."""
 
 
-class VadProcessingError(RuntimeError):
-    """The configured VAD could not analyze decoded audio."""
-
-
 class ClipExportError(RuntimeError):
     """A proposed interval could not be constructed or exported."""
 
@@ -72,6 +68,13 @@ class PipelineAudit:
 
 
 @dataclass(frozen=True)
+class ExecutionSettings:
+    vad_engine: str = "pytorch"
+    vad_batch_size: int = 1
+    torch_threads: int | None = None
+
+
+@dataclass(frozen=True)
 class SourceProcessingResult:
     source: SourceRecord
     source_checksum: str
@@ -92,12 +95,48 @@ class VadDetector(Protocol):
 
     def detect(self, path: Path, settings: dict[str, Any]) -> list[SpeechInterval]: ...
 
+    def detect_many(
+        self,
+        paths: Sequence[Path | None],
+        settings: dict[str, Any],
+    ) -> list[list[SpeechInterval]]: ...
+
+
+class UnavailableVadDetector:
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    @property
+    def metadata(self) -> dict[str, str]:
+        return {
+            "backend": "silero",
+            "model": "silero_vad",
+            "package": "silero-vad",
+            "package_version": importlib.metadata.version("silero-vad"),
+            "runtime": "unavailable",
+        }
+
+    def detect(self, path: Path, settings: dict[str, Any]) -> list[SpeechInterval]:
+        raise self.error
+
+    def detect_many(
+        self,
+        paths: Sequence[Path | None],
+        settings: dict[str, Any],
+    ) -> list[list[SpeechInterval]]:
+        raise self.error
+
 
 class SileroVadDetector:
-    def __init__(self) -> None:
+    _FRAMES_PER_READ = 2048
+
+    def __init__(self, *, engine: str = "pytorch", model: Any | None = None) -> None:
         from silero_vad import load_silero_vad
 
-        self.model = load_silero_vad(onnx=False)
+        if engine != "pytorch":
+            raise ValueError("Silero VAD engine must be pytorch")
+        self.engine = engine
+        self.model = model if model is not None else load_silero_vad(onnx=False)
         self.model.eval()
 
     @property
@@ -107,29 +146,40 @@ class SileroVadDetector:
             "model": "silero_vad",
             "package": "silero-vad",
             "package_version": importlib.metadata.version("silero-vad"),
-            "runtime": "pytorch",
+            "runtime": self.engine,
         }
 
     def detect(self, path: Path, settings: dict[str, Any]) -> list[SpeechInterval]:
+        return self.detect_many([path], settings)[0]
+
+    @staticmethod
+    def _frames(path: Path, frame_samples: int) -> Iterable[np.ndarray]:
+        block_samples = frame_samples * SileroVadDetector._FRAMES_PER_READ
+        with sf.SoundFile(path) as audio:
+            while True:
+                block = audio.read(block_samples, dtype="float32", always_2d=False)
+                if not len(block):
+                    return
+                valid = len(block)
+                padded = math.ceil(valid / frame_samples) * frame_samples
+                if padded != valid:
+                    block = np.pad(block, (0, padded - valid))
+                frames = np.asarray(block, dtype=np.float32).reshape(-1, frame_samples)
+                yield from frames
+                if valid < block_samples:
+                    return
+
+    @staticmethod
+    def _intervals(
+        probabilities: list[float],
+        duration: float,
+        settings: dict[str, Any],
+    ) -> list[SpeechInterval]:
         sample_rate = int(settings["sample_rate"])
         frame_samples = int(settings["frame_samples"])
         threshold = float(settings["threshold"])
         minimum_speech = float(settings["minimum_speech_seconds"])
         merge_silence = float(settings["merge_silence_seconds"])
-        probabilities: list[float] = []
-        self.model.reset_states()
-        with sf.SoundFile(path) as audio:
-            while True:
-                frame = audio.read(frame_samples, dtype="float32", always_2d=False)
-                if not len(frame):
-                    break
-                valid = len(frame)
-                if valid < frame_samples:
-                    frame = np.pad(frame, (0, frame_samples - valid))
-                tensor = torch.from_numpy(np.asarray(frame, dtype=np.float32))
-                with torch.inference_mode():
-                    probability = float(self.model(tensor, sample_rate).item())
-                probabilities.append(probability)
 
         active: list[SpeechInterval] = []
         start_index: int | None = None
@@ -138,7 +188,7 @@ class SileroVadDetector:
                 start_index = index
             elif probability < threshold and start_index is not None:
                 start = start_index * frame_samples / sample_rate
-                end = min(index * frame_samples / sample_rate, sf.info(path).duration)
+                end = min(index * frame_samples / sample_rate, duration)
                 if end - start >= minimum_speech:
                     values = probabilities[start_index:index]
                     active.append(SpeechInterval(start, end, float(np.mean(values)), max(values)))
@@ -157,6 +207,53 @@ class SileroVadDetector:
             else:
                 merged.append(interval)
         return merged
+
+    def detect_many(
+        self,
+        paths: Sequence[Path | None],
+        settings: dict[str, Any],
+    ) -> list[list[SpeechInterval]]:
+        if not paths:
+            return []
+        sample_rate = int(settings["sample_rate"])
+        frame_samples = int(settings["frame_samples"])
+        durations = [
+            sf.info(path).duration if path is not None else 0.0
+            for path in paths
+        ]
+        frame_iterators = [
+            iter(self._frames(path, frame_samples)) if path is not None else iter(())
+            for path in paths
+        ]
+        probabilities: list[list[float]] = [[] for _ in paths]
+        finished = [path is None for path in paths]
+        self.model.reset_states()
+        with torch.inference_mode():
+            while not all(finished):
+                frames = np.zeros((len(paths), frame_samples), dtype=np.float32)
+                active = [False] * len(paths)
+                for index, iterator in enumerate(frame_iterators):
+                    if finished[index]:
+                        continue
+                    try:
+                        frames[index] = next(iterator)
+                        active[index] = True
+                    except StopIteration:
+                        finished[index] = True
+                if not any(active):
+                    break
+                tensor = torch.from_numpy(frames)
+                model_input = tensor[0] if len(paths) == 1 else tensor
+                output = self.model(model_input, sample_rate)
+                values = np.asarray(output.detach().cpu()).reshape(-1)
+                for index, is_active in enumerate(active):
+                    if is_active:
+                        probabilities[index].append(float(values[index]))
+
+        return [
+            self._intervals(values, duration, settings)
+            for values, duration in zip(probabilities, durations, strict=True)
+        ]
 
 
 def sha256_file(path: Path) -> str:
@@ -247,9 +344,41 @@ def load_config(path: Path) -> tuple[dict[str, Any], str]:
         setting = vad.get(field)
         if not isinstance(setting, (int, float)) or not math.isfinite(setting) or setting <= 0:
             raise ValueError(f"vad.{field} must be finite and greater than zero")
+    execution = value.get("execution", {})
+    if not isinstance(execution, dict):
+        raise ValueError("execution configuration must be a mapping")
+    allowed_execution = {"vad_engine", "vad_batch_size", "torch_threads"}
+    unknown_execution = set(execution) - allowed_execution
+    if unknown_execution:
+        raise ValueError(
+            f"unknown execution setting(s): {', '.join(sorted(unknown_execution))}"
+        )
+    if execution.get("vad_engine", "pytorch") != "pytorch":
+        raise ValueError("execution.vad_engine must be pytorch")
+    for field in ("vad_batch_size", "torch_threads"):
+        setting = execution.get(field)
+        if setting is not None and (
+            isinstance(setting, bool) or not isinstance(setting, int) or setting < 1
+        ):
+            raise ValueError(
+                f"execution.{field} must be an integer greater than or equal to one"
+            )
     SegmentationSettings(**value["segmentation"])
     canonical = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return value, f"sha256:{hashlib.sha256(canonical.encode()).hexdigest()}"
+
+
+def execution_settings(config: dict[str, Any]) -> ExecutionSettings:
+    values = config.get("execution", {})
+    return ExecutionSettings(
+        vad_engine=str(values.get("vad_engine", "pytorch")),
+        vad_batch_size=int(values.get("vad_batch_size", 1)),
+        torch_threads=(
+            int(values["torch_threads"])
+            if values.get("torch_threads") is not None
+            else None
+        ),
+    )
 
 
 def safe_id(value: str) -> str:
@@ -476,129 +605,44 @@ def _settings(config: dict[str, Any]) -> SegmentationSettings:
     return SegmentationSettings(**values)
 
 
-def _process_source(
+def _reused_result(
     source: SourceRecord,
-    index: int,
-    total: int,
-    output_root: Path,
-    config: dict[str, Any],
-    config_digest: str,
-    previous: dict[str, Any] | None,
-    detector_provider: Callable[[], VadDetector],
+    source_checksum: str,
+    previous: dict[str, Any],
 ) -> SourceProcessingResult:
-    print(f"[segment] source {index}/{total} id={source.id} path={source.path}", flush=True)
-    reason: str | None = None
-    detail: str | None = None
-    if not source.path.is_file():
-        reason, detail = "missing_audio", str(source.path)
-        source_checksum = source.expected_checksum or ""
-    else:
-        source_checksum = sha256_file(source.path)
-        if source.expected_checksum and source.expected_checksum != source_checksum:
-            reason, detail = "checksum_mismatch", f"expected {source.expected_checksum}, got {source_checksum}"
+    clips = previous["clips"]
+    print(f"[segment] reused id={source.id} clips={len(clips)}", flush=True)
+    return SourceProcessingResult(
+        source=source,
+        source_checksum=source_checksum,
+        source_state=previous,
+        segments=[],
+        vad_records=[],
+        rejection=None,
+        processed=0,
+        reused=1,
+        clips_written=len(clips),
+        duration_seconds=sum(float(clip["duration_sec"]) for clip in clips),
+        operational_failures=0,
+    )
 
-    if reason is None and previous and _verified_reusable(
-        previous, source_checksum, config_digest, output_root, config["audio"]
-    ):
-        clips = previous["clips"]
-        print(f"[segment] reused id={source.id} clips={len(clips)}", flush=True)
-        return SourceProcessingResult(
-            source=source,
-            source_checksum=source_checksum,
-            source_state=previous,
-            segments=[],
-            vad_records=[],
-            rejection=None,
-            processed=0,
-            reused=1,
-            clips_written=len(clips),
-            duration_seconds=sum(float(clip["duration_sec"]) for clip in clips),
-            operational_failures=0,
-        )
 
-    source_segments: list[dict[str, Any]] = []
-    source_vad: list[dict[str, Any]] = []
-    clip_states: list[dict[str, Any]] = []
-    decoded_audio: dict[str, Any] | None = None
-    detector: VadDetector | None = None
-    if reason is None:
-        try:
-            with tempfile.TemporaryDirectory(prefix="long-audio-") as temporary_dir:
-                working = Path(temporary_dir) / "working.wav"
-                decode_audio(source.path, working)
-                info = sf.info(working)
-                if info.frames <= 0 or info.samplerate != 16000 or info.channels != 1:
-                    raise AudioDecodeError("decoded audio is empty or not mono 16 kHz")
-                decoded_audio = {
-                    "sample_rate": info.samplerate,
-                    "channels": info.channels,
-                    "frames": info.frames,
-                    "duration_sec": info.duration,
-                    "format": info.format,
-                    "subtype": info.subtype,
-                    "ffmpeg_version": ffmpeg_version(),
-                }
-                try:
-                    detector = detector_provider()
-                    intervals = detector.detect(working, config["vad"])
-                except Exception as error:
-                    raise VadProcessingError(f"{type(error).__name__}: {error}") from error
-                source_vad = [
-                    {"source_id": source.id, "config_digest": config_digest, **asdict(interval)}
-                    for interval in intervals
-                ]
-                try:
-                    boundaries = construct_segments(
-                        info.duration,
-                        intervals,
-                        _settings(config),
-                        lambda start, end, window: energy_boundary(working, start, end, window),
-                    )
-                except Exception as error:
-                    raise ClipExportError(f"could not construct segments: {error}") from error
-                if not boundaries:
-                    reason, detail = "no_usable_speech", "no segment met the configured minimum speech duration"
-                for segment_index, boundary in enumerate(boundaries):
-                    clip_id = f"{safe_id(source.id)}_{segment_index:06d}"
-                    extension = str(OUTPUT_FORMATS[str(config["audio"]["format"])]["extension"])
-                    relative = Path("clips") / f"{clip_id}{extension}"
-                    clip_path = output_root / relative
-                    try:
-                        export_clip(working, clip_path, boundary.start_sec, boundary.end_sec, config["audio"])
-                    except Exception as error:
-                        raise ClipExportError(f"could not export {clip_id}: {error}") from error
-                    checksum = sha256_file(clip_path)
-                    duration = sf.info(clip_path).duration
-                    clip_state = {"path": relative.as_posix(), "checksum": checksum, "duration_sec": duration}
-                    clip_states.append(clip_state)
-                    source_segments.append(
-                        {
-                            "id": clip_id,
-                            "source_id": source.id,
-                            "source_path": str(source.path),
-                            "source_checksum": source_checksum,
-                            "path": relative.as_posix(),
-                            "clip_checksum": checksum,
-                            "start_sec": boundary.start_sec,
-                            "end_sec": boundary.end_sec,
-                            "duration_sec": duration,
-                            "speech_seconds": boundary.speech_seconds,
-                            "speech_ratio": boundary.speech_ratio,
-                            "boundary_type": boundary.boundary_type,
-                            "boundary_silence_sec": boundary.boundary_silence_sec,
-                            "energy_dip_db": boundary.energy_dip_db,
-                            "config_digest": config_digest,
-                        }
-                    )
-        except AudioDecodeError as error:
-            reason, detail = "audio_decode_failed", str(error)
-        except VadProcessingError as error:
-            reason, detail = "vad_failed", str(error)
-        except ClipExportError as error:
-            reason, detail = "clip_export_failed", str(error)
-        except Exception as error:
-            reason, detail = "clip_export_failed", f"{type(error).__name__}: {error}"
-
+def _source_result(
+    source: SourceRecord,
+    source_checksum: str,
+    config_digest: str,
+    *,
+    reason: str | None,
+    detail: str | None,
+    decoded_audio: dict[str, Any] | None,
+    detector_metadata: dict[str, str] | None,
+    segments: list[dict[str, Any]] | None = None,
+    vad_records: list[dict[str, Any]] | None = None,
+    clips: list[dict[str, Any]] | None = None,
+) -> SourceProcessingResult:
+    source_segments = segments or []
+    source_vad = vad_records or []
+    clip_states = clips or []
     status = "complete" if reason is None else "rejected"
     rejection = None
     if reason is not None:
@@ -624,7 +668,7 @@ def _process_source(
         "status": status,
         "clips": clip_states,
         "decoded_audio": decoded_audio,
-        "vad_model": detector.metadata if detector is not None else None,
+        "vad_model": detector_metadata,
     }
     return SourceProcessingResult(
         source=source,
@@ -637,10 +681,265 @@ def _process_source(
         reused=0,
         clips_written=len(clip_states) if reason is None else 0,
         duration_seconds=(
-            sum(float(clip["duration_sec"]) for clip in clip_states) if reason is None else 0.0
+            sum(float(clip["duration_sec"]) for clip in clip_states)
+            if reason is None
+            else 0.0
         ),
         operational_failures=int(reason in OPERATIONAL_REASONS),
     )
+
+
+def _finish_source(
+    source: SourceRecord,
+    source_checksum: str,
+    working: Path,
+    decoded_audio: dict[str, Any],
+    intervals: list[SpeechInterval],
+    detector_metadata: dict[str, str],
+    output_root: Path,
+    config: dict[str, Any],
+    config_digest: str,
+) -> SourceProcessingResult:
+    source_segments: list[dict[str, Any]] = []
+    source_vad = [
+        {"source_id": source.id, "config_digest": config_digest, **asdict(interval)}
+        for interval in intervals
+    ]
+    clip_states: list[dict[str, Any]] = []
+    reason: str | None = None
+    detail: str | None = None
+    try:
+        boundaries = construct_segments(
+            float(decoded_audio["duration_sec"]),
+            intervals,
+            _settings(config),
+            lambda start, end, window: energy_boundary(working, start, end, window),
+        )
+        if not boundaries:
+            reason, detail = (
+                "no_usable_speech",
+                "no segment met the configured minimum speech duration",
+            )
+        for segment_index, boundary in enumerate(boundaries):
+            clip_id = f"{safe_id(source.id)}_{segment_index:06d}"
+            extension = str(OUTPUT_FORMATS[str(config["audio"]["format"])]["extension"])
+            relative = Path("clips") / f"{clip_id}{extension}"
+            clip_path = output_root / relative
+            try:
+                export_clip(
+                    working,
+                    clip_path,
+                    boundary.start_sec,
+                    boundary.end_sec,
+                    config["audio"],
+                )
+            except Exception as error:
+                raise ClipExportError(f"could not export {clip_id}: {error}") from error
+            checksum = sha256_file(clip_path)
+            duration = sf.info(clip_path).duration
+            clip_state = {
+                "path": relative.as_posix(),
+                "checksum": checksum,
+                "duration_sec": duration,
+            }
+            clip_states.append(clip_state)
+            source_segments.append(
+                {
+                    "id": clip_id,
+                    "source_id": source.id,
+                    "source_path": str(source.path),
+                    "source_checksum": source_checksum,
+                    "path": relative.as_posix(),
+                    "clip_checksum": checksum,
+                    "start_sec": boundary.start_sec,
+                    "end_sec": boundary.end_sec,
+                    "duration_sec": duration,
+                    "speech_seconds": boundary.speech_seconds,
+                    "speech_ratio": boundary.speech_ratio,
+                    "boundary_type": boundary.boundary_type,
+                    "boundary_silence_sec": boundary.boundary_silence_sec,
+                    "energy_dip_db": boundary.energy_dip_db,
+                    "config_digest": config_digest,
+                }
+            )
+    except ClipExportError as error:
+        reason, detail = "clip_export_failed", str(error)
+    except Exception as error:
+        reason, detail = "clip_export_failed", f"could not construct segments: {error}"
+
+    return _source_result(
+        source,
+        source_checksum,
+        config_digest,
+        reason=reason,
+        detail=detail,
+        decoded_audio=decoded_audio,
+        detector_metadata=detector_metadata,
+        segments=source_segments,
+        vad_records=source_vad,
+        clips=clip_states,
+    )
+
+
+def _process_cohort(
+    cohort: Sequence[tuple[int, SourceRecord]],
+    total: int,
+    output_root: Path,
+    config: dict[str, Any],
+    config_digest: str,
+    previous_sources: dict[str, dict[str, Any]],
+    detector_provider: Callable[[], VadDetector],
+    ffmpeg_version_provider: Callable[[], str],
+) -> list[SourceProcessingResult]:
+    results: list[SourceProcessingResult | None] = [None] * len(cohort)
+    source_checksums = [""] * len(cohort)
+    decoded: dict[int, tuple[Path, dict[str, Any]]] = {}
+
+    with tempfile.TemporaryDirectory(prefix="long-audio-cohort-") as temporary_dir:
+        temporary_root = Path(temporary_dir)
+        for position, (index, source) in enumerate(cohort):
+            print(
+                f"[segment] source {index}/{total} id={source.id} path={source.path}",
+                flush=True,
+            )
+            if not source.path.is_file():
+                source_checksum = source.expected_checksum or ""
+                source_checksums[position] = source_checksum
+                results[position] = _source_result(
+                    source,
+                    source_checksum,
+                    config_digest,
+                    reason="missing_audio",
+                    detail=str(source.path),
+                    decoded_audio=None,
+                    detector_metadata=None,
+                )
+                continue
+
+            source_checksum = sha256_file(source.path)
+            source_checksums[position] = source_checksum
+            if source.expected_checksum and source.expected_checksum != source_checksum:
+                results[position] = _source_result(
+                    source,
+                    source_checksum,
+                    config_digest,
+                    reason="checksum_mismatch",
+                    detail=f"expected {source.expected_checksum}, got {source_checksum}",
+                    decoded_audio=None,
+                    detector_metadata=None,
+                )
+                continue
+
+            previous = previous_sources.get(source.id)
+            if previous and _verified_reusable(
+                previous,
+                source_checksum,
+                config_digest,
+                output_root,
+                config["audio"],
+            ):
+                results[position] = _reused_result(source, source_checksum, previous)
+                continue
+
+            working = temporary_root / f"{position:04d}-{safe_id(source.id)}.wav"
+            try:
+                decode_audio(source.path, working)
+                info = sf.info(working)
+                if info.frames <= 0 or info.samplerate != 16000 or info.channels != 1:
+                    raise AudioDecodeError("decoded audio is empty or not mono 16 kHz")
+                decoded[position] = (
+                    working,
+                    {
+                        "sample_rate": info.samplerate,
+                        "channels": info.channels,
+                        "frames": info.frames,
+                        "duration_sec": info.duration,
+                        "format": info.format,
+                        "subtype": info.subtype,
+                        "ffmpeg_version": ffmpeg_version_provider(),
+                    },
+                )
+            except Exception as error:
+                detail = (
+                    str(error)
+                    if isinstance(error, AudioDecodeError)
+                    else f"{type(error).__name__}: {error}"
+                )
+                results[position] = _source_result(
+                    source,
+                    source_checksum,
+                    config_digest,
+                    reason="audio_decode_failed",
+                    detail=detail,
+                    decoded_audio=None,
+                    detector_metadata=None,
+                )
+
+        if decoded:
+            try:
+                detector = detector_provider()
+            except Exception as error:
+                detector = UnavailableVadDetector(error)
+            paths = [
+                decoded[position][0] if position in decoded else None
+                for position in range(len(cohort))
+            ]
+            detected: dict[int, list[SpeechInterval]] = {}
+            batch_error: Exception | None = None
+            try:
+                detect_many = getattr(detector, "detect_many", None)
+                if detect_many is None:
+                    batch_values = [
+                        detector.detect(path, config["vad"]) if path is not None else []
+                        for path in paths
+                    ]
+                else:
+                    batch_values = detect_many(paths, config["vad"])
+                if len(batch_values) != len(cohort):
+                    raise RuntimeError("batched VAD returned the wrong number of results")
+                detected = {
+                    position: batch_values[position]
+                    for position in decoded
+                }
+            except Exception as error:
+                batch_error = error
+
+            if batch_error is not None:
+                for position, (working, decoded_audio) in decoded.items():
+                    source = cohort[position][1]
+                    try:
+                        detected[position] = detector.detect(working, config["vad"])
+                    except Exception as error:
+                        results[position] = _source_result(
+                            source,
+                            source_checksums[position],
+                            config_digest,
+                            reason="vad_failed",
+                            detail=f"{type(error).__name__}: {error}",
+                            decoded_audio=decoded_audio,
+                            detector_metadata=detector.metadata,
+                        )
+
+            for position, intervals in detected.items():
+                if results[position] is not None:
+                    continue
+                source = cohort[position][1]
+                working, decoded_audio = decoded[position]
+                results[position] = _finish_source(
+                    source,
+                    source_checksums[position],
+                    working,
+                    decoded_audio,
+                    intervals,
+                    detector.metadata,
+                    output_root,
+                    config,
+                    config_digest,
+                )
+
+    if any(result is None for result in results):
+        raise RuntimeError("source cohort did not produce a result for every source")
+    return [result for result in results if result is not None]
 
 
 def process_pipeline(
@@ -648,48 +947,73 @@ def process_pipeline(
     output_root: Path,
     config: dict[str, Any],
     config_digest: str,
-    detector_factory: Callable[[], VadDetector] = SileroVadDetector,
+    detector_factory: Callable[[], VadDetector] | None = None,
     *,
     workers: int = 1,
 ) -> PipelineAudit:
     if workers < 1:
         raise ValueError("workers must be >= 1")
+    runtime = execution_settings(config)
     output_root.mkdir(parents=True, exist_ok=True)
     (output_root / "clips").mkdir(exist_ok=True)
-    existing_sources = {record["id"]: record for record in _load_existing(output_root / "sources.jsonl")}
+    existing_sources = {
+        record["id"]: record
+        for record in _load_existing(output_root / "sources.jsonl")
+    }
     previous_sources = dict(existing_sources)
     segments = _load_existing(output_root / "segments.jsonl")
     vad_records = _load_existing(output_root / "vad_intervals.jsonl")
     rejected = _load_existing(output_root / "rejected.jsonl")
     worker_state = local()
+    version_lock = Lock()
+    cached_ffmpeg_version: str | None = None
+
+    def ffmpeg_version_provider() -> str:
+        nonlocal cached_ffmpeg_version
+        if cached_ffmpeg_version is None:
+            with version_lock:
+                if cached_ffmpeg_version is None:
+                    cached_ffmpeg_version = ffmpeg_version()
+        return cached_ffmpeg_version
 
     def detector_provider() -> VadDetector:
         detector = getattr(worker_state, "detector", None)
         if detector is None:
-            detector = detector_factory()
+            detector = (
+                detector_factory()
+                if detector_factory is not None
+                else SileroVadDetector(engine=runtime.vad_engine)
+            )
             worker_state.detector = detector
         return detector
 
-    def process(indexed_source: tuple[int, SourceRecord]) -> SourceProcessingResult:
-        index, source = indexed_source
-        return _process_source(
-            source,
-            index,
+    def process(cohort: Sequence[tuple[int, SourceRecord]]) -> list[SourceProcessingResult]:
+        return _process_cohort(
+            cohort,
             len(sources),
             output_root,
             config,
             config_digest,
-            previous_sources.get(source.id),
+            previous_sources,
             detector_provider,
+            ffmpeg_version_provider,
         )
 
     indexed_sources = list(enumerate(sources, start=1))
+    cohorts = [
+        indexed_sources[start:start + runtime.vad_batch_size]
+        for start in range(0, len(indexed_sources), runtime.vad_batch_size)
+    ]
+    original_torch_threads = torch.get_num_threads()
+    if runtime.torch_threads is not None:
+        torch.set_num_threads(runtime.torch_threads)
     if workers == 1:
-        results: Iterable[SourceProcessingResult] = map(process, indexed_sources)
+        cohort_results: Iterable[list[SourceProcessingResult]] = map(process, cohorts)
         executor = None
     else:
         executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="segment-audio")
-        results = executor.map(process, indexed_sources)
+        cohort_results = executor.map(process, cohorts)
+    results = (result for cohort_result in cohort_results for result in cohort_result)
 
     processed = reused = rejected_count = clips_written = operational = 0
     total_duration = 0.0
@@ -709,17 +1033,45 @@ def process_pipeline(
                 rejected_count += 1
                 rejected.append(result.rejection)
             segments = [record for record in segments if record.get("source_id") != source_id] + result.segments
-            vad_records = [record for record in vad_records if record.get("source_id") != source_id] + result.vad_records
+            vad_records = [
+                record for record in vad_records
+                if record.get("source_id") != source_id
+            ] + result.vad_records
             existing_sources[source_id] = result.source_state
-            write_jsonl_atomic(output_root / "sources.jsonl", sorted(existing_sources.values(), key=lambda item: item["id"]))
-            write_jsonl_atomic(output_root / "segments.jsonl", sorted(segments, key=lambda item: item["id"]))
-            write_jsonl_atomic(output_root / "vad_intervals.jsonl", sorted(vad_records, key=lambda item: (item["source_id"], item["start_sec"])))
-            write_jsonl_atomic(output_root / "rejected.jsonl", sorted(rejected, key=lambda item: item["source_id"]))
+            write_jsonl_atomic(
+                output_root / "sources.jsonl",
+                sorted(existing_sources.values(), key=lambda item: item["id"]),
+            )
+            write_jsonl_atomic(
+                output_root / "segments.jsonl",
+                sorted(segments, key=lambda item: item["id"]),
+            )
+            write_jsonl_atomic(
+                output_root / "vad_intervals.jsonl",
+                sorted(
+                    vad_records,
+                    key=lambda item: (item["source_id"], item["start_sec"]),
+                ),
+            )
+            write_jsonl_atomic(
+                output_root / "rejected.jsonl",
+                sorted(rejected, key=lambda item: item["source_id"]),
+            )
     finally:
         if executor is not None:
             executor.shutdown()
+        if runtime.torch_threads is not None:
+            torch.set_num_threads(original_torch_threads)
 
-    audit = PipelineAudit(len(sources), processed, reused, rejected_count, clips_written, total_duration, operational)
+    audit = PipelineAudit(
+        len(sources),
+        processed,
+        reused,
+        rejected_count,
+        clips_written,
+        total_duration,
+        operational,
+    )
     write_json_atomic(output_root / "summary.json", asdict(audit))
     return audit
 
@@ -731,7 +1083,7 @@ def run_pipeline(
     config_digest: str,
     *,
     force: bool = False,
-    detector_factory: Callable[[], VadDetector] = SileroVadDetector,
+    detector_factory: Callable[[], VadDetector] | None = None,
     workers: int = 1,
 ) -> PipelineAudit:
     if workers < 1:

@@ -8,12 +8,15 @@ from threading import Barrier
 import numpy as np
 import pytest
 import soundfile as sf
+import torch
 import yaml
 
+import ml.speech_data.long_audio_asr_pipeline.segment_audio as segment_audio_module
 from ml.speech_data.long_audio_asr_pipeline.segment_audio import (
     SileroVadDetector,
     SourceRecord,
     discover_inputs,
+    execution_settings,
     load_config,
     run_pipeline,
     sha256_file,
@@ -47,6 +50,20 @@ class FakeVad:
     def detect(self, path: Path, settings: dict[str, object]) -> list[SpeechInterval]:
         assert sf.info(path).samplerate == 16000
         return self.intervals
+
+
+class BatchFakeVad(FakeVad):
+    def __init__(self, intervals: list[SpeechInterval]) -> None:
+        super().__init__(intervals)
+        self.batches: list[list[bool]] = []
+
+    def detect_many(
+        self,
+        paths: list[Path | None],
+        settings: dict[str, object],
+    ) -> list[list[SpeechInterval]]:
+        self.batches.append([path is not None for path in paths])
+        return [self.detect(path, settings) if path is not None else [] for path in paths]
 
 
 def jsonl(path: Path) -> list[dict[str, object]]:
@@ -386,6 +403,275 @@ def test_checksum_mismatch_is_recorded_as_operational_failure(tmp_path: Path) ->
 
     assert audit.operational_failures == 1
     assert jsonl(output / "rejected.jsonl")[0]["reason"] == "checksum_mismatch"
+
+
+def test_execution_settings_are_validated_and_loaded(tmp_path: Path) -> None:
+    config, _ = load_config(CONFIG_PATH)
+
+    assert execution_settings(config).vad_engine == "pytorch"
+    assert execution_settings(config).vad_batch_size == 1
+    assert execution_settings(config).torch_threads == 1
+
+    legacy = json.loads(json.dumps(config))
+    legacy.pop("execution")
+    path = tmp_path / "legacy.yaml"
+    path.write_text(yaml.safe_dump(legacy), encoding="utf-8")
+    loaded_legacy, _ = load_config(path)
+    assert execution_settings(loaded_legacy).vad_batch_size == 1
+    assert execution_settings(loaded_legacy).torch_threads is None
+
+    for field, value in (("vad_batch_size", 0), ("torch_threads", True)):
+        invalid = json.loads(json.dumps(config))
+        invalid["execution"][field] = value
+        path = tmp_path / f"invalid-{field}.yaml"
+        path.write_text(yaml.safe_dump(invalid), encoding="utf-8")
+        with pytest.raises(ValueError, match=field):
+            load_config(path)
+
+    unknown = json.loads(json.dumps(config))
+    unknown["execution"]["surprise"] = 1
+    path = tmp_path / "unknown.yaml"
+    path.write_text(yaml.safe_dump(unknown), encoding="utf-8")
+    with pytest.raises(ValueError, match="unknown execution"):
+        load_config(path)
+
+    unsupported = json.loads(json.dumps(config))
+    unsupported["execution"]["vad_engine"] = "onnx"
+    path = tmp_path / "unsupported-engine.yaml"
+    path.write_text(yaml.safe_dump(unsupported), encoding="utf-8")
+    with pytest.raises(ValueError, match="vad_engine must be pytorch"):
+        load_config(path)
+
+
+def test_silero_frame_reader_uses_blocks_and_pads_only_the_tail(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    frame_samples = 512
+    samples = np.linspace(-0.5, 0.5, frame_samples * 5 + 100, dtype=np.float32)
+    path = tmp_path / "frames.wav"
+    sf.write(path, samples, 16000, subtype="FLOAT")
+    real_sound_file = sf.SoundFile
+    read_calls = 0
+
+    class CountingSoundFile:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            self.inner = real_sound_file(*args, **kwargs)
+
+        def __enter__(self) -> CountingSoundFile:
+            self.inner.__enter__()
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            self.inner.__exit__(*args)
+
+        def read(self, *args: object, **kwargs: object) -> np.ndarray:
+            nonlocal read_calls
+            read_calls += 1
+            return self.inner.read(*args, **kwargs)
+
+    monkeypatch.setattr(SileroVadDetector, "_FRAMES_PER_READ", 2)
+    monkeypatch.setattr(segment_audio_module.sf, "SoundFile", CountingSoundFile)
+
+    frames = list(SileroVadDetector._frames(path, frame_samples))
+
+    assert read_calls == 3
+    assert len(frames) == 6
+    np.testing.assert_array_equal(np.concatenate(frames)[: len(samples)], samples)
+    np.testing.assert_array_equal(
+        frames[-1][100:],
+        np.zeros(frame_samples - 100, dtype=np.float32),
+    )
+
+
+def test_single_source_silero_inference_keeps_frame_shape_and_inference_mode(
+    tmp_path: Path,
+) -> None:
+    frame_samples = 512
+    frame_values = [0.1, 0.8, 0.9, 0.1, 0.8]
+    samples = np.concatenate(
+        [np.full(frame_samples, value, dtype=np.float32) for value in frame_values]
+        + [np.full(100, 0.8, dtype=np.float32)]
+    )
+    path = tmp_path / "probabilities.wav"
+    sf.write(path, samples, 16000, subtype="FLOAT")
+
+    class ProbabilityModel:
+        def __init__(self) -> None:
+            self.shapes: list[tuple[int, ...]] = []
+            self.inference_modes: list[bool] = []
+            self.reset_calls = 0
+
+        def eval(self) -> None:
+            return None
+
+        def reset_states(self) -> None:
+            self.reset_calls += 1
+
+        def __call__(self, value: torch.Tensor, sample_rate: int) -> torch.Tensor:
+            assert sample_rate == 16000
+            self.shapes.append(tuple(value.shape))
+            self.inference_modes.append(torch.is_inference_mode_enabled())
+            return value.mean().reshape(1)
+
+    model = ProbabilityModel()
+    detector = SileroVadDetector(model=model)
+    settings = {
+        "sample_rate": 16000,
+        "frame_samples": frame_samples,
+        "threshold": 0.5,
+        "minimum_speech_seconds": 0.02,
+        "merge_silence_seconds": 0.01,
+    }
+
+    intervals = detector.detect(path, settings)
+
+    assert model.reset_calls == 1
+    assert model.shapes == [(frame_samples,)] * 6
+    assert all(model.inference_modes)
+    assert [(item.start_sec, item.end_sec) for item in intervals] == [
+        (0.032, 0.096),
+        (0.128, 0.16),
+    ]
+
+
+def test_pipeline_caches_ffmpeg_version_and_restores_torch_threads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sources = []
+    for name in ("one", "two"):
+        path = tmp_path / f"{name}.wav"
+        make_audio(path, duration=4.0)
+        sources.append(SourceRecord(name, path, None, {}))
+    config, digest = load_config(CONFIG_PATH)
+    version_calls = 0
+    factory_threads: list[int] = []
+    original_threads = torch.get_num_threads()
+
+    def fake_ffmpeg_version() -> str:
+        nonlocal version_calls
+        version_calls += 1
+        return "ffmpeg fixture"
+
+    def factory() -> FakeVad:
+        factory_threads.append(torch.get_num_threads())
+        return FakeVad([SpeechInterval(0.25, 3.5)])
+
+    monkeypatch.setattr(segment_audio_module, "ffmpeg_version", fake_ffmpeg_version)
+
+    run_pipeline(
+        sources,
+        tmp_path / "output",
+        config,
+        digest,
+        detector_factory=factory,
+        workers=2,
+    )
+
+    assert version_calls == 1
+    assert factory_threads == [1, 1]
+    assert torch.get_num_threads() == original_threads
+
+
+def test_batched_failure_retries_and_rejects_only_the_bad_source(tmp_path: Path) -> None:
+    good = tmp_path / "good.wav"
+    bad = tmp_path / "bad.wav"
+    make_audio(good, duration=4.0)
+    make_audio(bad, duration=4.0)
+    config, _ = load_config(CONFIG_PATH)
+    config["execution"]["vad_batch_size"] = 2
+
+    class FailingBatchVad(FakeVad):
+        def detect_many(
+            self,
+            paths: list[Path | None],
+            settings: dict[str, object],
+        ) -> list[list[SpeechInterval]]:
+            raise RuntimeError("batch fixture failure")
+
+        def detect(self, path: Path, settings: dict[str, object]) -> list[SpeechInterval]:
+            if "bad" in path.name:
+                raise RuntimeError("bad source fixture")
+            return super().detect(path, settings)
+
+    audit = run_pipeline(
+        [SourceRecord("good", good, None, {}), SourceRecord("bad", bad, None, {})],
+        tmp_path / "batched",
+        config,
+        "sha256:" + "2" * 64,
+        detector_factory=lambda: FailingBatchVad([SpeechInterval(0.25, 3.5)]),
+    )
+
+    assert audit.sources_processed == 1
+    assert audit.operational_failures == 1
+    assert jsonl(tmp_path / "batched" / "rejected.jsonl")[0]["source_id"] == "bad"
+
+
+def test_batch_orchestration_preserves_scientific_outputs_with_equivalent_detector(
+    tmp_path: Path,
+) -> None:
+    sources = []
+    for name, duration in (("one", 4.0), ("two", 5.0)):
+        path = tmp_path / f"{name}.wav"
+        make_audio(path, duration=duration)
+        sources.append(SourceRecord(name, path, None, {}))
+    config, _ = load_config(CONFIG_PATH)
+    digest = "sha256:" + "3" * 64
+    outputs = []
+
+    for batch_size in (1, 2):
+        selected = json.loads(json.dumps(config))
+        selected["execution"]["vad_batch_size"] = batch_size
+        output = tmp_path / f"batch-{batch_size}"
+        run_pipeline(
+            sources,
+            output,
+            selected,
+            digest,
+            detector_factory=lambda: BatchFakeVad([SpeechInterval(0.25, 3.5)]),
+        )
+        outputs.append(output)
+
+    for manifest in ("sources.jsonl", "segments.jsonl", "vad_intervals.jsonl"):
+        assert (outputs[0] / manifest).read_bytes() == (outputs[1] / manifest).read_bytes()
+    assert {
+        path.name: path.read_bytes() for path in (outputs[0] / "clips").iterdir()
+    } == {
+        path.name: path.read_bytes() for path in (outputs[1] / "clips").iterdir()
+    }
+
+
+def test_resume_keeps_empty_slots_in_a_stable_source_cohort(tmp_path: Path) -> None:
+    sources = []
+    for name in ("one", "two"):
+        path = tmp_path / f"{name}.wav"
+        make_audio(path, duration=4.0)
+        sources.append(SourceRecord(name, path, None, {}))
+    config, digest = load_config(CONFIG_PATH)
+    config["execution"]["vad_batch_size"] = 2
+    output = tmp_path / "stable-cohort"
+    run_pipeline(
+        sources,
+        output,
+        config,
+        digest,
+        detector_factory=lambda: BatchFakeVad([SpeechInterval(0.25, 3.5)]),
+    )
+    (output / "clips" / "two_000000.flac").write_bytes(b"corrupt")
+    detector = BatchFakeVad([SpeechInterval(0.25, 3.5)])
+
+    audit = run_pipeline(
+        sources,
+        output,
+        config,
+        digest,
+        detector_factory=lambda: detector,
+    )
+
+    assert audit.sources_reused == 1
+    assert audit.sources_processed == 1
+    assert detector.batches == [[False, True]]
 
 
 def test_packaged_silero_model_loads_without_network() -> None:

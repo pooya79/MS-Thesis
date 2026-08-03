@@ -25,6 +25,15 @@ vad:
   sample_rate: 16000
   threshold: 0.5
 
+execution:
+  # Batched PyTorch inference changes recorded probabilities at about 1e-7,
+  # so batch size 1 remains the reproducible default.
+  vad_engine: pytorch
+  vad_batch_size: 1
+  # Small recurrent VAD calls are faster without large thread pools. Increase
+  # only after benchmarking together with the command's --workers setting.
+  torch_threads: 1
+
 segmentation:
   boundary_padding_seconds: 0.15
   energy_search_start_seconds: 18.0

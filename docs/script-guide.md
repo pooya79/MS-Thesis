@@ -131,9 +131,15 @@ uv run python -m ml.speech_data.long_audio_asr_pipeline.segment_audio \
   --workers 4
 ```
 
-`--workers` processes independent source files concurrently. Each worker owns
-its own Silero VAD model instance, while audit-manifest writes remain
-serialized. Start with 2–4 workers and adjust for available CPU and memory.
+`--workers` processes independent source cohorts concurrently. The checked
+configuration keeps `execution.vad_batch_size: 1` for scientifically identical
+Silero probability records and sets `execution.torch_threads: 1` to avoid
+oversubscribing tiny recurrent inference calls. Each worker owns its own model,
+while audit-manifest writes remain serialized. Start with 2–4 workers and
+adjust for available CPU, temporary disk, and memory. Batch sizes above one are
+experimental because PyTorch batching can change recorded probabilities at
+approximately `1e-7`; execution settings are included in the configuration
+digest. See `docs/long-audio-asr-pipeline-guide.md` for profiling and tuning.
 
 For smaller lossy outputs, follow the inline comments in
 `configs/long_audio_asr_pipeline/segmentation.yaml`: change the `audio` block
