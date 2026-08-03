@@ -137,6 +137,7 @@ runtime choices in `effective_config.yaml` and its configuration digest:
 ```yaml
 execution:
   vad_engine: pytorch
+  vad_device: cpu
   vad_batch_size: 1
   torch_threads: 1
 ```
@@ -148,7 +149,8 @@ construction advances through speech intervals instead of restarting its
 search for every output clip. These changes preserve single-source VAD
 probabilities, boundaries, and exported audio.
 
-Keep `vad_batch_size: 1` for reproducible dataset generation. PyTorch batching
+Keep `vad_device: cpu` and `vad_batch_size: 1` when reproducing an existing CPU
+dataset run. PyTorch batching
 of independent recordings is implemented for controlled experiments, but a
 representative Persian sample produced mean/max VAD probability differences
 around `1e-7`. Start/end decisions were unchanged in that check, but the audit
@@ -156,6 +158,30 @@ records were not scientifically identical. A batch size above one therefore
 requires a new output root and an explicit quality audit. The maximum number
 of in-flight decoded sources is approximately `--workers × vad_batch_size`, so
 temporary disk demand grows by the same factor.
+
+On a GPU server, move batched Silero inference to CUDA explicitly:
+
+```yaml
+execution:
+  vad_engine: pytorch
+  vad_device: cuda
+  vad_batch_size: 16
+  torch_threads: 1
+```
+
+Start with `--workers 2` on a four-core host, then compare batch sizes 8, 16,
+and 32 using a fixed manifest. CUDA accelerated the packaged model only once
+several independent recordings were batched; batch size one remained faster on
+CPU. The model and batched 512-sample tensors run on CUDA, while FFmpeg decode,
+energy-boundary analysis, clip export, checksums, and manifest work remain on
+CPU. CUDA availability is checked before the output directory is initialized;
+the command fails instead of silently falling back to CPU. The selected device
+is recorded in each source's `vad_model` metadata.
+
+CPU and CUDA can differ slightly in floating-point probability summaries, so a
+device change requires a new output root and a quality comparison. Large VRAM
+does not remove the temporary-disk cost: each cohort retains decoded working
+WAVs until its longest source finishes VAD.
 
 Small Silero calls can become slower with large Torch thread pools. The checked
 configuration uses one Torch thread so file/cohort workers provide the outer

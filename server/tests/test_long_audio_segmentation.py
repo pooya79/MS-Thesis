@@ -409,6 +409,7 @@ def test_execution_settings_are_validated_and_loaded(tmp_path: Path) -> None:
     config, _ = load_config(CONFIG_PATH)
 
     assert execution_settings(config).vad_engine == "pytorch"
+    assert execution_settings(config).vad_device == "cpu"
     assert execution_settings(config).vad_batch_size == 1
     assert execution_settings(config).torch_threads == 1
 
@@ -418,6 +419,7 @@ def test_execution_settings_are_validated_and_loaded(tmp_path: Path) -> None:
     path.write_text(yaml.safe_dump(legacy), encoding="utf-8")
     loaded_legacy, _ = load_config(path)
     assert execution_settings(loaded_legacy).vad_batch_size == 1
+    assert execution_settings(loaded_legacy).vad_device == "cpu"
     assert execution_settings(loaded_legacy).torch_threads is None
 
     for field, value in (("vad_batch_size", 0), ("torch_threads", True)):
@@ -440,6 +442,13 @@ def test_execution_settings_are_validated_and_loaded(tmp_path: Path) -> None:
     path = tmp_path / "unsupported-engine.yaml"
     path.write_text(yaml.safe_dump(unsupported), encoding="utf-8")
     with pytest.raises(ValueError, match="vad_engine must be pytorch"):
+        load_config(path)
+
+    unsupported = json.loads(json.dumps(config))
+    unsupported["execution"]["vad_device"] = "mps"
+    path = tmp_path / "unsupported-device.yaml"
+    path.write_text(yaml.safe_dump(unsupported), encoding="utf-8")
+    with pytest.raises(ValueError, match="vad_device must be cpu or cuda"):
         load_config(path)
 
 
@@ -501,6 +510,11 @@ def test_single_source_silero_inference_keeps_frame_shape_and_inference_mode(
             self.shapes: list[tuple[int, ...]] = []
             self.inference_modes: list[bool] = []
             self.reset_calls = 0
+            self.device: torch.device | None = None
+
+        def to(self, device: torch.device) -> ProbabilityModel:
+            self.device = device
+            return self
 
         def eval(self) -> None:
             return None
@@ -527,6 +541,7 @@ def test_single_source_silero_inference_keeps_frame_shape_and_inference_mode(
     intervals = detector.detect(path, settings)
 
     assert model.reset_calls == 1
+    assert model.device == torch.device("cpu")
     assert model.shapes == [(frame_samples,)] * 6
     assert all(model.inference_modes)
     assert [(item.start_sec, item.end_sec) for item in intervals] == [
@@ -674,8 +689,37 @@ def test_resume_keeps_empty_slots_in_a_stable_source_cohort(tmp_path: Path) -> N
     assert detector.batches == [[False, True]]
 
 
+def test_pipeline_rejects_unavailable_cuda_before_creating_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config, digest = load_config(CONFIG_PATH)
+    config["execution"]["vad_device"] = "cuda"
+    output = tmp_path / "cuda-output"
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+
+    with pytest.raises(ValueError, match="CUDA is not available"):
+        run_pipeline([], output, config, digest)
+
+    assert not output.exists()
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is not available")
+def test_packaged_silero_model_runs_on_cuda(tmp_path: Path) -> None:
+    path = tmp_path / "cuda.wav"
+    make_audio(path, duration=1.0)
+    config, _ = load_config(CONFIG_PATH)
+    detector = SileroVadDetector(device="cuda")
+
+    intervals = detector.detect(path, config["vad"])
+
+    assert isinstance(intervals, list)
+    assert detector.metadata["device"] == "cuda"
+
+
 def test_packaged_silero_model_loads_without_network() -> None:
     detector = SileroVadDetector()
 
     assert detector.metadata["model"] == "silero_vad"
+    assert detector.metadata["device"] == "cpu"
     assert detector.metadata["package_version"].startswith("6.2.")

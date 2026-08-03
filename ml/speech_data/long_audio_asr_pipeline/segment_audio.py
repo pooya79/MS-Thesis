@@ -70,6 +70,7 @@ class PipelineAudit:
 @dataclass(frozen=True)
 class ExecutionSettings:
     vad_engine: str = "pytorch"
+    vad_device: str = "cpu"
     vad_batch_size: int = 1
     torch_threads: int | None = None
 
@@ -130,13 +131,25 @@ class UnavailableVadDetector:
 class SileroVadDetector:
     _FRAMES_PER_READ = 2048
 
-    def __init__(self, *, engine: str = "pytorch", model: Any | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        engine: str = "pytorch",
+        device: str = "cpu",
+        model: Any | None = None,
+    ) -> None:
         from silero_vad import load_silero_vad
 
         if engine != "pytorch":
             raise ValueError("Silero VAD engine must be pytorch")
+        if device not in {"cpu", "cuda"}:
+            raise ValueError("Silero VAD device must be cpu or cuda")
+        if device == "cuda" and not torch.cuda.is_available():
+            raise RuntimeError("CUDA was requested for Silero VAD but is not available")
         self.engine = engine
+        self.device = torch.device(device)
         self.model = model if model is not None else load_silero_vad(onnx=False)
+        self.model.to(self.device)
         self.model.eval()
 
     @property
@@ -147,6 +160,7 @@ class SileroVadDetector:
             "package": "silero-vad",
             "package_version": importlib.metadata.version("silero-vad"),
             "runtime": self.engine,
+            "device": self.device.type,
         }
 
     def detect(self, path: Path, settings: dict[str, Any]) -> list[SpeechInterval]:
@@ -242,7 +256,7 @@ class SileroVadDetector:
                         finished[index] = True
                 if not any(active):
                     break
-                tensor = torch.from_numpy(frames)
+                tensor = torch.from_numpy(frames).to(self.device)
                 model_input = tensor[0] if len(paths) == 1 else tensor
                 output = self.model(model_input, sample_rate)
                 values = np.asarray(output.detach().cpu()).reshape(-1)
@@ -347,7 +361,12 @@ def load_config(path: Path) -> tuple[dict[str, Any], str]:
     execution = value.get("execution", {})
     if not isinstance(execution, dict):
         raise ValueError("execution configuration must be a mapping")
-    allowed_execution = {"vad_engine", "vad_batch_size", "torch_threads"}
+    allowed_execution = {
+        "vad_engine",
+        "vad_device",
+        "vad_batch_size",
+        "torch_threads",
+    }
     unknown_execution = set(execution) - allowed_execution
     if unknown_execution:
         raise ValueError(
@@ -355,6 +374,8 @@ def load_config(path: Path) -> tuple[dict[str, Any], str]:
         )
     if execution.get("vad_engine", "pytorch") != "pytorch":
         raise ValueError("execution.vad_engine must be pytorch")
+    if execution.get("vad_device", "cpu") not in {"cpu", "cuda"}:
+        raise ValueError("execution.vad_device must be cpu or cuda")
     for field in ("vad_batch_size", "torch_threads"):
         setting = execution.get(field)
         if setting is not None and (
@@ -372,6 +393,7 @@ def execution_settings(config: dict[str, Any]) -> ExecutionSettings:
     values = config.get("execution", {})
     return ExecutionSettings(
         vad_engine=str(values.get("vad_engine", "pytorch")),
+        vad_device=str(values.get("vad_device", "cpu")),
         vad_batch_size=int(values.get("vad_batch_size", 1)),
         torch_threads=(
             int(values["torch_threads"])
@@ -379,6 +401,13 @@ def execution_settings(config: dict[str, Any]) -> ExecutionSettings:
             else None
         ),
     )
+
+
+def validate_execution_environment(config: dict[str, Any]) -> ExecutionSettings:
+    runtime = execution_settings(config)
+    if runtime.vad_device == "cuda" and not torch.cuda.is_available():
+        raise ValueError("execution.vad_device is cuda, but CUDA is not available")
+    return runtime
 
 
 def safe_id(value: str) -> str:
@@ -953,7 +982,7 @@ def process_pipeline(
 ) -> PipelineAudit:
     if workers < 1:
         raise ValueError("workers must be >= 1")
-    runtime = execution_settings(config)
+    runtime = validate_execution_environment(config)
     output_root.mkdir(parents=True, exist_ok=True)
     (output_root / "clips").mkdir(exist_ok=True)
     existing_sources = {
@@ -982,7 +1011,10 @@ def process_pipeline(
             detector = (
                 detector_factory()
                 if detector_factory is not None
-                else SileroVadDetector(engine=runtime.vad_engine)
+                else SileroVadDetector(
+                    engine=runtime.vad_engine,
+                    device=runtime.vad_device,
+                )
             )
             worker_state.detector = detector
         return detector
@@ -1088,6 +1120,7 @@ def run_pipeline(
 ) -> PipelineAudit:
     if workers < 1:
         raise ValueError("workers must be >= 1")
+    validate_execution_environment(config)
     run_path = output_root / "run.json"
     if output_root.exists() and run_path.is_file():
         prior = json.loads(run_path.read_text(encoding="utf-8"))

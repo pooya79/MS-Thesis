@@ -29,6 +29,9 @@ execution:
   # Batched PyTorch inference changes recorded probabilities at about 1e-7,
   # so batch size 1 remains the reproducible default.
   vad_engine: pytorch
+  # Use cuda with a larger vad_batch_size on GPU servers. CPU remains the
+  # portable, scientifically equivalent default.
+  vad_device: cpu
   vad_batch_size: 1
   # Small recurrent VAD calls are faster without large thread pools. Increase
   # only after benchmarking together with the command's --workers setting.
