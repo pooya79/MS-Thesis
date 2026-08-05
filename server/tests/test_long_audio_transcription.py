@@ -130,7 +130,10 @@ def test_transcribes_normalizes_and_writes_paths_relative_to_clips(tmp_path: Pat
     }
 
 
-def test_transcribes_completed_clips_before_segmentation_manifest_is_published(tmp_path: Path) -> None:
+def test_transcribes_completed_clips_before_segmentation_manifest_is_published(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     make_unpublished_clip(tmp_path, "source_000000.flac")
     calls: list[list[str]] = []
 
@@ -147,6 +150,15 @@ def test_transcribes_completed_clips_before_segmentation_manifest_is_published(t
     assert snapshot[0]["id"] == "source_000000"
     assert snapshot[0]["discovered_without_manifest"] is True
     assert read_jsonl(tmp_path / "transcriptions.jsonl")[0]["source_id"] is None
+    output = capsys.readouterr().out
+    assert "[transcribe] startup discovery begin" in output
+    assert "manifest loaded" in output
+    assert "hashing=clips/source_000000.flac" in output
+    assert "startup discovery complete manifest=0 discovered=1 total=1" in output
+    assert "writing pending snapshot" in output
+    assert "pending snapshot ready" in output
+    assert "Whisper transcriber ready" in output
+    assert "batch checkpoint saved batch=1/1" in output
 
 
 def test_snapshot_combines_manifest_records_with_newly_exported_clips(tmp_path: Path) -> None:

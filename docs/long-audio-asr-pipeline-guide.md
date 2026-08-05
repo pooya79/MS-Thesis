@@ -303,6 +303,12 @@ segmentation against the shared root during transcription because forced
 segmentation replaces that directory. Multiple transcription processes must
 not use the same input root simultaneously.
 
+The command prints flushed `[transcribe]` progress messages while loading the
+manifest, indexing and hashing unmanifested clips, writing the pending snapshot,
+validating audio, initializing Whisper, running batches, and saving checkpoints.
+These messages make long discovery and model-loading phases visible in redirected
+logs as well as an interactive terminal.
+
 Constrained LLM cleanup, content filtering, leakage-safe source grouping,
 train/dev/test publication, and human audit remain later stages described in
 [`iranseda-whisper-dataset-pipeline.md`](iranseda-whisper-dataset-pipeline.md).

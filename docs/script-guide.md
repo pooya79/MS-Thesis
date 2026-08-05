@@ -166,7 +166,9 @@ deduplicated TSV/JSONL result. Run the same command again to transcribe later
 clips and retry operational failures; successful results and normalization
 rejections are reused. Later official manifest metadata is added to reused
 fallback transcripts automatically. Do not run forced segmentation on the
-shared root at the same time.
+shared root at the same time. Flushed `[transcribe]` stdout messages report clip
+indexing, discovery/checksumming, snapshot writing, model initialization,
+inference batches, and saved checkpoints.
 
 The later LLM cleanup, quality-control, and split-generation stages remain
 designs described in

@@ -236,16 +236,27 @@ class WhisperSegmentTranscriber:
 
 
 def _validate_input_root(input_root: Path) -> list[dict[str, Any]]:
+    print(f"[transcribe] startup discovery begin input_root={input_root}", flush=True)
     if not (input_root / "run.json").is_file() or not (input_root / "clips").is_dir():
         raise ValueError("input root must contain run.json and clips/ from segment_audio")
     manifest_path = input_root / "segments.jsonl"
     segments = read_jsonl(manifest_path) if manifest_path.is_file() else []
+    manifest_count = len(segments)
+    print(
+        f"[transcribe] manifest loaded path={manifest_path} records={manifest_count} "
+        f"exists={manifest_path.is_file()}",
+        flush=True,
+    )
     manifested_paths = {
         str(segment.get("path"))
         for segment in segments
         if isinstance(segment.get("path"), str)
     }
-    for clip_path in sorted((input_root / "clips").rglob("*")):
+    print(f"[transcribe] indexing completed clip files under {input_root / 'clips'}", flush=True)
+    clip_paths = sorted((input_root / "clips").rglob("*"))
+    print(f"[transcribe] clip index ready entries={len(clip_paths)}", flush=True)
+    discovered = 0
+    for scanned, clip_path in enumerate(clip_paths, start=1):
         if (
             not clip_path.is_file()
             or clip_path.name.startswith(".")
@@ -255,6 +266,12 @@ def _validate_input_root(input_root: Path) -> list[dict[str, Any]]:
         relative = clip_path.relative_to(input_root).as_posix()
         if relative in manifested_paths:
             continue
+        if discovered == 0 or discovered % 100 == 0:
+            print(
+                f"[transcribe] discovering clips scanned={scanned}/{len(clip_paths)} "
+                f"discovered={discovered} hashing={relative}",
+                flush=True,
+            )
         segments.append(
             {
                 "id": clip_path.stem,
@@ -264,6 +281,7 @@ def _validate_input_root(input_root: Path) -> list[dict[str, Any]]:
                 "discovered_without_manifest": True,
             }
         )
+        discovered += 1
     seen: set[str] = set()
     for index, segment in enumerate(segments, start=1):
         segment_id = segment.get("id")
@@ -272,7 +290,13 @@ def _validate_input_root(input_root: Path) -> list[dict[str, Any]]:
         if segment_id in seen:
             raise ValueError(f"segments.jsonl contains duplicate id: {segment_id}")
         seen.add(segment_id)
-    return sorted(segments, key=lambda item: str(item["id"]))
+    segments.sort(key=lambda item: str(item["id"]))
+    print(
+        f"[transcribe] startup discovery complete manifest={manifest_count} "
+        f"discovered={discovered} total={len(segments)}",
+        flush=True,
+    )
+    return segments
 
 
 def _clip_path(input_root: Path, segment: dict[str, Any]) -> tuple[Path | None, str | None, str | None]:
@@ -350,8 +374,14 @@ def process_transcription(
 ) -> TranscriptionAudit:
     segments = _validate_input_root(input_root)
     output_root.mkdir(parents=True, exist_ok=True)
+    print(f"[transcribe] loading prior transcription records from {output_root}", flush=True)
     prior_accepted = {item["id"]: item for item in read_jsonl(output_root / "transcriptions.jsonl")} if (output_root / "transcriptions.jsonl").is_file() else {}
     prior_rejected = {item["id"]: item for item in read_jsonl(output_root / "transcription_rejected.jsonl")} if (output_root / "transcription_rejected.jsonl").is_file() else {}
+    print(
+        f"[transcribe] prior records loaded accepted={len(prior_accepted)} "
+        f"rejected={len(prior_rejected)}",
+        flush=True,
+    )
     accepted: list[dict[str, Any]] = []
     rejected: list[dict[str, Any]] = []
     worklist: list[dict[str, Any]] = []
@@ -359,7 +389,10 @@ def process_transcription(
     reused = 0
     processed = 0
 
-    for segment in segments:
+    print(f"[transcribe] selecting pending snapshot records total={len(segments)}", flush=True)
+    for index, segment in enumerate(segments, start=1):
+        if index == 1 or index % 1000 == 0 or index == len(segments):
+            print(f"[transcribe] selecting record {index}/{len(segments)}", flush=True)
         prior = prior_accepted.get(segment["id"]) or prior_rejected.get(segment["id"])
         if (
             prior
@@ -374,27 +407,61 @@ def process_transcription(
             reused += 1
             continue
         worklist.append(segment)
+    print(
+        f"[transcribe] pending selection complete selected={len(worklist)} reused={reused}",
+        flush=True,
+    )
 
     # Freeze the exact set selected from the startup view of segments.jsonl.
     # The segmenter may publish more records while inference is running; those
     # records intentionally wait for the next transcription invocation.
-    write_jsonl_atomic(output_root / PENDING_SNAPSHOT_NAME, worklist)
+    snapshot_path = output_root / PENDING_SNAPSHOT_NAME
+    print(
+        f"[transcribe] writing pending snapshot path={snapshot_path} "
+        f"selected={len(worklist)} reused={reused}",
+        flush=True,
+    )
+    write_jsonl_atomic(snapshot_path, worklist)
+    print(f"[transcribe] pending snapshot ready path={snapshot_path}", flush=True)
 
-    for segment in worklist:
+    print(f"[transcribe] validating snapshot clips count={len(worklist)}", flush=True)
+    for index, segment in enumerate(worklist, start=1):
+        if index == 1 or index % 100 == 0 or index == len(worklist):
+            print(
+                f"[transcribe] validating clip {index}/{len(worklist)} id={segment['id']}",
+                flush=True,
+            )
         path, reason, detail = _clip_path(input_root, segment)
         if reason is not None:
             rejected.append(_make_rejection(segment, config_digest, reason, detail or reason))
             processed += 1
         else:
             pending.append((segment, path))  # type: ignore[arg-type]
+    print(
+        f"[transcribe] snapshot validation complete ready={len(pending)} "
+        f"rejected={processed}",
+        flush=True,
+    )
 
     try:
-        transcriber = transcriber_factory(config) if pending else None
+        if pending:
+            print("[transcribe] initializing Whisper transcriber", flush=True)
+            transcriber = transcriber_factory(config)
+            print("[transcribe] Whisper transcriber ready", flush=True)
+        else:
+            transcriber = None
+            print("[transcribe] no clips require inference", flush=True)
     except Exception as error:
         raise RuntimeError(f"could not initialize Whisper transcription: {type(error).__name__}: {error}") from error
     batch_size = int(config["inference"]["batch_size"])
+    batch_count = math.ceil(len(pending) / batch_size)
     for offset in range(0, len(pending), batch_size):
         batch = pending[offset : offset + batch_size]
+        batch_index = offset // batch_size + 1
+        print(
+            f"[transcribe] inference batch {batch_index}/{batch_count} clips={len(batch)}",
+            flush=True,
+        )
         try:
             raw_texts = transcriber.transcribe([path for _, path in batch])  # type: ignore[union-attr]
             if len(raw_texts) != len(batch):
@@ -448,6 +515,11 @@ def process_transcription(
             len(segments), processed, reused, len(accepted), len(rejected), sum(bool(item["operational"]) for item in rejected)
         )
         _persist(output_root, accepted, rejected, audit)
+        print(
+            f"[transcribe] batch checkpoint saved batch={batch_index}/{batch_count} "
+            f"processed={processed} accepted={len(accepted)} rejected={len(rejected)}",
+            flush=True,
+        )
 
     if not pending:
         audit = TranscriptionAudit(
