@@ -148,9 +148,25 @@ tuning.
 For smaller lossy outputs, follow the inline comments in
 `configs/long_audio_asr_pipeline/segmentation.yaml`: change the `audio` block
 to `format: MP3`, remove `subtype`, and add `bitrate_kbps: 48`. Format, bitrate,
-VAD, and boundary settings are included in the run's configuration digest. The
-later Whisper pseudo-labelling, LLM cleanup, quality-control, and
-split-generation stages remain designs described in
+VAD, and boundary settings are included in the run's configuration digest.
+
+Transcription can run before normal segmentation finishes:
+
+```bash
+uv run python -m ml.speech_data.long_audio_asr_pipeline.transcribe_segments \
+  --config configs/long_audio_asr_pipeline/transcription.yaml \
+  --input-root data/iranseda/segmented/flac-v1
+```
+
+The command freezes the currently published segments in
+`transcription_pending_snapshot.jsonl`, checkpoints results after every batch,
+and accumulates a deduplicated TSV/JSONL result. Run the same command again to
+transcribe clips published since the prior invocation and to retry operational
+failures; successful results and normalization rejections are reused. Do not
+run forced segmentation on the shared root at the same time.
+
+The later LLM cleanup, quality-control, and split-generation stages remain
+designs described in
 [`iranseda-whisper-dataset-pipeline.md`](iranseda-whisper-dataset-pipeline.md).
 
 Discovery prints live category/station/item progress and writes atomic

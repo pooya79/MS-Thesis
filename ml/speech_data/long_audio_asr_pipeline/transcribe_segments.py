@@ -44,6 +44,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
 }
 
 TRANSCRIPTION_PIPELINE_VERSION = 1
+PENDING_SNAPSHOT_NAME = "transcription_pending_snapshot.jsonl"
 
 OPERATIONAL_REASONS = {
     "audio_read_failed",
@@ -58,6 +59,7 @@ ARTIFACT_NAMES = (
     "transcription.tsv",
     "transcriptions.jsonl",
     "transcription_rejected.jsonl",
+    PENDING_SNAPSHOT_NAME,
     "transcription_summary.json",
     "transcription_run.json",
     "transcription_effective_config.yaml",
@@ -328,6 +330,7 @@ def process_transcription(
     prior_rejected = {item["id"]: item for item in read_jsonl(output_root / "transcription_rejected.jsonl")} if (output_root / "transcription_rejected.jsonl").is_file() else {}
     accepted: list[dict[str, Any]] = []
     rejected: list[dict[str, Any]] = []
+    worklist: list[dict[str, Any]] = []
     pending: list[tuple[dict[str, Any], Path]] = []
     reused = 0
     processed = 0
@@ -343,6 +346,14 @@ def process_transcription(
             (rejected if "reason" in prior else accepted).append(prior)
             reused += 1
             continue
+        worklist.append(segment)
+
+    # Freeze the exact set selected from the startup view of segments.jsonl.
+    # The segmenter may publish more records while inference is running; those
+    # records intentionally wait for the next transcription invocation.
+    write_jsonl_atomic(output_root / PENDING_SNAPSHOT_NAME, worklist)
+
+    for segment in worklist:
         path, reason, detail = _clip_path(input_root, segment)
         if reason is not None:
             rejected.append(_make_rejection(segment, config_digest, reason, detail or reason))
@@ -468,14 +479,20 @@ def print_audit(audit: TranscriptionAudit, input_root: Path) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Transcribe segment_audio output with Whisper Medium and normalize Persian labels."
+        description=(
+            "Transcribe a fixed startup snapshot of segment_audio output with Whisper Medium, "
+            "checkpoint results, and normalize Persian labels."
+        )
     )
     parser.add_argument("--config", required=True, type=Path, help="YAML transcription configuration file.")
     parser.add_argument(
         "--input-root",
         required=True,
         type=Path,
-        help="Directory created by segment_audio, containing clips/ and segments.jsonl.",
+        help=(
+            "Directory created by segment_audio, containing clips/ and segments.jsonl; "
+            "identical reruns process only newly published or retryable segments."
+        ),
     )
     parser.add_argument(
         "--force",

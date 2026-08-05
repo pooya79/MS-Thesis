@@ -247,8 +247,10 @@ the command exits nonzero after writing its audit manifests.
 
 ## Whisper Transcription and Normalization
 
-After segmentation, transcribe every manifest-backed clip with the fine-tuned
-Whisper Medium model and apply the repository's shared Persian ASR text rules:
+Transcription can start while a normal, non-forced segmentation run is still
+publishing clips. Each invocation transcribes the manifest-backed clips that
+are available when it starts and applies the repository's shared Persian ASR
+text rules:
 
 ```bash
 uv run python -m ml.speech_data.long_audio_asr_pipeline.transcribe_segments \
@@ -262,8 +264,9 @@ weights-only Trainer checkpoint to be used. The inference section controls
 device selection, mixed precision, batch size, and maximum generation length;
 decoding is deterministic and explicitly uses Persian transcription mode.
 
-The input root must be an unchanged `segment_audio` output containing
-`run.json`, `segments.jsonl`, and `clips/`. The stage verifies clip paths,
+The input root must contain the `segment_audio` artifacts `run.json`,
+`segments.jsonl`, and `clips/`. The stage reads one atomic view of
+`segments.jsonl`, verifies clip paths,
 checksums, readability, channel count, and 16 kHz sample rate before inference.
 It writes:
 
@@ -271,20 +274,30 @@ It writes:
 transcription.tsv
 transcriptions.jsonl
 transcription_rejected.jsonl
+transcription_pending_snapshot.jsonl
 transcription_summary.json
 transcription_run.json
 transcription_effective_config.yaml
 ```
 
-`transcription.tsv` contains `path` and `sentence`, with paths relative to
-`clips/`. The accepted JSONL preserves raw and normalized transcripts plus the
-model and decoding identity. Rejected normalization and operational failures
-are recorded separately; operational failures make the command exit nonzero.
+`transcription_pending_snapshot.jsonl` is atomically replaced at startup and
+contains the exact worklist selected for that invocation. Clips published by
+the segmenter afterward wait for the next invocation. `transcription.tsv`
+contains `path` and `sentence`, with paths relative to `clips/`. The accepted
+JSONL preserves raw and normalized transcripts plus the model and decoding
+identity. Rejected normalization and operational failures are recorded
+separately; operational failures make the command exit nonzero.
 
-An identical rerun reuses records whose clip checksum and transcription digest
-still match. Changed settings require `--force`. A forced run stages its output
-and preserves the previous transcription artifacts if an operational failure
-occurs. `--force` never changes clips or segmentation manifests.
+Results are checkpointed atomically after every inference batch. An identical
+rerun reuses records whose clip checksum and transcription digest still match,
+processes newly published clips, and retries operational failures. Normalization
+rejections are reused. The canonical TSV and JSONL outputs are rebuilt as a
+sorted, deduplicated union rather than byte-appended. Changed settings require
+`--force`. A forced transcription stages its output and preserves the previous
+transcription artifacts if an operational failure occurs. Do not run forced
+segmentation against the shared root during transcription because forced
+segmentation replaces that directory. Multiple transcription processes must
+not use the same input root simultaneously.
 
 Constrained LLM cleanup, content filtering, leakage-safe source grouping,
 train/dev/test publication, and human audit remain later stages described in

@@ -9,8 +9,9 @@ import pytest
 import soundfile as sf
 import yaml
 
-from ml.speech_data.long_audio_asr_pipeline.segment_audio import sha256_file
+from ml.speech_data.long_audio_asr_pipeline.segment_audio import sha256_file, write_jsonl_atomic
 from ml.speech_data.long_audio_asr_pipeline.transcribe_segments import (
+    PENDING_SNAPSHOT_NAME,
     SegmentTranscriber,
     load_config,
     run_transcription,
@@ -43,7 +44,22 @@ def make_segmentation_root(root: Path, names: tuple[str, ...] = ("one.flac", "tw
     )
 
 
-def config(checkpoint: str = "/model") -> dict[str, object]:
+def publish_segment(root: Path, name: str, index: int) -> None:
+    path = root / "clips" / name
+    make_audio(path)
+    records = read_jsonl(root / "segments.jsonl")
+    records.append(
+        {
+            "id": f"clip-{index}",
+            "source_id": "source",
+            "path": f"clips/{name}",
+            "clip_checksum": sha256_file(path),
+        }
+    )
+    write_jsonl_atomic(root / "segments.jsonl", records)
+
+
+def config(checkpoint: str = "/model", batch_size: int = 2) -> dict[str, object]:
     return {
         "model": {
             "checkpoint": checkpoint,
@@ -55,7 +71,7 @@ def config(checkpoint: str = "/model") -> dict[str, object]:
         "inference": {
             "device": "cpu",
             "mixed_precision": False,
-            "batch_size": 2,
+            "batch_size": batch_size,
             "generation_max_length": 225,
         },
     }
@@ -147,6 +163,97 @@ def test_matching_run_reuses_transcript_without_loading_model(tmp_path: Path) ->
     assert first_calls == [["one.flac"]]
     assert audit.clips_reused == 1
     assert audit.clips_processed == 0
+    assert read_jsonl(tmp_path / PENDING_SNAPSHOT_NAME) == []
+
+
+def test_run_uses_fixed_snapshot_and_next_run_transcribes_newly_published_segment(
+    tmp_path: Path,
+) -> None:
+    make_segmentation_root(tmp_path, ("one.flac",))
+    first_calls: list[list[str]] = []
+
+    class PublishingTranscriber:
+        def transcribe(self, paths: list[Path]) -> list[str]:
+            first_calls.append([path.name for path in paths])
+            publish_segment(tmp_path, "two.flac", 1)
+            return ["سلام"]
+
+    first_audit = run_transcription(
+        tmp_path,
+        config(),
+        "sha256:config",
+        transcriber_factory=lambda _: PublishingTranscriber(),
+    )
+
+    assert first_calls == [["one.flac"]]
+    assert first_audit.clips_total == 1
+    assert [record["id"] for record in read_jsonl(tmp_path / PENDING_SNAPSHOT_NAME)] == ["clip-0"]
+    assert [record["id"] for record in read_jsonl(tmp_path / "transcriptions.jsonl")] == ["clip-0"]
+
+    second_calls: list[list[str]] = []
+    second_audit = run_transcription(
+        tmp_path,
+        config(),
+        "sha256:config",
+        transcriber_factory=lambda _: FakeTranscriber({"two.flac": "درود"}, second_calls),
+    )
+
+    assert second_calls == [["two.flac"]]
+    assert second_audit.clips_total == 2
+    assert second_audit.clips_reused == 1
+    assert second_audit.clips_processed == 1
+    assert [record["id"] for record in read_jsonl(tmp_path / PENDING_SNAPSHOT_NAME)] == ["clip-1"]
+    assert [record["id"] for record in read_jsonl(tmp_path / "transcriptions.jsonl")] == [
+        "clip-0",
+        "clip-1",
+    ]
+
+
+def test_completed_batches_survive_interruption_and_are_reused_on_restart(tmp_path: Path) -> None:
+    make_segmentation_root(tmp_path)
+
+    class StopRun(BaseException):
+        pass
+
+    class InterruptingTranscriber:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def transcribe(self, paths: list[Path]) -> list[str]:
+            self.calls += 1
+            if self.calls == 2:
+                raise StopRun
+            return ["سلام"]
+
+    with pytest.raises(StopRun):
+        run_transcription(
+            tmp_path,
+            config(batch_size=1),
+            "sha256:config",
+            transcriber_factory=lambda _: InterruptingTranscriber(),
+        )
+
+    assert [record["id"] for record in read_jsonl(tmp_path / "transcriptions.jsonl")] == ["clip-0"]
+    assert [record["id"] for record in read_jsonl(tmp_path / PENDING_SNAPSHOT_NAME)] == [
+        "clip-0",
+        "clip-1",
+    ]
+
+    restart_calls: list[list[str]] = []
+    audit = run_transcription(
+        tmp_path,
+        config(batch_size=1),
+        "sha256:config",
+        transcriber_factory=lambda _: FakeTranscriber({"two.flac": "درود"}, restart_calls),
+    )
+
+    assert restart_calls == [["two.flac"]]
+    assert audit.clips_reused == 1
+    assert audit.clips_processed == 1
+    assert [record["id"] for record in read_jsonl(tmp_path / "transcriptions.jsonl")] == [
+        "clip-0",
+        "clip-1",
+    ]
 
 
 def test_inference_failure_is_recorded_after_individual_retry(tmp_path: Path) -> None:
@@ -168,6 +275,10 @@ def test_inference_failure_is_recorded_after_individual_retry(tmp_path: Path) ->
     assert audit.clips_accepted == 1
     assert audit.operational_failures == 1
     assert read_jsonl(tmp_path / "transcription_rejected.jsonl")[0]["reason"] == "inference_failed"
+    assert [record["id"] for record in read_jsonl(tmp_path / PENDING_SNAPSHOT_NAME)] == [
+        "clip-0",
+        "clip-1",
+    ]
 
     retry_calls: list[list[str]] = []
     retried = run_transcription(
@@ -182,6 +293,7 @@ def test_inference_failure_is_recorded_after_individual_retry(tmp_path: Path) ->
     assert retried.clips_accepted == 2
     assert retried.operational_failures == 0
     assert read_jsonl(tmp_path / "transcription_rejected.jsonl") == []
+    assert [record["id"] for record in read_jsonl(tmp_path / PENDING_SNAPSHOT_NAME)] == ["clip-1"]
 
 
 def test_changed_config_requires_force_and_failed_force_preserves_artifacts(tmp_path: Path) -> None:
