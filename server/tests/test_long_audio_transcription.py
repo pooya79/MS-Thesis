@@ -59,6 +59,14 @@ def publish_segment(root: Path, name: str, index: int) -> None:
     write_jsonl_atomic(root / "segments.jsonl", records)
 
 
+def make_unpublished_clip(root: Path, name: str) -> Path:
+    (root / "clips").mkdir(parents=True, exist_ok=True)
+    (root / "run.json").write_text('{"config_digest":"segmentation"}\n', encoding="utf-8")
+    path = root / "clips" / name
+    make_audio(path)
+    return path
+
+
 def config(checkpoint: str = "/model", batch_size: int = 2) -> dict[str, object]:
     return {
         "model": {
@@ -120,6 +128,99 @@ def test_transcribes_normalizes_and_writes_paths_relative_to_clips(tmp_path: Pat
         "generation_max_length": 225,
         "num_beams": 1,
     }
+
+
+def test_transcribes_completed_clips_before_segmentation_manifest_is_published(tmp_path: Path) -> None:
+    make_unpublished_clip(tmp_path, "source_000000.flac")
+    calls: list[list[str]] = []
+
+    audit = run_transcription(
+        tmp_path,
+        config(),
+        "sha256:config",
+        transcriber_factory=lambda _: FakeTranscriber({"source_000000.flac": "سلام"}, calls),
+    )
+
+    assert calls == [["source_000000.flac"]]
+    assert audit.clips_total == 1
+    snapshot = read_jsonl(tmp_path / PENDING_SNAPSHOT_NAME)
+    assert snapshot[0]["id"] == "source_000000"
+    assert snapshot[0]["discovered_without_manifest"] is True
+    assert read_jsonl(tmp_path / "transcriptions.jsonl")[0]["source_id"] is None
+
+
+def test_snapshot_combines_manifest_records_with_newly_exported_clips(tmp_path: Path) -> None:
+    make_segmentation_root(tmp_path, ("one.flac",))
+    make_audio(tmp_path / "clips" / "source_000001.flac")
+    calls: list[list[str]] = []
+
+    audit = run_transcription(
+        tmp_path,
+        config(),
+        "sha256:config",
+        transcriber_factory=lambda _: FakeTranscriber(
+            {"one.flac": "سلام", "source_000001.flac": "درود"}, calls
+        ),
+    )
+
+    assert calls == [["one.flac", "source_000001.flac"]]
+    assert audit.clips_total == 2
+    snapshot = read_jsonl(tmp_path / PENDING_SNAPSHOT_NAME)
+    assert [record["id"] for record in snapshot] == ["clip-0", "source_000001"]
+    assert "discovered_without_manifest" not in snapshot[0]
+    assert snapshot[1]["discovered_without_manifest"] is True
+
+
+def test_later_manifest_enriches_reused_fallback_transcript(tmp_path: Path) -> None:
+    clip_path = make_unpublished_clip(tmp_path, "source_000000.flac")
+    run_transcription(
+        tmp_path,
+        config(),
+        "sha256:config",
+        transcriber_factory=lambda _: FakeTranscriber({"source_000000.flac": "سلام"}, []),
+    )
+    write_jsonl_atomic(
+        tmp_path / "segments.jsonl",
+        [
+            {
+                "id": "source_000000",
+                "source_id": "original-source-id",
+                "path": "clips/source_000000.flac",
+                "clip_checksum": sha256_file(clip_path),
+            }
+        ],
+    )
+
+    def must_not_load(_: dict[str, object]) -> SegmentTranscriber:
+        raise AssertionError("the fallback transcript should be reused")
+
+    audit = run_transcription(
+        tmp_path,
+        config(),
+        "sha256:config",
+        transcriber_factory=must_not_load,
+    )
+
+    assert audit.clips_reused == 1
+    assert read_jsonl(tmp_path / PENDING_SNAPSHOT_NAME) == []
+    assert read_jsonl(tmp_path / "transcriptions.jsonl")[0]["source_id"] == "original-source-id"
+
+
+def test_unpublished_temporary_clip_is_not_snapshotted(tmp_path: Path) -> None:
+    make_unpublished_clip(tmp_path, ".source_000000.part.flac")
+
+    def must_not_load(_: dict[str, object]) -> SegmentTranscriber:
+        raise AssertionError("temporary exports must not be transcribed")
+
+    audit = run_transcription(
+        tmp_path,
+        config(),
+        "sha256:config",
+        transcriber_factory=must_not_load,
+    )
+
+    assert audit.clips_total == 0
+    assert read_jsonl(tmp_path / PENDING_SNAPSHOT_NAME) == []
 
 
 def test_normalization_rejection_is_audited_and_not_an_operational_failure(tmp_path: Path) -> None:

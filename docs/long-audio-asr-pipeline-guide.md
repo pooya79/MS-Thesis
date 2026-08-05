@@ -264,11 +264,13 @@ weights-only Trainer checkpoint to be used. The inference section controls
 device selection, mixed precision, batch size, and maximum generation length;
 decoding is deterministic and explicitly uses Persian transcription mode.
 
-The input root must contain the `segment_audio` artifacts `run.json`,
-`segments.jsonl`, and `clips/`. The stage reads one atomic view of
-`segments.jsonl`, verifies clip paths,
-checksums, readability, channel count, and 16 kHz sample rate before inference.
-It writes:
+The input root must contain `run.json` and `clips/` from `segment_audio`.
+The stage reads one atomic view of `segments.jsonl` when that manifest exists.
+Because a long source can export clips before its source-level manifest is
+checkpointed, the startup snapshot also discovers completed audio files under
+`clips/` that are not in the manifest yet. Temporary `.part` exports are
+ignored. Every selected clip is checked for path safety, checksum stability,
+readability, channel count, and 16 kHz sample rate before inference. It writes:
 
 ```text
 transcription.tsv
@@ -282,11 +284,13 @@ transcription_effective_config.yaml
 
 `transcription_pending_snapshot.jsonl` is atomically replaced at startup and
 contains the exact worklist selected for that invocation. Clips published by
-the segmenter afterward wait for the next invocation. `transcription.tsv`
-contains `path` and `sentence`, with paths relative to `clips/`. The accepted
-JSONL preserves raw and normalized transcripts plus the model and decoding
-identity. Rejected normalization and operational failures are recorded
-separately; operational failures make the command exit nonzero.
+the segmenter afterward wait for the next invocation. A clip discovered before
+its official manifest record temporarily has a null `source_id`; an identical
+rerun enriches the reused transcript when the manifest becomes available.
+`transcription.tsv` contains `path` and `sentence`, with paths relative to
+`clips/`. The accepted JSONL preserves raw and normalized transcripts plus the
+model and decoding identity. Rejected normalization and operational failures
+are recorded separately; operational failures make the command exit nonzero.
 
 Results are checkpointed atomically after every inference batch. An identical
 rerun reuses records whose clip checksum and transcription digest still match,

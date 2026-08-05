@@ -158,12 +158,15 @@ uv run python -m ml.speech_data.long_audio_asr_pipeline.transcribe_segments \
   --input-root data/iranseda/segmented/flac-v1
 ```
 
-The command freezes the currently published segments in
-`transcription_pending_snapshot.jsonl`, checkpoints results after every batch,
-and accumulates a deduplicated TSV/JSONL result. Run the same command again to
-transcribe clips published since the prior invocation and to retry operational
-failures; successful results and normalization rejections are reused. Do not
-run forced segmentation on the shared root at the same time.
+The command freezes the currently available, atomically completed clips in
+`transcription_pending_snapshot.jsonl`, including clips exported before
+`segments.jsonl` receives their source-level records. Temporary `.part` files
+are ignored. Results are checkpointed after every batch and accumulated into a
+deduplicated TSV/JSONL result. Run the same command again to transcribe later
+clips and retry operational failures; successful results and normalization
+rejections are reused. Later official manifest metadata is added to reused
+fallback transcripts automatically. Do not run forced segmentation on the
+shared root at the same time.
 
 The later LLM cleanup, quality-control, and split-generation stages remain
 designs described in

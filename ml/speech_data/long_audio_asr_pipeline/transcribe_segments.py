@@ -45,6 +45,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
 
 TRANSCRIPTION_PIPELINE_VERSION = 1
 PENDING_SNAPSHOT_NAME = "transcription_pending_snapshot.jsonl"
+SUPPORTED_CLIP_EXTENSIONS = {".flac", ".mp3", ".wav"}
 
 OPERATIONAL_REASONS = {
     "audio_read_failed",
@@ -235,11 +236,34 @@ class WhisperSegmentTranscriber:
 
 
 def _validate_input_root(input_root: Path) -> list[dict[str, Any]]:
-    if not (input_root / "run.json").is_file() or not (input_root / "segments.jsonl").is_file():
-        raise ValueError("input root must contain run.json and segments.jsonl from segment_audio")
-    segments = read_jsonl(input_root / "segments.jsonl")
-    if not segments:
-        raise ValueError("segments.jsonl contains no clips")
+    if not (input_root / "run.json").is_file() or not (input_root / "clips").is_dir():
+        raise ValueError("input root must contain run.json and clips/ from segment_audio")
+    manifest_path = input_root / "segments.jsonl"
+    segments = read_jsonl(manifest_path) if manifest_path.is_file() else []
+    manifested_paths = {
+        str(segment.get("path"))
+        for segment in segments
+        if isinstance(segment.get("path"), str)
+    }
+    for clip_path in sorted((input_root / "clips").rglob("*")):
+        if (
+            not clip_path.is_file()
+            or clip_path.name.startswith(".")
+            or clip_path.suffix.lower() not in SUPPORTED_CLIP_EXTENSIONS
+        ):
+            continue
+        relative = clip_path.relative_to(input_root).as_posix()
+        if relative in manifested_paths:
+            continue
+        segments.append(
+            {
+                "id": clip_path.stem,
+                "source_id": None,
+                "path": relative,
+                "clip_checksum": sha256_file(clip_path),
+                "discovered_without_manifest": True,
+            }
+        )
     seen: set[str] = set()
     for index, segment in enumerate(segments, start=1):
         segment_id = segment.get("id")
@@ -343,7 +367,10 @@ def process_transcription(
             and prior.get("config_digest") == config_digest
             and prior.get("clip_checksum") == segment.get("clip_checksum")
         ):
-            (rejected if "reason" in prior else accepted).append(prior)
+            reused_record = dict(prior)
+            if segment.get("source_id") is not None:
+                reused_record["source_id"] = segment["source_id"]
+            (rejected if "reason" in reused_record else accepted).append(reused_record)
             reused += 1
             continue
         worklist.append(segment)
@@ -490,7 +517,7 @@ def main(argv: list[str] | None = None) -> int:
         required=True,
         type=Path,
         help=(
-            "Directory created by segment_audio, containing clips/ and segments.jsonl; "
+            "Directory created by segment_audio, containing run.json and clips/; "
             "identical reruns process only newly published or retryable segments."
         ),
     )
