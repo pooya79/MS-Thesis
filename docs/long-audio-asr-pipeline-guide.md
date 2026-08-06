@@ -142,12 +142,16 @@ execution:
   torch_threads: 1
 ```
 
-The detector reads 2,048 VAD frames per audio read, but still sends the model
-the required 512 samples in temporal order. Inference mode covers the complete
-recording, FFmpeg version discovery is cached once per run, and interval
-construction advances through speech intervals instead of restarting its
-search for every output clip. These changes preserve single-source VAD
-probabilities, boundaries, and exported audio.
+On CPU, the detector reads 2,048 VAD frames per audio read, but still sends the
+model the required 512 samples in temporal order. On CUDA, every decoded
+waveform in a cohort is loaded into one padded device-resident tensor. Silero
+still consumes 512 samples per recurrent step, but waveform data crosses to the
+GPU once and the complete probability matrix crosses back to the CPU once.
+This avoids a host/device transfer and synchronization for every 32 ms frame.
+CUDA input is limited to five hours per source. Inference mode covers the
+complete recording, FFmpeg version discovery is cached once per run, and
+interval construction advances through speech intervals instead of restarting
+its search for every output clip.
 
 Keep `vad_device: cpu` and `vad_batch_size: 1` when reproducing an existing CPU
 dataset run. PyTorch batching
@@ -159,7 +163,8 @@ requires a new output root and an explicit quality audit. The maximum number
 of in-flight decoded sources is approximately `--workers × vad_batch_size`, so
 temporary disk demand grows by the same factor.
 
-On a GPU server, move batched Silero inference to CUDA explicitly:
+On a GPU server, move batched Silero inference to CUDA explicitly. This example
+is appropriate for short or medium recordings:
 
 ```yaml
 execution:
@@ -169,19 +174,23 @@ execution:
   torch_threads: 1
 ```
 
-Start with `--workers 2` on a four-core host, then compare batch sizes 8, 16,
-and 32 using a fixed manifest. CUDA accelerated the packaged model only once
-several independent recordings were batched; batch size one remained faster on
-CPU. The model and batched 512-sample tensors run on CUDA, while FFmpeg decode,
-energy-boundary analysis, clip export, checksums, and manifest work remain on
-CPU. CUDA availability is checked before the output directory is initialized;
-the command fails instead of silently falling back to CPU. The selected device
-is recorded in each source's `vad_model` metadata.
+Start with `--workers 1` or `--workers 2`, then compare batch sizes 8, 16, and
+32 using a fixed manifest. For multi-hour recordings, start with batch size 1
+or 2 instead. CUDA waveform memory is approximately 230 MB per hour for every
+row in the padded cohort, so a five-hour source needs about 1.15 GB and a batch
+is padded to its longest source. The host holds an equally sized float32 staging
+matrix during upload. The model and waveform tensor run on CUDA, while FFmpeg
+decode, energy-boundary analysis, clip export, checksums, and manifest work
+remain on CPU. CUDA availability is checked before the output directory is
+initialized; the command fails instead of silently falling back to CPU. A
+source longer than five hours is recorded as `invalid_audio`, processing
+continues, and the run exits nonzero. The selected device is recorded in each
+source's `vad_model` metadata.
 
 CPU and CUDA can differ slightly in floating-point probability summaries, so a
 device change requires a new output root and a quality comparison. Large VRAM
-does not remove the temporary-disk cost: each cohort retains decoded working
-WAVs until its longest source finishes VAD.
+does not remove the host-memory or temporary-disk cost: each cohort retains
+decoded working WAVs until its longest source finishes VAD.
 
 Small Silero calls can become slower with large Torch thread pools. The checked
 configuration uses one Torch thread so file/cohort workers provide the outer

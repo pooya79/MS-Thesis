@@ -25,6 +25,7 @@ from .segmentation import SegmentationSettings, SpeechInterval, construct_segmen
 
 
 SUPPORTED_EXTENSIONS = {".aac", ".flac", ".m4a", ".mp3", ".ogg", ".opus", ".wav", ".wma"}
+CUDA_MAX_AUDIO_SECONDS = 5 * 60 * 60
 OUTPUT_FORMATS = {
     "FLAC": {"extension": ".flac", "subtype": "PCM_16"},
     "MP3": {"extension": ".mp3", "subtype": "MPEG_LAYER_III"},
@@ -229,6 +230,16 @@ class SileroVadDetector:
     ) -> list[list[SpeechInterval]]:
         if not paths:
             return []
+        if self.device.type == "cuda":
+            return self._detect_device_resident(paths, settings)
+
+        return self._detect_streaming(paths, settings)
+
+    def _detect_streaming(
+        self,
+        paths: Sequence[Path | None],
+        settings: dict[str, Any],
+    ) -> list[list[SpeechInterval]]:
         sample_rate = int(settings["sample_rate"])
         frame_samples = int(settings["frame_samples"])
         durations = [
@@ -268,6 +279,81 @@ class SileroVadDetector:
             self._intervals(values, duration, settings)
             for values, duration in zip(probabilities, durations, strict=True)
         ]
+
+    def _detect_device_resident(
+        self,
+        paths: Sequence[Path | None],
+        settings: dict[str, Any],
+    ) -> list[list[SpeechInterval]]:
+        """Run recurrent VAD with one waveform upload and result download."""
+        sample_rate = int(settings["sample_rate"])
+        frame_samples = int(settings["frame_samples"])
+        arrays: list[np.ndarray | None] = []
+        frame_counts: list[int] = []
+        durations: list[float] = []
+        for path in paths:
+            if path is None:
+                arrays.append(None)
+                frame_counts.append(0)
+                durations.append(0.0)
+                continue
+            with sf.SoundFile(path) as audio:
+                validate_cuda_audio_length(audio.frames, audio.samplerate, path)
+                samples = audio.read(dtype="float32", always_2d=False)
+                source_sample_rate = audio.samplerate
+            if source_sample_rate != sample_rate:
+                raise ValueError(
+                    f"CUDA VAD expected {sample_rate} Hz audio, got "
+                    f"{source_sample_rate} Hz: {path}"
+                )
+            values = np.asarray(samples, dtype=np.float32)
+            arrays.append(values)
+            frame_counts.append(len(values))
+            durations.append(len(values) / sample_rate)
+
+        maximum_frames = max(frame_counts, default=0)
+        steps = math.ceil(maximum_frames / frame_samples)
+        if steps == 0:
+            return [[] for _ in paths]
+
+        padded_samples = steps * frame_samples
+        host_waveforms = np.zeros((len(paths), padded_samples), dtype=np.float32)
+        for index, values in enumerate(arrays):
+            if values is not None:
+                host_waveforms[index, : len(values)] = values
+        waveforms = torch.from_numpy(host_waveforms).to(self.device)
+        probabilities = torch.empty((steps, len(paths)), dtype=torch.float32, device=self.device)
+
+        self.model.reset_states()
+        with torch.inference_mode():
+            for step in range(steps):
+                start = step * frame_samples
+                frames = waveforms[:, start:start + frame_samples]
+                model_input = frames[0] if len(paths) == 1 else frames
+                output = self.model(model_input, sample_rate)
+                probabilities[step].copy_(output.detach().reshape(-1))
+
+        probability_matrix = probabilities.cpu().numpy()
+        return [
+            self._intervals(
+                probability_matrix[: math.ceil(frame_count / frame_samples), index].tolist(),
+                duration,
+                settings,
+            )
+            for index, (frame_count, duration) in enumerate(
+                zip(frame_counts, durations, strict=True)
+            )
+        ]
+
+
+def validate_cuda_audio_length(frames: int, sample_rate: int, path: Path) -> None:
+    maximum_frames = CUDA_MAX_AUDIO_SECONDS * sample_rate
+    if frames > maximum_frames:
+        duration = frames / sample_rate
+        raise ValueError(
+            f"CUDA VAD supports at most {CUDA_MAX_AUDIO_SECONDS} seconds (5 hours) "
+            f"per source; got {duration:.3f} seconds: {path}"
+        )
 
 
 def sha256_file(path: Path) -> str:
@@ -823,6 +909,7 @@ def _process_cohort(
     results: list[SourceProcessingResult | None] = [None] * len(cohort)
     source_checksums = [""] * len(cohort)
     decoded: dict[int, tuple[Path, dict[str, Any]]] = {}
+    runtime = execution_settings(config)
 
     with tempfile.TemporaryDirectory(prefix="long-audio-cohort-") as temporary_dir:
         temporary_root = Path(temporary_dir)
@@ -876,6 +963,20 @@ def _process_cohort(
                 info = sf.info(working)
                 if info.frames <= 0 or info.samplerate != 16000 or info.channels != 1:
                     raise AudioDecodeError("decoded audio is empty or not mono 16 kHz")
+                if runtime.vad_device == "cuda":
+                    try:
+                        validate_cuda_audio_length(info.frames, info.samplerate, source.path)
+                    except ValueError as error:
+                        results[position] = _source_result(
+                            source,
+                            source_checksum,
+                            config_digest,
+                            reason="invalid_audio",
+                            detail=str(error),
+                            decoded_audio=None,
+                            detector_metadata=None,
+                        )
+                        continue
                 decoded[position] = (
                     working,
                     {

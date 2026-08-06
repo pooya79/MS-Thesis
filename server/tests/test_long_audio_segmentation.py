@@ -550,6 +550,101 @@ def test_single_source_silero_inference_keeps_frame_shape_and_inference_mode(
     ]
 
 
+def test_device_resident_silero_reads_once_and_preserves_probabilities(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    frame_samples = 512
+    frame_values = [0.1, 0.8, 0.9, 0.1, 0.8]
+    samples = np.concatenate(
+        [np.full(frame_samples, value, dtype=np.float32) for value in frame_values]
+        + [np.full(100, 0.8, dtype=np.float32)]
+    )
+    path = tmp_path / "resident.wav"
+    sf.write(path, samples, 16000, subtype="FLOAT")
+    real_sound_file = sf.SoundFile
+    read_calls = 0
+
+    class CountingSoundFile:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            self.inner = real_sound_file(*args, **kwargs)
+
+        def __enter__(self) -> CountingSoundFile:
+            self.inner.__enter__()
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            self.inner.__exit__(*args)
+
+        @property
+        def frames(self) -> int:
+            return self.inner.frames
+
+        @property
+        def samplerate(self) -> int:
+            return self.inner.samplerate
+
+        def read(self, *args: object, **kwargs: object) -> np.ndarray:
+            nonlocal read_calls
+            read_calls += 1
+            return self.inner.read(*args, **kwargs)
+
+    class ProbabilityModel:
+        def __init__(self) -> None:
+            self.reset_calls = 0
+
+        def to(self, device: torch.device) -> ProbabilityModel:
+            return self
+
+        def eval(self) -> None:
+            return None
+
+        def reset_states(self) -> None:
+            self.reset_calls += 1
+
+        def __call__(self, value: torch.Tensor, sample_rate: int) -> torch.Tensor:
+            assert torch.is_inference_mode_enabled()
+            assert sample_rate == 16000
+            return value.mean(dim=-1).reshape(-1)
+
+    monkeypatch.setattr(segment_audio_module.sf, "SoundFile", CountingSoundFile)
+    model = ProbabilityModel()
+    detector = SileroVadDetector(model=model)
+    settings = {
+        "sample_rate": 16000,
+        "frame_samples": frame_samples,
+        "threshold": 0.5,
+        "minimum_speech_seconds": 0.02,
+        "merge_silence_seconds": 0.01,
+    }
+
+    intervals = detector._detect_device_resident([path], settings)
+
+    assert read_calls == 1
+    assert model.reset_calls == 1
+    assert [(item.start_sec, item.end_sec) for item in intervals[0]] == [
+        (0.032, 0.096),
+        (0.128, 0.16),
+    ]
+
+
+def test_cuda_audio_length_limit_is_five_hours() -> None:
+    sample_rate = 16000
+    maximum_frames = 5 * 60 * 60 * sample_rate
+
+    segment_audio_module.validate_cuda_audio_length(
+        maximum_frames,
+        sample_rate,
+        Path("five-hours.wav"),
+    )
+    with pytest.raises(ValueError, match=r"at most 18000 seconds \(5 hours\)"):
+        segment_audio_module.validate_cuda_audio_length(
+            maximum_frames + 1,
+            sample_rate,
+            Path("too-long.wav"),
+        )
+
+
 def test_pipeline_caches_ffmpeg_version_and_restores_torch_threads(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -702,6 +797,43 @@ def test_pipeline_rejects_unavailable_cuda_before_creating_output(
         run_pipeline([], output, config, digest)
 
     assert not output.exists()
+
+
+def test_pipeline_rejects_cuda_audio_over_five_hour_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source.wav"
+    make_audio(source, duration=1.0)
+    config, digest = load_config(CONFIG_PATH)
+    config["execution"]["vad_device"] = "cuda"
+    output = tmp_path / "cuda-too-long"
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(segment_audio_module, "CUDA_MAX_AUDIO_SECONDS", 0.5)
+    monkeypatch.setattr(
+        segment_audio_module,
+        "decode_audio",
+        lambda source_path, destination: sf.write(
+            destination,
+            sf.read(source_path, dtype="float32")[0],
+            16000,
+            subtype="PCM_16",
+        ),
+    )
+    monkeypatch.setattr(segment_audio_module, "ffmpeg_version", lambda: "ffmpeg fixture")
+
+    audit = run_pipeline(
+        [SourceRecord("too-long", source, None, {})],
+        output,
+        config,
+        digest,
+        detector_factory=lambda: pytest.fail("VAD must not run for oversized audio"),
+    )
+
+    assert audit.operational_failures == 1
+    rejection = jsonl(output / "rejected.jsonl")[0]
+    assert rejection["reason"] == "invalid_audio"
+    assert "CUDA VAD supports at most" in str(rejection["detail"])
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is not available")

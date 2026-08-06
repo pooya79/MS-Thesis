@@ -140,10 +140,14 @@ while audit-manifest writes remain serialized. Start with 2–4 workers and
 adjust for available CPU, temporary disk, and memory. Batch sizes above one are
 experimental because PyTorch batching can change recorded probabilities at
 approximately `1e-7`; execution settings are included in the configuration
-digest. On GPU servers, use `vad_device: cuda` with batch size 8–32 and start
-with two workers; CUDA accelerates only VAD inference, while decoding and export
-remain on CPU. See `docs/long-audio-asr-pipeline-guide.md` for profiling and
-tuning.
+digest. On GPU servers, decoded cohort waveforms remain GPU-resident during VAD,
+so each waveform is uploaded once and its probabilities are downloaded once.
+Use `vad_device: cuda` with batch size 8–32 for short or medium recordings and
+start with one or two workers. For multi-hour recordings, begin with batch size
+1–2 because device and host staging memory scale with the padded cohort; CUDA
+inputs are limited to five hours per source. CUDA accelerates only VAD, while
+decoding and export remain on CPU. See
+`docs/long-audio-asr-pipeline-guide.md` for profiling and tuning.
 
 For smaller lossy outputs, follow the inline comments in
 `configs/long_audio_asr_pipeline/segmentation.yaml`: change the `audio` block
