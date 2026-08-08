@@ -6,6 +6,7 @@ before running it with custom paths or configuration:
 ```bash
 uv run python -m ml.speech_data.long_audio_asr_pipeline.segment_audio --help
 uv run python -m ml.speech_data.long_audio_asr_pipeline.transcribe_segments --help
+uv run python -m ml.speech_data.long_audio_asr_pipeline.refine_transcriptions --help
 ```
 
 ## Segment Long Audio with VAD
@@ -318,6 +319,76 @@ validating audio, initializing Whisper, running batches, and saving checkpoints.
 These messages make long discovery and model-loading phases visible in redirected
 logs as well as an interactive terminal.
 
-Constrained LLM cleanup, content filtering, leakage-safe source grouping,
-train/dev/test publication, and human audit remain later stages described in
+## Contextual Transcription Refinement
+
+After Whisper transcription is complete for the intended snapshot, run the
+conservative contextual cleanup stage against a vLLM server:
+
+```bash
+uv run python -m ml.speech_data.long_audio_asr_pipeline.refine_transcriptions \
+  --config configs/long_audio_asr_pipeline/refinement.yaml \
+  --input-root data/iranseda/segmented/flac-v1 \
+  --books-manifest data/iranseda/audiobooks/raw/books.jsonl
+```
+
+The optional books manifest adds an audiobook title only when the target's
+`source_id` begins with a numeric IranSeda book ID followed by `:` and that ID
+has a usable title. Missing or unsafe joins simply omit the title. The stage
+joins `segments.jsonl` and accepted `transcriptions.jsonl` by segment ID, then
+orders each original source by `start_sec` and ID. Context never crosses a
+`source_id`. Records without usable source metadata remain eligible but are
+refined independently without neighbors.
+
+Each target receives up to the configured number of accepted refinements from
+its past and normalized Whisper transcripts from its future. The model is told
+that these texts can disambiguate the target but cannot complete a boundary,
+add speech, or be copied into it. The strict, versioned JSON schema returns
+`cleaned_text`, `uncertain`, and enumerated `change_categories`. Publication
+requires a certain, non-empty Persian result; exact numeric-token preservation;
+and a normalized Levenshtein distance within the configured threshold.
+
+The server must expose vLLM's native synchronous
+`POST /v1/chat/completions/batch` endpoint. Its request contains a list of
+independent conversations and its response has one choice per conversation,
+indexed from zero. Streaming is unsupported and the stage sets `stream: false`.
+There is no fallback to ordinary concurrent chat requests. Startup preflight
+reports a clear error for servers without this route. Configure only an API-key
+environment-variable name in YAML; the secret is read at runtime and is never
+written to effective configuration or audit artifacts.
+
+Native batches contain at most one target per source. A source's next target is
+scheduled only after the current batch is validated and checkpointed, preserving
+causal refined-past context while allowing different recordings to run together.
+The stage writes only this separate layer:
+
+```text
+refined_transcription.tsv
+refinements.jsonl
+refinement_rejected.jsonl
+refinement_pending_snapshot.jsonl
+refinement_summary.json
+refinement_run.json
+refinement_effective_config.yaml
+```
+
+Original segmentation and transcription files are never modified.
+`refined_transcription.tsv` contains only accepted labels. JSONL audits preserve
+the rendered prompt, target and context IDs/texts, title, raw and parsed model
+response, schema and prompt versions, model parameters, validation metrics,
+input fingerprint, and upstream checksums. Results are atomically checkpointed
+after every native batch.
+
+An identical run reuses accepted and quality-rejected records only while the
+configuration, upstream manifests, target, relevant context, and title still
+match. Operational failures such as HTTP errors, timeouts, truncated output,
+and incomplete or malformed native batches are retried by the configured client
+and retried again on later invocations. A changed accepted refinement invalidates
+causally affected downstream fingerprints. Any operational failures produce a
+nonzero exit after audit artifacts are saved.
+
+Incompatible configuration changes require `--force`. Forced work is built in
+a staging directory and replaces only refinement artifacts after a run with no
+operational failures; otherwise the previous refinement layer is preserved.
+Content filtering, leakage-safe train/dev/test publication, and human audit
+remain later stages described in
 [`iranseda-whisper-dataset-pipeline.md`](iranseda-whisper-dataset-pipeline.md).

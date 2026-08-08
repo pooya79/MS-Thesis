@@ -24,6 +24,9 @@ uv run python -m ml.speech_data.scripts.generate_random_degraded_clip --help
 uv run python -m ml.speech_data.generate_degraded_dataset --help
 uv run python -m ml.speech_data.generate_degraded_pairs --help
 uv run python -m ml.speech_data.inspect_manifest --help
+uv run python -m ml.speech_data.long_audio_asr_pipeline.segment_audio --help
+uv run python -m ml.speech_data.long_audio_asr_pipeline.transcribe_segments --help
+uv run python -m ml.speech_data.long_audio_asr_pipeline.refine_transcriptions --help
 uv run python -m ml.speech_data.validate_degraded_dataset --help
 uv run python -m ml.asr.train_whisper_small --help
 uv run python -m ml.asr.eval_whisper_small --help
@@ -174,9 +177,28 @@ shared root at the same time. Flushed `[transcribe]` stdout messages report clip
 indexing, discovery/checksumming, snapshot writing, model initialization,
 inference batches, and saved checkpoints.
 
-The later LLM cleanup, quality-control, and split-generation stages remain
-designs described in
-[`iranseda-whisper-dataset-pipeline.md`](iranseda-whisper-dataset-pipeline.md).
+Refine completed normalized transcripts through vLLM without altering the
+Whisper artifacts:
+
+```bash
+uv run python -m ml.speech_data.long_audio_asr_pipeline.refine_transcriptions \
+  --config configs/long_audio_asr_pipeline/refinement.yaml \
+  --input-root data/iranseda/segmented/flac-v1 \
+  --books-manifest data/iranseda/audiobooks/raw/books.jsonl
+```
+
+This command requires vLLM's non-streaming native
+`/v1/chat/completions/batch` route and checks for it before inference. It batches
+at most one target from each original source, uses accepted refinements only as
+past context, uses normalized Whisper text as future context, and checkpoints
+after every native batch. Strict JSON, Persian normalization, unchanged numeric
+tokens, uncertainty, and edit-distance checks decide whether a row is published
+to `refined_transcription.tsv`. Full prompt/response and validation audits are
+kept in `refinements.jsonl` or `refinement_rejected.jsonl`. Identical safe
+records resume; operational failures retry; changed upstream/context/title data
+invalidates reuse. `--force` stages and atomically replaces only refinement
+artifacts. See [`long-audio-asr-pipeline-guide.md`](long-audio-asr-pipeline-guide.md)
+for the complete artifact and dataset-safety contract.
 
 Discovery prints live category/station/item progress and writes atomic
 checkpoints during the crawl. Audiobooks checkpoint every 10 processed books
