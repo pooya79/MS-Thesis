@@ -235,22 +235,45 @@ def _load_inputs(input_root: Path) -> list[dict[str, Any]]:
     return targets
 
 
-def load_book_titles(path: Path | None) -> tuple[dict[str, str], str | None]:
+def load_book_metadata(path: Path | None) -> tuple[dict[str, dict[str, str]], str | None]:
     if path is None:
         return {}, None
     if not path.is_file():
         raise FileNotFoundError(f"books manifest does not exist: {path}")
-    titles: dict[str, str] = {}
+    metadata: dict[str, dict[str, str]] = {}
     for index, record in enumerate(read_jsonl(path), start=1):
         book_id, title = record.get("id"), record.get("title")
         if not isinstance(book_id, str) or not book_id.isdigit() or not isinstance(title, str) or not title.strip():
             continue
-        if book_id in titles:
+        if book_id in metadata:
             raise ValueError(f"books manifest contains duplicate usable id: {book_id}")
         normalized = normalize_persian_asr_text(title.strip())
         if normalized:
-            titles[book_id] = title.strip()
-    return titles, sha256_file(path)
+            item = {"title": title.strip()}
+            description = record.get("description")
+            if (
+                isinstance(description, str)
+                and description.strip()
+                and normalize_persian_asr_text(description.strip())
+            ):
+                item["description"] = description.strip()
+            metadata[book_id] = item
+    return metadata, sha256_file(path)
+
+
+def load_book_titles(path: Path | None) -> tuple[dict[str, str], str | None]:
+    """Compatibility helper returning the safe title subset."""
+    metadata, checksum = load_book_metadata(path)
+    return {book_id: item["title"] for book_id, item in metadata.items()}, checksum
+
+
+def metadata_for_source(
+    source_id: Any, metadata: dict[str, dict[str, str]]
+) -> dict[str, str] | None:
+    if not isinstance(source_id, str):
+        return None
+    book_id = source_id.split(":", 1)[0]
+    return metadata.get(book_id) if book_id.isdigit() else None
 
 
 def title_for_source(source_id: Any, titles: dict[str, str]) -> str | None:
@@ -283,16 +306,31 @@ def build_prompt(
     preceding: Sequence[dict[str, str]],
     following: Sequence[dict[str, str]],
     title: str | None,
+    description: str | None = None,
 ) -> str:
     def lines(items: Sequence[dict[str, str]]) -> str:
         return "\n".join(f"- [{item['id']}] {item['text']}" for item in items) or "(none)"
 
     return (
-        "You refine one Persian ASR segment conservatively. Correct only orthography, spacing, "
-        "and clear ASR word substitutions. Context is evidence for disambiguation only: "
-        "never copy context into the target, complete a boundary fragment, or add speech. Preserve every "
-        "numeric token exactly. If unsure, set uncertain=true. Return only the required JSON object.\n\n"
+        "Refine one Persian ASR segment conservatively. Modify only the TARGET WHISPER TEXT.\n\n"
+        "Allowed corrections:\n"
+        "- Persian orthography and spelling\n"
+        "- spacing and نیم‌فاصله\n"
+        "- punctuation when clearly justified\n"
+        "- obvious ASR word substitutions when the intended spoken word is strongly supported by the target and context\n\n"
+        "Rules:\n"
+        "- Preserve the meaning and wording of the spoken target as closely as possible.\n"
+        "- Use surrounding context only to disambiguate the target.\n"
+        "- Never copy words or phrases from the context into the target unless they clearly correct an ASR error already present in the target.\n"
+        "- Never complete an incomplete phrase at a segment boundary.\n"
+        "- Never add, infer, summarize, or rewrite speech that is not present in the target.\n"
+        "- Do not remove valid spoken words merely to improve fluency.\n"
+        "- Preserve every numeric token exactly as written, including digits, signs, separators, and formatting.\n"
+        "- When a correction is not sufficiently certain, keep the original text and set uncertain=true.\n"
+        "- Set uncertain=false only when all applied corrections are high-confidence.\n"
+        "- Return only the required JSON object with no explanation or Markdown.\n\n"
         f"[AUDIOBOOK TITLE]\n{title or '(omitted)'}\n\n"
+        f"[AUDIOBOOK DESCRIPTION]\n{description or '(omitted)'}\n\n"
         f"[REFINED PRECEDING CONTEXT]\n{lines(preceding)}\n\n"
         f"[TARGET WHISPER TEXT]\n[{target['id']}] {target['normalized_transcript']}\n\n"
         f"[FOLLOWING WHISPER CONTEXT]\n{lines(following)}"
@@ -372,7 +410,8 @@ def validate_response(raw_text: str, target_text: str, threshold: float) -> tupl
 
 def _input_fingerprint(
     target: dict[str, Any], preceding: Sequence[dict[str, str]], following: Sequence[dict[str, str]],
-    title: str | None, config_digest: str, upstream_checksums: dict[str, str | None],
+    title: str | None, description: str | None, config_digest: str,
+    upstream_checksums: dict[str, str | None],
 ) -> str:
     payload = {
         "config_digest": config_digest,
@@ -382,6 +421,7 @@ def _input_fingerprint(
         "preceding": list(preceding),
         "following": list(following),
         "title": title,
+        "description": description,
         "upstream_checksums": upstream_checksums,
     }
     canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -436,7 +476,7 @@ def process_refinement(
     client_factory: Callable[[dict[str, Any]], BatchClient] = VLLMBatchClient,
 ) -> RefinementAudit:
     targets = _load_inputs(input_root)
-    titles, books_checksum = load_book_titles(books_manifest)
+    books, books_checksum = load_book_metadata(books_manifest)
     upstream = {
         "segments": sha256_file(input_root / "segments.jsonl"),
         "transcriptions": sha256_file(input_root / "transcriptions.jsonl"),
@@ -466,9 +506,13 @@ def process_refinement(
                 {"id": item["id"], "text": item["normalized_transcript"]}
                 for item in state["items"][index + 1 : index + 1 + context_size]
             ]
-            title = title_for_source(target.get("source_id"), titles)
-            prompt = build_prompt(target, preceding, following, title)
-            fingerprint = _input_fingerprint(target, preceding, following, title, config_digest, upstream)
+            book = metadata_for_source(target.get("source_id"), books)
+            title = book.get("title") if book else None
+            description = book.get("description") if book else None
+            prompt = build_prompt(target, preceding, following, title, description)
+            fingerprint = _input_fingerprint(
+                target, preceding, following, title, description, config_digest, upstream
+            )
             prior = prior_accepted.get(target["id"]) or prior_rejected.get(target["id"])
             if prior and not prior.get("operational", False) and prior.get("input_fingerprint") == fingerprint:
                 record = dict(prior)
@@ -483,6 +527,7 @@ def process_refinement(
                 "preceding_context": preceding,
                 "following_context": following,
                 "title": title,
+                "description": description,
                 "rendered_prompt": prompt,
                 "input_fingerprint": fingerprint,
             }
@@ -606,7 +651,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Refine normalized Persian Whisper transcripts with causal context through vLLM's native synchronous batch chat endpoint.")
     parser.add_argument("--config", required=True, type=Path, help="YAML refinement configuration file with deterministic generation settings.")
     parser.add_argument("--input-root", required=True, type=Path, help="Long-audio root containing segments.jsonl and transcriptions.jsonl; refinement artifacts are written here.")
-    parser.add_argument("--books-manifest", type=Path, help="Optional IranSeda books.jsonl used to join a safe audiobook title.")
+    parser.add_argument("--books-manifest", type=Path, help="Optional IranSeda books.jsonl used to join safe audiobook title and description metadata.")
     parser.add_argument("--force", action="store_true", help="Atomically replace only refinement artifacts created with incompatible settings.")
     args = parser.parse_args(argv)
     try:

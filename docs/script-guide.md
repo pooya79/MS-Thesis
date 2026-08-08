@@ -195,7 +195,7 @@ after every native batch. Strict JSON, Persian normalization, unchanged numeric
 tokens, uncertainty, and edit-distance checks decide whether a row is published
 to `refined_transcription.tsv`. Full prompt/response and validation audits are
 kept in `refinements.jsonl` or `refinement_rejected.jsonl`. Identical safe
-records resume; operational failures retry; changed upstream/context/title data
+records resume; operational failures retry; changed upstream/context/title/description data
 invalidates reuse. `--force` stages and atomically replaces only refinement
 artifacts. See [`long-audio-asr-pipeline-guide.md`](long-audio-asr-pipeline-guide.md)
 for the complete artifact and dataset-safety contract.

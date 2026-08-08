@@ -331,9 +331,10 @@ uv run python -m ml.speech_data.long_audio_asr_pipeline.refine_transcriptions \
   --books-manifest data/iranseda/audiobooks/raw/books.jsonl
 ```
 
-The optional books manifest adds an audiobook title only when the target's
+The optional books manifest adds an audiobook title and description when the target's
 `source_id` begins with a numeric IranSeda book ID followed by `:` and that ID
-has a usable title. Missing or unsafe joins simply omit the title. The stage
+has usable metadata. A missing or non-Persian description is omitted without
+discarding a safe title; missing or unsafe joins omit both fields. The stage
 joins `segments.jsonl` and accepted `transcriptions.jsonl` by segment ID, then
 orders each original source by `start_sec` and ID. Context never crosses a
 `source_id`. Records without usable source metadata remain eligible but are
@@ -373,13 +374,13 @@ refinement_effective_config.yaml
 
 Original segmentation and transcription files are never modified.
 `refined_transcription.tsv` contains only accepted labels. JSONL audits preserve
-the rendered prompt, target and context IDs/texts, title, raw and parsed model
+the rendered prompt, target and context IDs/texts, title and description, raw and parsed model
 response, schema and prompt versions, model parameters, validation metrics,
 input fingerprint, and upstream checksums. Results are atomically checkpointed
 after every native batch.
 
 An identical run reuses accepted and quality-rejected records only while the
-configuration, upstream manifests, target, relevant context, and title still
+configuration, upstream manifests, target, relevant context, title, and description still
 match. Operational failures such as HTTP errors, timeouts, truncated output,
 and incomplete or malformed native batches are retried by the configured client
 and retried again on later invocations. A changed accepted refinement invalidates

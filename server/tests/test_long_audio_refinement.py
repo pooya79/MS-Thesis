@@ -16,6 +16,7 @@ from ml.speech_data.long_audio_asr_pipeline.refine_transcriptions import (
     VLLMBatchClient,
     build_prompt,
     group_targets,
+    load_book_metadata,
     load_config,
     normalized_edit_distance,
     run_refinement,
@@ -203,16 +204,38 @@ def test_grouping_orders_by_source_time_and_orphans_are_isolated() -> None:
     assert sorted([item["id"] for item in group] for group in groups) == [["a", "b"], ["x"], ["y"]]
 
 
-def test_prompt_labels_context_and_title_without_boundary_completion() -> None:
+def test_prompt_labels_context_and_book_metadata_without_boundary_completion() -> None:
     target = {"id": "t", "normalized_transcript": "متن هدف"}
-    prompt = build_prompt(target, [{"id": "p", "text": "متن پیش"}], [{"id": "f", "text": "متن پس"}], "نام کتاب")
+    prompt = build_prompt(
+        target,
+        [{"id": "p", "text": "متن پیش"}],
+        [{"id": "f", "text": "متن پس"}],
+        "نام کتاب",
+        "شرح کتاب",
+    )
     assert "[AUDIOBOOK TITLE]\nنام کتاب" in prompt
+    assert "[AUDIOBOOK DESCRIPTION]\nشرح کتاب" in prompt
     assert "[REFINED PRECEDING CONTEXT]\n- [p] متن پیش" in prompt
     assert "[TARGET WHISPER TEXT]\n[t] متن هدف" in prompt
     assert "[FOLLOWING WHISPER CONTEXT]\n- [f] متن پس" in prompt
     assert "never copy context" in prompt
     assert title_for_source("123:456", {"123": "کتاب"}) == "کتاب"
     assert title_for_source("unsafe", {"123": "کتاب"}) is None
+
+
+def test_book_description_is_optional_and_safely_normalized(tmp_path: Path) -> None:
+    books = tmp_path / "books.jsonl"
+    books.write_text(
+        '{"id":"1","title":"کتاب یک","description":"شرح کامل کتاب"}\n'
+        '{"id":"2","title":"کتاب دو","description":"unsafe English"}\n'
+        '{"id":"3","title":"کتاب سه"}\n',
+        encoding="utf-8",
+    )
+    metadata, checksum = load_book_metadata(books)
+    assert metadata["1"] == {"title": "کتاب یک", "description": "شرح کامل کتاب"}
+    assert metadata["2"] == {"title": "کتاب دو"}
+    assert metadata["3"] == {"title": "کتاب سه"}
+    assert checksum and checksum.startswith("sha256:")
 
 
 def test_validation_schema_persian_digits_uncertainty_and_distance() -> None:
@@ -236,7 +259,10 @@ def test_validation_schema_persian_digits_uncertainty_and_distance() -> None:
 def test_native_batch_scheduling_response_mapping_and_context_are_causal(tmp_path: Path) -> None:
     make_root(tmp_path, {"10:track": ["من اول", "من دوم", "من سوم"], "20:track": ["تو اول", "تو دوم"]})
     books = tmp_path / "books.jsonl"
-    books.write_text('{"id":"10","title":"کتاب من"}\n', encoding="utf-8")
+    books.write_text(
+        '{"id":"10","title":"کتاب من","description":"داستانی درباره زندگی"}\n',
+        encoding="utf-8",
+    )
     client = FakeClient({"10:track-0": "من یک", "20:track-0": "تو یک"})
     audit = run_refinement(
         tmp_path, config(batch_size=2, context_size=1, threshold=1), "sha256:config",
@@ -251,8 +277,10 @@ def test_native_batch_scheduling_response_mapping_and_context_are_causal(tmp_pat
     second_prompt = client.requests[1]["messages"][0][0]["content"]
     assert "[10:track-0] من یک" in second_prompt
     assert "[10:track-2] من سوم" in second_prompt
+    assert "[AUDIOBOOK DESCRIPTION]\nداستانی درباره زندگی" in second_prompt
     accepted = jsonl(tmp_path / "refinements.jsonl")
     assert {item["id"]: item["cleaned_text"] for item in accepted}["10:track-0"] == "من یک"
+    assert next(item for item in accepted if item["id"] == "10:track-0")["description"] == "داستانی درباره زندگی"
     assert audit.targets_accepted == 5
     with (tmp_path / "refined_transcription.tsv").open(encoding="utf-8", newline="") as handle:
         assert len(list(csv.DictReader(handle, delimiter="\t"))) == 5
