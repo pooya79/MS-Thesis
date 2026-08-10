@@ -12,6 +12,7 @@ uv run python -m ml.speech_data.scripts.download_filimo_persian_asr --help
 uv run python -m ml.speech_data.scripts.download_fleurs_persian --help
 uv run python -m ml.speech_data.scripts.download_persian_eval_sets --help
 uv run python -m ml.speech_data.scripts.download_youtube_persian_asr --help
+uv run python -m ml.speech_data.scripts.compute_audio_hours --help
 uv run python -m ml.speech_data.scripts.prepare_common_voice_25 --help
 uv run python -m ml.speech_data.scripts.prepare_degradation_assets --help
 uv run python -m ml.speech_data.scripts.prepare_filimo_persian_asr --help
@@ -36,6 +37,22 @@ uv run python -m ml.fusion.train_fusion --help
 uv run python -m ml.fusion.eval_fusion --help
 uv run python -m ml.enhancement.diagnose_enhancement --help
 ```
+
+## Compute Total Audio Hours
+
+Recursively total the duration of all FLAC, WAV, and MP3 files in a directory:
+
+```bash
+uv run python -m ml.speech_data.scripts.compute_audio_hours \
+  data/my-audio-directory \
+  --workers 8
+```
+
+The command uses Mutagen to read duration metadata without decoding audio and
+uses the requested number of worker processes. It logs each completed file and
+the running total. The final summary is printed in hours and seconds. Corrupt or
+unreadable supported files are logged, omitted from the total, and cause a
+non-zero exit status after all other files have been inspected.
 
 ## Convert an ASR Dataset to FLAC
 

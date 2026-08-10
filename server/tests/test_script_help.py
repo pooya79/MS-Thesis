@@ -16,6 +16,7 @@ SCRIPT_MODULES = [
     "ml.speech_data.scripts.download_fleurs_persian",
     "ml.speech_data.scripts.download_persian_eval_sets",
     "ml.speech_data.scripts.download_youtube_persian_asr",
+    "ml.speech_data.scripts.compute_audio_hours",
     "ml.speech_data.scripts.normalize_tsv_dataset",
     "ml.speech_data.scripts.prepare_common_voice_25",
     "ml.speech_data.scripts.prepare_degradation_assets",
