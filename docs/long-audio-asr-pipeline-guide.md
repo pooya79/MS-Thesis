@@ -280,7 +280,8 @@ Because a long source can export clips before its source-level manifest is
 checkpointed, the startup snapshot also discovers completed audio files under
 `clips/` that are not in the manifest yet. Temporary `.part` exports are
 ignored. Every selected clip is checked for path safety, checksum stability,
-readability, channel count, and 16 kHz sample rate before inference. It writes:
+readability, channel count, and 16 kHz sample rate immediately before its batch
+is sent to Whisper. It writes:
 
 ```text
 transcription.tsv
@@ -302,8 +303,9 @@ rerun enriches the reused transcript when the manifest becomes available.
 model and decoding identity. Rejected normalization and operational failures
 are recorded separately; operational failures make the command exit nonzero.
 
-Results are checkpointed atomically after every inference batch. An identical
-rerun reuses records whose clip checksum and transcription digest still match,
+Results are checkpointed atomically after every selected batch, including
+batches containing only invalid clips. An identical rerun reuses records whose
+clip checksum and transcription digest still match,
 processes newly published clips, and retries operational failures. Normalization
 rejections are reused. The canonical TSV and JSONL outputs are rebuilt as a
 sorted, deduplicated union rather than byte-appended. Changed settings require
@@ -315,9 +317,9 @@ not use the same input root simultaneously.
 
 The command prints flushed `[transcribe]` progress messages while loading the
 manifest, indexing and hashing unmanifested clips, writing the pending snapshot,
-validating audio, initializing Whisper, running batches, and saving checkpoints.
-These messages make long discovery and model-loading phases visible in redirected
-logs as well as an interactive terminal.
+validating each batch, lazily initializing Whisper, running inference, and
+saving checkpoints. These messages make long discovery and model-loading phases
+visible in redirected logs as well as an interactive terminal.
 
 ## Contextual Transcription Refinement
 

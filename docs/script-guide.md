@@ -191,8 +191,8 @@ clips and retry operational failures; successful results and normalization
 rejections are reused. Later official manifest metadata is added to reused
 fallback transcripts automatically. Do not run forced segmentation on the
 shared root at the same time. Flushed `[transcribe]` stdout messages report clip
-indexing, discovery/checksumming, snapshot writing, model initialization,
-inference batches, and saved checkpoints.
+indexing, discovery/checksumming, snapshot writing, per-batch validation, model
+initialization, inference batches, and saved checkpoints.
 
 Refine completed normalized transcripts through vLLM without altering the
 Whisper artifacts:

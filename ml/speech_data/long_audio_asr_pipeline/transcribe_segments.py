@@ -385,7 +385,6 @@ def process_transcription(
     accepted: list[dict[str, Any]] = []
     rejected: list[dict[str, Any]] = []
     worklist: list[dict[str, Any]] = []
-    pending: list[tuple[dict[str, Any], Path]] = []
     reused = 0
     processed = 0
 
@@ -424,61 +423,69 @@ def process_transcription(
     write_jsonl_atomic(snapshot_path, worklist)
     print(f"[transcribe] pending snapshot ready path={snapshot_path}", flush=True)
 
-    print(f"[transcribe] validating snapshot clips count={len(worklist)}", flush=True)
-    for index, segment in enumerate(worklist, start=1):
-        if index == 1 or index % 100 == 0 or index == len(worklist):
-            print(
-                f"[transcribe] validating clip {index}/{len(worklist)} id={segment['id']}",
-                flush=True,
-            )
-        path, reason, detail = _clip_path(input_root, segment)
-        if reason is not None:
-            rejected.append(_make_rejection(segment, config_digest, reason, detail or reason))
-            processed += 1
-        else:
-            pending.append((segment, path))  # type: ignore[arg-type]
-    print(
-        f"[transcribe] snapshot validation complete ready={len(pending)} "
-        f"rejected={processed}",
-        flush=True,
-    )
-
-    try:
-        if pending:
-            print("[transcribe] initializing Whisper transcriber", flush=True)
-            transcriber = transcriber_factory(config)
-            print("[transcribe] Whisper transcriber ready", flush=True)
-        else:
-            transcriber = None
-            print("[transcribe] no clips require inference", flush=True)
-    except Exception as error:
-        raise RuntimeError(f"could not initialize Whisper transcription: {type(error).__name__}: {error}") from error
+    transcriber: SegmentTranscriber | None = None
     batch_size = int(config["inference"]["batch_size"])
-    batch_count = math.ceil(len(pending) / batch_size)
-    for offset in range(0, len(pending), batch_size):
-        batch = pending[offset : offset + batch_size]
+    batch_count = math.ceil(len(worklist) / batch_size)
+    for offset in range(0, len(worklist), batch_size):
+        selected_batch = worklist[offset : offset + batch_size]
         batch_index = offset // batch_size + 1
         print(
-            f"[transcribe] inference batch {batch_index}/{batch_count} clips={len(batch)}",
+            f"[transcribe] validating batch {batch_index}/{batch_count} clips={len(selected_batch)}",
             flush=True,
         )
-        try:
-            raw_texts = transcriber.transcribe([path for _, path in batch])  # type: ignore[union-attr]
-            if len(raw_texts) != len(batch):
-                raise RuntimeError("transcriber returned a different number of results than inputs")
-            results = list(zip(batch, raw_texts, strict=True))
-        except Exception:
-            results = []
-            for item in batch:
-                try:
-                    raw = transcriber.transcribe([item[1]])[0]  # type: ignore[union-attr]
-                    results.append((item, raw))
-                except Exception as error:
-                    segment = item[0]
-                    rejected.append(
-                        _make_rejection(segment, config_digest, "inference_failed", f"{type(error).__name__}: {error}")
-                    )
-                    processed += 1
+        batch: list[tuple[dict[str, Any], Path]] = []
+        for segment in selected_batch:
+            path, reason, detail = _clip_path(input_root, segment)
+            if reason is not None:
+                rejected.append(_make_rejection(segment, config_digest, reason, detail or reason))
+                processed += 1
+            else:
+                assert path is not None
+                batch.append((segment, path))
+        print(
+            f"[transcribe] batch validation complete batch={batch_index}/{batch_count} "
+            f"ready={len(batch)} rejected={len(selected_batch) - len(batch)}",
+            flush=True,
+        )
+
+        if batch and transcriber is None:
+            try:
+                print("[transcribe] initializing Whisper transcriber", flush=True)
+                transcriber = transcriber_factory(config)
+                print("[transcribe] Whisper transcriber ready", flush=True)
+            except Exception as error:
+                raise RuntimeError(
+                    f"could not initialize Whisper transcription: {type(error).__name__}: {error}"
+                ) from error
+
+        results: list[tuple[tuple[dict[str, Any], Path], str]] = []
+        if batch:
+            assert transcriber is not None
+            print(
+                f"[transcribe] inference batch {batch_index}/{batch_count} clips={len(batch)}",
+                flush=True,
+            )
+            try:
+                raw_texts = transcriber.transcribe([path for _, path in batch])
+                if len(raw_texts) != len(batch):
+                    raise RuntimeError("transcriber returned a different number of results than inputs")
+                results = list(zip(batch, raw_texts, strict=True))
+            except Exception:
+                for item in batch:
+                    try:
+                        raw = transcriber.transcribe([item[1]])[0]
+                        results.append((item, raw))
+                    except Exception as error:
+                        segment = item[0]
+                        rejected.append(
+                            _make_rejection(
+                                segment,
+                                config_digest,
+                                "inference_failed",
+                                f"{type(error).__name__}: {error}",
+                            )
+                        )
+                        processed += 1
 
         for (segment, _), raw in results:
             raw = str(raw).strip()
@@ -521,7 +528,8 @@ def process_transcription(
             flush=True,
         )
 
-    if not pending:
+    if not worklist:
+        print("[transcribe] no clips require inference", flush=True)
         audit = TranscriptionAudit(
             len(segments), processed, reused, len(accepted), len(rejected), sum(bool(item["operational"]) for item in rejected)
         )

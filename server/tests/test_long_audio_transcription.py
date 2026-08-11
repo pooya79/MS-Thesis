@@ -409,6 +409,32 @@ def test_inference_failure_is_recorded_after_individual_retry(tmp_path: Path) ->
     assert [record["id"] for record in read_jsonl(tmp_path / PENDING_SNAPSHOT_NAME)] == ["clip-1"]
 
 
+def test_each_batch_is_validated_immediately_before_inference(tmp_path: Path) -> None:
+    make_segmentation_root(tmp_path)
+    calls: list[list[str]] = []
+
+    class RemovingTranscriber:
+        def transcribe(self, paths: list[Path]) -> list[str]:
+            calls.append([path.name for path in paths])
+            if paths[0].name == "one.flac":
+                (tmp_path / "clips" / "two.flac").unlink()
+            return ["سلام"]
+
+    audit = run_transcription(
+        tmp_path,
+        config(batch_size=1),
+        "sha256:config",
+        transcriber_factory=lambda _: RemovingTranscriber(),
+    )
+
+    assert calls == [["one.flac"]]
+    assert audit.clips_accepted == 1
+    assert audit.operational_failures == 1
+    rejected = read_jsonl(tmp_path / "transcription_rejected.jsonl")
+    assert rejected[0]["id"] == "clip-1"
+    assert rejected[0]["reason"] == "missing_audio"
+
+
 def test_changed_config_requires_force_and_failed_force_preserves_artifacts(tmp_path: Path) -> None:
     make_segmentation_root(tmp_path, ("one.flac",))
     run_transcription(
