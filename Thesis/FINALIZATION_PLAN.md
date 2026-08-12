@@ -19,9 +19,9 @@ completed work.
 
 ### 2. Finish background and related work
 
-- [ ] Complete the existing ASR, Whisper, speech degradation, and fusion background.
-- [ ] Add short sections on web-sourced speech, long-audio segmentation, pseudo-labeling, and LLM transcript correction.
-- [ ] Add citations about data quality, train/test leakage, and weakly supervised ASR.
+- [x] Complete the existing ASR, Whisper, speech degradation, and fusion background.
+- [x] Add short sections on web-sourced speech, long-audio segmentation, pseudo-labeling, and LLM transcript correction.
+- [x] Add citations about data quality, train/test leakage, and weakly supervised ASR.
 
 ### 3. Update the introduction
 
