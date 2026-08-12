@@ -1,6 +1,6 @@
 server:
   base_url: http://127.0.0.1:8000
-  model: Qwen/Qwen3-8B
+  model: Qwen/Qwen3.6-27B
   timeout_seconds: 120
   retry_count: 2
   # Set to an environment-variable name, never an API key value.

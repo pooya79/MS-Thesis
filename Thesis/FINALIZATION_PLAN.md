@@ -3,6 +3,9 @@
 Current state: IranSeda transcription is in progress. LLM refinement, final
 dataset creation, small-Whisper training, and evaluation are still pending.
 
+The agreed end-to-end narrative, claim boundaries, research questions, and
+chapter mapping are recorded in [`FINAL_STORY.md`](FINAL_STORY.md).
+
 Use `TODO:` placeholders for unknown values. Do not present planned work as
 completed work.
 
@@ -10,9 +13,9 @@ completed work.
 
 ### 1. Fix the final thesis story
 
-- [ ] State the problem, research questions, and expected contribution in one page.
-- [ ] Add the new contribution: creating a Persian ASR dataset from IranSeda long audio.
-- [ ] Separate completed work, work in progress, and optional work if resources permit.
+- [x] State the problem, research questions, and expected contribution in one page.
+- [x] Add the new contribution: creating a Persian ASR dataset from IranSeda long audio.
+- [x] Separate completed work, work in progress, and optional work if resources permit.
 
 ### 2. Finish background and related work
 
