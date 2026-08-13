@@ -6,6 +6,7 @@ before running it with custom paths or configuration:
 ```bash
 uv run python -m ml.speech_data.long_audio_asr_pipeline.segment_audio --help
 uv run python -m ml.speech_data.long_audio_asr_pipeline.transcribe_segments --help
+uv run python -m ml.speech_data.long_audio_asr_pipeline.select_refinement_subset --help
 uv run python -m ml.speech_data.long_audio_asr_pipeline.refine_transcriptions --help
 ```
 
@@ -325,6 +326,35 @@ visible in redirected logs as well as an interactive terminal.
 
 After Whisper transcription is complete for the intended snapshot, run the
 conservative contextual cleanup stage against a vLLM server:
+
+To restrict refinement to an approximately sized, reproducible random subset,
+create a selection manifest first:
+
+```bash
+uv run python -m ml.speech_data.long_audio_asr_pipeline.select_refinement_subset \
+  --input-root data/iranseda/segmented/flac-v1 \
+  --hours 100 \
+  --seed 0 \
+  --output data/iranseda/refinement-selection-100h.json
+```
+
+Selection operates on complete original recordings identified by exact
+`source_id`, not all tracks sharing an audiobook ID. Sources with missing or
+unusable segment transcriptions are excluded. Whole recordings are indivisible,
+so the selector chooses the closer duration immediately before or after the
+requested target in its seeded random order and reports the actual total.
+
+Enable the generated manifest in `refinement.yaml`; paths are resolved relative
+to the configuration file:
+
+```yaml
+selection:
+  manifest: ../../data/iranseda/refinement-selection-100h.json
+```
+
+The default `manifest: null` retains the complete-dataset behavior. Selection
+manifests contain the upstream segment/transcription checksums and are rejected
+as stale if either input changes.
 
 ```bash
 uv run python -m ml.speech_data.long_audio_asr_pipeline.refine_transcriptions \

@@ -27,6 +27,7 @@ uv run python -m ml.speech_data.generate_degraded_pairs --help
 uv run python -m ml.speech_data.inspect_manifest --help
 uv run python -m ml.speech_data.long_audio_asr_pipeline.segment_audio --help
 uv run python -m ml.speech_data.long_audio_asr_pipeline.transcribe_segments --help
+uv run python -m ml.speech_data.long_audio_asr_pipeline.select_refinement_subset --help
 uv run python -m ml.speech_data.long_audio_asr_pipeline.refine_transcriptions --help
 uv run python -m ml.speech_data.validate_degraded_dataset --help
 uv run python -m ml.asr.train_whisper_small --help
@@ -194,6 +195,25 @@ shared root at the same time. Flushed `[transcribe]` stdout messages report clip
 indexing, discovery/checksumming, snapshot writing, per-batch validation, model
 initialization, inference batches, and saved checkpoints.
 
+To refine an approximately hour-limited random subset, first select complete
+original-audio groups from the finished segmented/transcribed root:
+
+```bash
+uv run python -m ml.speech_data.long_audio_asr_pipeline.select_refinement_subset \
+  --input-root data/iranseda/segmented/flac-v1 \
+  --hours 100 \
+  --seed 0 \
+  --output data/iranseda/refinement-selection-100h.json
+```
+
+The selector includes a source only when every segment has a usable matching
+transcription. It shuffles whole `source_id` groups deterministically and picks
+the prefix immediately below or above the requested duration that is closer;
+therefore the selected duration can differ from `--hours`. The JSON manifest
+records selected source IDs, durations, segment counts, seed, and exact upstream
+checksums. Regenerate it whenever `segments.jsonl` or `transcriptions.jsonl`
+changes.
+
 Refine completed normalized transcripts through vLLM without altering the
 Whisper artifacts:
 
@@ -203,6 +223,18 @@ uv run python -m ml.speech_data.long_audio_asr_pipeline.refine_transcriptions \
   --input-root data/iranseda/segmented/flac-v1 \
   --books-manifest data/iranseda/audiobooks/raw/books.jsonl
 ```
+
+To apply the subset, set `selection.manifest` in the refinement YAML. Relative
+paths are resolved from the YAML file's directory:
+
+```yaml
+selection:
+  manifest: ../../data/iranseda/refinement-selection-100h.json
+```
+
+Leave the value `null` to refine every usable transcription. A configured
+selection filters by exact `source_id`, so all short clips from each chosen
+original recording remain available as preceding and following context.
 
 This command requires vLLM's non-streaming native
 `/v1/chat/completions/batch` route and checks for it before inference. It batches

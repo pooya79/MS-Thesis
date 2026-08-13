@@ -21,3 +21,8 @@ generation:
 
 validation:
   maximum_normalized_edit_distance: 0.35
+
+selection:
+  # Optional JSON manifest produced by select_refinement_subset. Relative paths
+  # are resolved from this configuration file's directory.
+  manifest: null

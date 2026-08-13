@@ -40,6 +40,7 @@ def make_root(root: Path, sources: dict[str, list[str]]) -> None:
                     "id": target_id,
                     "source_id": source,
                     "start_sec": index * 20.0,
+                    "duration_sec": 20.0,
                     "path": f"clips/{target_id}.flac",
                     "clip_checksum": f"sha256:{target_id}",
                 }

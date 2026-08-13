@@ -26,6 +26,9 @@ from ml.speech_data.long_audio_asr_pipeline.segment_audio import (
     write_json_atomic,
     write_jsonl_atomic,
 )
+from ml.speech_data.long_audio_asr_pipeline.select_refinement_subset import (
+    SELECTION_SCHEMA_VERSION,
+)
 from ml.speech_data.text_normalization import normalize_persian_asr_text
 
 
@@ -72,6 +75,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "max_tokens": 256,
     },
     "validation": {"maximum_normalized_edit_distance": 0.35},
+    "selection": {"manifest": None},
 }
 
 ARTIFACT_NAMES = (
@@ -148,6 +152,17 @@ def load_config(path: Path) -> tuple[dict[str, Any], str]:
     threshold = config["validation"].get("maximum_normalized_edit_distance")
     if isinstance(threshold, bool) or not isinstance(threshold, (int, float)) or not 0 <= threshold <= 1:
         raise ValueError("validation.maximum_normalized_edit_distance must be between 0 and 1")
+    selection = config.get("selection")
+    if not isinstance(selection, dict):
+        raise ValueError("selection must be a mapping")
+    selection_manifest = selection.get("manifest")
+    if selection_manifest is not None:
+        if not isinstance(selection_manifest, str) or not selection_manifest.strip():
+            raise ValueError("selection.manifest must be null or a non-empty path string")
+        candidate = Path(selection_manifest)
+        if not candidate.is_absolute():
+            candidate = path.resolve().parent / candidate
+        selection["manifest"] = str(candidate.resolve())
     config["pipeline_version"] = REFINEMENT_PIPELINE_VERSION
     config["prompt_version"] = PROMPT_VERSION
     config["schema_version"] = SCHEMA_VERSION
@@ -205,7 +220,9 @@ class VLLMBatchClient:
         raise RuntimeError(f"vLLM batch request failed after retries: {last_error}")
 
 
-def _load_inputs(input_root: Path) -> list[dict[str, Any]]:
+def _load_inputs(
+    input_root: Path, selected_source_ids: set[str] | None = None
+) -> list[dict[str, Any]]:
     segment_path = input_root / "segments.jsonl"
     transcription_path = input_root / "transcriptions.jsonl"
     if not segment_path.is_file() or not transcription_path.is_file():
@@ -231,8 +248,44 @@ def _load_inputs(input_root: Path) -> list[dict[str, Any]]:
         if not isinstance(text, str) or not normalize_persian_asr_text(text):
             raise ValueError(f"transcription has no usable normalized text: {target_id}")
         segment = segment_by_id[target_id]
-        targets.append({**transcript, "segment": segment, "source_id": segment.get("source_id")})
+        source_id = segment.get("source_id")
+        if selected_source_ids is None or source_id in selected_source_ids:
+            targets.append({**transcript, "segment": segment, "source_id": source_id})
     return targets
+
+
+def load_selection_manifest(
+    path: Path, input_root: Path
+) -> tuple[set[str], str]:
+    if not path.is_file():
+        raise FileNotFoundError(f"selection manifest does not exist: {path}")
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise ValueError(f"selection manifest is not valid JSON: {path}") from error
+    if not isinstance(manifest, dict) or manifest.get("schema_version") != SELECTION_SCHEMA_VERSION:
+        raise ValueError(
+            f"selection manifest must use schema_version {SELECTION_SCHEMA_VERSION}"
+        )
+    upstream = manifest.get("upstream_checksums")
+    expected = {
+        "segments": sha256_file(input_root / "segments.jsonl"),
+        "transcriptions": sha256_file(input_root / "transcriptions.jsonl"),
+    }
+    if upstream != expected:
+        raise ValueError("selection manifest is stale for the current input manifests")
+    sources = manifest.get("sources")
+    if not isinstance(sources, list) or not sources:
+        raise ValueError("selection manifest must contain at least one selected source")
+    selected: set[str] = set()
+    for index, source in enumerate(sources, start=1):
+        source_id = source.get("source_id") if isinstance(source, dict) else None
+        if not isinstance(source_id, str) or not source_id:
+            raise ValueError(f"selection manifest source {index} requires a source_id")
+        if source_id in selected:
+            raise ValueError(f"selection manifest contains duplicate source_id: {source_id}")
+        selected.add(source_id)
+    return selected, sha256_file(path)
 
 
 def load_book_metadata(path: Path | None) -> tuple[dict[str, dict[str, str]], str | None]:
@@ -475,12 +528,32 @@ def process_refinement(
     books_manifest: Path | None = None,
     client_factory: Callable[[dict[str, Any]], BatchClient] = VLLMBatchClient,
 ) -> RefinementAudit:
-    targets = _load_inputs(input_root)
+    selection_path_value = config.get("selection", {}).get("manifest")
+    selected_source_ids: set[str] | None = None
+    selection_checksum: str | None = None
+    if selection_path_value is not None:
+        selected_source_ids, selection_checksum = load_selection_manifest(
+            Path(str(selection_path_value)), input_root
+        )
+    targets = _load_inputs(input_root, selected_source_ids)
+    if selected_source_ids is not None:
+        matched_source_ids = {
+            str(target["source_id"])
+            for target in targets
+            if isinstance(target.get("source_id"), str)
+        }
+        missing = sorted(selected_source_ids - matched_source_ids)
+        if missing:
+            preview = ", ".join(missing[:5])
+            raise ValueError(f"selection manifest contains unknown or unusable source IDs: {preview}")
+        if not targets:
+            raise ValueError("selection manifest matched no usable transcription targets")
     books, books_checksum = load_book_metadata(books_manifest)
     upstream = {
         "segments": sha256_file(input_root / "segments.jsonl"),
         "transcriptions": sha256_file(input_root / "transcriptions.jsonl"),
         "books": books_checksum,
+        "selection": selection_checksum,
     }
     output_root.mkdir(parents=True, exist_ok=True)
     prior_accepted = {item["id"]: item for item in read_jsonl(output_root / "refinements.jsonl")} if (output_root / "refinements.jsonl").is_file() else {}
