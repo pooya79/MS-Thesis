@@ -25,9 +25,9 @@ completed work.
 
 ### 3. Update the introduction
 
-- [ ] Explain why additional Persian speech data is needed.
-- [ ] Update the objectives, research questions, contributions, and chapter outline.
-- [ ] Phrase the new-data experiment as an evaluation to be completed, without predicting its result.
+- [X] Explain why additional Persian speech data is needed.
+- [X] Update the objectives, research questions, contributions, and chapter outline.
+- [X] Phrase the new-data experiment as an evaluation to be completed, without predicting its result.
 
 ### 4. Write the stable parts of the method chapter
 
