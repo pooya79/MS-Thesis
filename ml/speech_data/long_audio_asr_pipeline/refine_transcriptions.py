@@ -51,7 +51,7 @@ RESPONSE_SCHEMA: dict[str, Any] = {
         "uncertain": {"type": "boolean"},
         "change_categories": {
             "type": "array",
-            "uniqueItems": True,
+            "minItems": 1,
             "items": {"type": "string", "enum": list(CHANGE_CATEGORIES)},
         },
     },
@@ -362,7 +362,7 @@ def build_prompt(
     description: str | None = None,
 ) -> str:
     def lines(items: Sequence[dict[str, str]]) -> str:
-        return "\n".join(f"- [{item['id']}] {item['text']}" for item in items) or "(none)"
+        return "\n".join(f"- {item['text']}" for item in items) or "(none)"
 
     return (
         "Refine one Persian ASR segment conservatively. Modify only the TARGET WHISPER TEXT.\n\n"
@@ -385,7 +385,7 @@ def build_prompt(
         f"[AUDIOBOOK TITLE]\n{title or '(omitted)'}\n\n"
         f"[AUDIOBOOK DESCRIPTION]\n{description or '(omitted)'}\n\n"
         f"[REFINED PRECEDING CONTEXT]\n{lines(preceding)}\n\n"
-        f"[TARGET WHISPER TEXT]\n[{target['id']}] {target['normalized_transcript']}\n\n"
+        f"[TARGET WHISPER TEXT]\n{target['normalized_transcript']}\n\n"
         f"[FOLLOWING WHISPER CONTEXT]\n{lines(following)}"
     )
 

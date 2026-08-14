@@ -167,8 +167,11 @@ def test_refinement_filters_to_selected_complete_source_and_checks_staleness(
         for messages in request["messages"]
     ]
     assert len(prompts) == 2
-    assert all(f"[{selected_source}-" in prompt for prompt in prompts)
-    assert f"[{selected_source}-1]" in prompts[0]
+    selected_prefix = "الف" if selected_source == "a" else "ب"
+    assert all(selected_prefix in prompt for prompt in prompts)
+    assert f"- {selected_prefix} دوم" in prompts[0]
+    assert all(f"[{selected_source}-" not in prompt for prompt in prompts)
+    assert all("clips/" not in prompt and ".flac" not in prompt for prompt in prompts)
 
     transcript_path = tmp_path / "transcriptions.jsonl"
     transcript_path.write_text(

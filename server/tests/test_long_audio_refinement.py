@@ -101,9 +101,8 @@ class FakeClient:
         choices = []
         for index, messages in enumerate(request["messages"]):
             prompt = messages[0]["content"]
-            target_line = prompt.split("[TARGET WHISPER TEXT]\n", 1)[1].split("\n", 1)[0]
-            target_id, text = target_line[1:].split("] ", 1)
-            cleaned = self.outputs.get(target_id, text)
+            text = prompt.split("[TARGET WHISPER TEXT]\n", 1)[1].split("\n", 1)[0]
+            cleaned = self.outputs.get(text, text)
             choices.append(
                 {
                     "index": index,
@@ -216,10 +215,13 @@ def test_prompt_labels_context_and_book_metadata_without_boundary_completion() -
     )
     assert "[AUDIOBOOK TITLE]\nنام کتاب" in prompt
     assert "[AUDIOBOOK DESCRIPTION]\nشرح کتاب" in prompt
-    assert "[REFINED PRECEDING CONTEXT]\n- [p] متن پیش" in prompt
-    assert "[TARGET WHISPER TEXT]\n[t] متن هدف" in prompt
-    assert "[FOLLOWING WHISPER CONTEXT]\n- [f] متن پس" in prompt
-    assert "never copy context" in prompt
+    assert "[REFINED PRECEDING CONTEXT]\n- متن پیش" in prompt
+    assert "[TARGET WHISPER TEXT]\nمتن هدف" in prompt
+    assert "[FOLLOWING WHISPER CONTEXT]\n- متن پس" in prompt
+    assert "[p]" not in prompt
+    assert "[t]" not in prompt
+    assert "[f]" not in prompt
+    assert "Never copy words or phrases from the context" in prompt
     assert title_for_source("123:456", {"123": "کتاب"}) == "کتاب"
     assert title_for_source("unsafe", {"123": "کتاب"}) is None
 
@@ -240,6 +242,9 @@ def test_book_description_is_optional_and_safely_normalized(tmp_path: Path) -> N
 
 
 def test_validation_schema_persian_digits_uncertainty_and_distance() -> None:
+    categories_schema = RESPONSE_SCHEMA["properties"]["change_categories"]
+    assert categories_schema["minItems"] == 1
+    assert "uniqueItems" not in categories_schema
     valid = json.dumps({"change_categories": ["orthography"], "uncertain": False, "cleaned_text": "سلام، ۱۲!"}, ensure_ascii=False)
     parsed, reason, metrics = validate_response(valid, "سلام ۱۲", 0.35)
     assert reason is None
@@ -254,6 +259,15 @@ def test_validation_schema_persian_digits_uncertainty_and_distance() -> None:
     assert validate_response(digits, "سلام ۱۲", 1)[1] == "numeric_tokens_changed"
     changed = json.dumps({"cleaned_text": "کاملا متفاوت", "uncertain": False, "change_categories": ["asr_substitution"]}, ensure_ascii=False)
     assert validate_response(changed, "سلام دنیا", 0.1)[1] == "edit_distance_exceeded"
+    duplicate = json.dumps(
+        {
+            "cleaned_text": "سلام",
+            "uncertain": False,
+            "change_categories": ["none", "none"],
+        },
+        ensure_ascii=False,
+    )
+    assert validate_response(duplicate, "سلام", 1)[1] == "invalid_schema"
     assert normalized_edit_distance("abc", "adc") == pytest.approx(1 / 3)
 
 
@@ -264,20 +278,23 @@ def test_native_batch_scheduling_response_mapping_and_context_are_causal(tmp_pat
         '{"id":"10","title":"کتاب من","description":"داستانی درباره زندگی"}\n',
         encoding="utf-8",
     )
-    client = FakeClient({"10:track-0": "من یک", "20:track-0": "تو یک"})
+    client = FakeClient({"من اول": "من یک", "تو اول": "تو یک"})
     audit = run_refinement(
         tmp_path, config(batch_size=2, context_size=1, threshold=1), "sha256:config",
         books_manifest=books, client_factory=lambda _: client,
     )
     assert [len(request["messages"]) for request in client.requests] == [2, 2, 1]
     for request in client.requests:
-        target_ids = [messages[0]["content"].split("[TARGET WHISPER TEXT]\n[")[1].split("]", 1)[0] for messages in request["messages"]]
-        assert len({target_id.rsplit("-", 1)[0] for target_id in target_ids}) == len(target_ids)
         assert request["stream"] is False
         assert request["response_format"]["json_schema"]["schema"] == RESPONSE_SCHEMA
+        rendered = "\n".join(messages[0]["content"] for messages in request["messages"])
+        assert "clips/" not in rendered
+        assert ".flac" not in rendered
+        assert "10:track-" not in rendered
+        assert "20:track-" not in rendered
     second_prompt = client.requests[1]["messages"][0][0]["content"]
-    assert "[10:track-0] من یک" in second_prompt
-    assert "[10:track-2] من سوم" in second_prompt
+    assert "- من یک" in second_prompt
+    assert "- من سوم" in second_prompt
     assert "[AUDIOBOOK DESCRIPTION]\nداستانی درباره زندگی" in second_prompt
     accepted = jsonl(tmp_path / "refinements.jsonl")
     assert {item["id"]: item["cleaned_text"] for item in accepted}["10:track-0"] == "من یک"
