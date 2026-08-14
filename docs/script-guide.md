@@ -212,7 +212,9 @@ the prefix immediately below or above the requested duration that is closer;
 therefore the selected duration can differ from `--hours`. The JSON manifest
 records selected source IDs, durations, segment counts, seed, and exact upstream
 checksums. Regenerate it whenever `segments.jsonl` or `transcriptions.jsonl`
-changes.
+changes. Flushed `[select-refinement]` messages report manifest loading,
+validation progress every 1,000 records, source completeness, selection,
+checksumming, and output writing.
 
 Refine completed normalized transcripts through vLLM without altering the
 Whisper artifacts:

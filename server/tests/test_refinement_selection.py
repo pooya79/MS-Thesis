@@ -132,7 +132,17 @@ def test_selector_validates_hours_and_exposes_cli_help(
     written = json.loads(output.read_text(encoding="utf-8"))
     assert written["schema_version"] == "refinement-source-selection-v1"
     assert written["sources"]
-    assert "selected sources:" in capsys.readouterr().out
+    output_text = capsys.readouterr().out
+    assert "[select-refinement] segments loaded records=6" in output_text
+    assert "[select-refinement] validating segment 6/6" in output_text
+    assert "[select-refinement] transcriptions loaded records=5" in output_text
+    assert "[select-refinement] validating transcription 5/5" in output_text
+    assert (
+        "[select-refinement] eligibility complete total_groups=4 eligible=3 incomplete=1"
+        in output_text
+    )
+    assert "[select-refinement] selection manifest ready" in output_text
+    assert "selected sources:" in output_text
 
 
 def test_refinement_filters_to_selected_complete_source_and_checks_staleness(

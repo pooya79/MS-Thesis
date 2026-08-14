@@ -343,6 +343,8 @@ Selection operates on complete original recordings identified by exact
 unusable segment transcriptions are excluded. Whole recordings are indivisible,
 so the selector chooses the closer duration immediately before or after the
 requested target in its seeded random order and reports the actual total.
+Flushed `[select-refinement]` messages show manifest loading, validation every
+1,000 records, source completeness, selection, checksumming, and output writing.
 
 Enable the generated manifest in `refinement.yaml`; paths are resolved relative
 to the configuration file:
