@@ -378,7 +378,7 @@ Each target receives up to the configured number of accepted refinements from
 its past and normalized Whisper transcripts from its future. The model is told
 that these texts can disambiguate the target but cannot complete a boundary,
 add speech, or be copied into it. The strict, versioned JSON schema returns
-`cleaned_text`, `uncertain`, and enumerated `change_categories`. Publication
+only `cleaned_text` and `uncertain`. Publication
 requires a certain, non-empty Persian result; exact numeric-token preservation;
 and a normalized Levenshtein distance within the configured threshold.
 

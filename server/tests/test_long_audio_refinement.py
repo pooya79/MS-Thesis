@@ -113,7 +113,6 @@ class FakeClient:
                             {
                                 "cleaned_text": cleaned,
                                 "uncertain": False,
-                                "change_categories": ["none"] if cleaned == text else ["asr_substitution"],
                             },
                             ensure_ascii=False,
                         ),
@@ -242,32 +241,24 @@ def test_book_description_is_optional_and_safely_normalized(tmp_path: Path) -> N
 
 
 def test_validation_schema_persian_digits_uncertainty_and_distance() -> None:
-    categories_schema = RESPONSE_SCHEMA["properties"]["change_categories"]
-    assert categories_schema["minItems"] == 1
-    assert "uniqueItems" not in categories_schema
-    valid = json.dumps({"change_categories": ["orthography"], "uncertain": False, "cleaned_text": "سلام، ۱۲!"}, ensure_ascii=False)
+    assert set(RESPONSE_SCHEMA["properties"]) == {"cleaned_text", "uncertain"}
+    assert RESPONSE_SCHEMA["required"] == ["cleaned_text", "uncertain"]
+    valid = json.dumps({"uncertain": False, "cleaned_text": "سلام، ۱۲!"}, ensure_ascii=False)
     parsed, reason, metrics = validate_response(valid, "سلام ۱۲", 0.35)
     assert reason is None
     assert parsed and parsed["cleaned_text"] == "سلام، ۱۲!"
     assert metrics["normalized_cleaned_text"] == "سلام ۱۲"
     assert metrics["normalized_edit_distance"] == 0
-    uncertain = json.dumps({"cleaned_text": "سلام", "uncertain": True, "change_categories": ["none"]}, ensure_ascii=False)
+    uncertain = json.dumps({"cleaned_text": "سلام", "uncertain": True}, ensure_ascii=False)
     assert validate_response(uncertain, "سلام", 0.35)[1] == "model_uncertain"
-    latin = json.dumps({"cleaned_text": "hello", "uncertain": False, "change_categories": ["asr_substitution"]})
+    latin = json.dumps({"cleaned_text": "hello", "uncertain": False})
     assert validate_response(latin, "سلام", 1)[1] == "persian_normalization_rejected"
-    digits = json.dumps({"cleaned_text": "سلام ۱۳", "uncertain": False, "change_categories": ["asr_substitution"]}, ensure_ascii=False)
+    digits = json.dumps({"cleaned_text": "سلام ۱۳", "uncertain": False}, ensure_ascii=False)
     assert validate_response(digits, "سلام ۱۲", 1)[1] == "numeric_tokens_changed"
-    changed = json.dumps({"cleaned_text": "کاملا متفاوت", "uncertain": False, "change_categories": ["asr_substitution"]}, ensure_ascii=False)
+    changed = json.dumps({"cleaned_text": "کاملا متفاوت", "uncertain": False}, ensure_ascii=False)
     assert validate_response(changed, "سلام دنیا", 0.1)[1] == "edit_distance_exceeded"
-    duplicate = json.dumps(
-        {
-            "cleaned_text": "سلام",
-            "uncertain": False,
-            "change_categories": ["none", "none"],
-        },
-        ensure_ascii=False,
-    )
-    assert validate_response(duplicate, "سلام", 1)[1] == "invalid_schema"
+    extra = json.dumps({"cleaned_text": "سلام", "uncertain": False, "extra": "field"}, ensure_ascii=False)
+    assert validate_response(extra, "سلام", 1)[1] == "invalid_schema"
     assert normalized_edit_distance("abc", "adc") == pytest.approx(1 / 3)
 
 
@@ -331,7 +322,7 @@ def test_nonoperational_rejection_is_reused_but_malformed_batch_is_retried(tmp_p
         def complete(self, request: dict[str, Any]) -> dict[str, Any]:
             result = super().complete(request)
             result["choices"][0]["message"]["content"] = json.dumps(
-                    {"cleaned_text": "درود", "uncertain": True, "change_categories": ["none"]}, ensure_ascii=False
+                    {"cleaned_text": "درود", "uncertain": True}, ensure_ascii=False
             )
             return result
 

@@ -34,26 +34,15 @@ from ml.speech_data.text_normalization import normalize_persian_asr_text
 
 REFINEMENT_PIPELINE_VERSION = 1
 PROMPT_VERSION = "persian-transcript-refinement-v1"
-SCHEMA_VERSION = "persian-transcript-refinement-schema-v1"
+SCHEMA_VERSION = "persian-transcript-refinement-schema-v2"
 PENDING_SNAPSHOT_NAME = "refinement_pending_snapshot.jsonl"
-CHANGE_CATEGORIES = (
-    "none",
-    "orthography",
-    "spacing",
-    "asr_substitution",
-)
 RESPONSE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["cleaned_text", "uncertain", "change_categories"],
+    "required": ["cleaned_text", "uncertain"],
     "properties": {
         "cleaned_text": {"type": "string"},
         "uncertain": {"type": "boolean"},
-        "change_categories": {
-            "type": "array",
-            "minItems": 1,
-            "items": {"type": "string", "enum": list(CHANGE_CATEGORIES)},
-        },
     },
 }
 
@@ -430,16 +419,11 @@ def validate_response(raw_text: str, target_text: str, threshold: float) -> tupl
         parsed = json.loads(raw_text)
     except json.JSONDecodeError as error:
         return None, "invalid_json", {**metrics, "detail": str(error)}
-    if not isinstance(parsed, dict) or set(parsed) != {"cleaned_text", "uncertain", "change_categories"}:
+    if not isinstance(parsed, dict) or set(parsed) != {"cleaned_text", "uncertain"}:
         return None, "invalid_schema", metrics
     cleaned = parsed["cleaned_text"]
     uncertain = parsed["uncertain"]
-    categories = parsed["change_categories"]
-    if not isinstance(cleaned, str) or not isinstance(uncertain, bool) or not isinstance(categories, list):
-        return None, "invalid_schema", metrics
-    if not categories or any(not isinstance(item, str) or item not in CHANGE_CATEGORIES for item in categories) or len(categories) != len(set(categories)):
-        return None, "invalid_schema", metrics
-    if "none" in categories and (len(categories) != 1 or cleaned.strip() != target_text.strip()):
+    if not isinstance(cleaned, str) or not isinstance(uncertain, bool):
         return None, "invalid_schema", metrics
     if uncertain:
         return parsed, "model_uncertain", metrics
@@ -672,7 +656,7 @@ def process_refinement(
                     if reason:
                         rejected.append({**record, "reason": reason, "detail": reason})
                     else:
-                        accepted_record = {**record, "cleaned_text": parsed["cleaned_text"].strip(), "uncertain": False, "change_categories": parsed["change_categories"]}  # type: ignore[index,union-attr]
+                        accepted_record = {**record, "cleaned_text": parsed["cleaned_text"].strip(), "uncertain": False}  # type: ignore[index,union-attr]
                         accepted.append(accepted_record)
                         group_state[group_index]["accepted"].append(accepted_record)
             group_state[group_index]["index"] += 1
