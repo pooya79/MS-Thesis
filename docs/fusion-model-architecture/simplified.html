@@ -1,0 +1,529 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <title>Dual-view speech enhancement and fusion — simplified</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --paper: #f7f6f2;
+        --surface: #ffffff;
+        --ink: #1f2933;
+        --muted: #52606d;
+        --soft: #7b8794;
+        --rule: rgba(31, 41, 51, 0.14);
+        --accent: #1d6f8a;
+        --accent-tint: #e8f3f6;
+        --input-tint: #edf1f3;
+        --output-tint: #eef4ef;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        margin: 0;
+        min-height: 100%;
+        background: var(--paper);
+      }
+
+      body {
+        color: var(--ink);
+        font-family: "Geist", Inter, system-ui, sans-serif;
+      }
+
+      main {
+        width: min(100% - 32px, 1280px);
+        margin: 0 auto;
+        padding: 32px 0 40px;
+      }
+
+      header {
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 32px;
+        margin: 0 0 24px;
+      }
+
+      .header-copy {
+        min-width: 0;
+      }
+
+      .export-controls {
+        display: flex;
+        flex: 0 0 auto;
+        align-items: center;
+        gap: 12px;
+      }
+
+      .export-button {
+        border: 1px solid var(--accent);
+        border-radius: 8px;
+        padding: 12px 16px;
+        color: var(--accent);
+        background: var(--accent-tint);
+        font: 600 12px/1 "Geist", Inter, system-ui, sans-serif;
+        cursor: pointer;
+      }
+
+      .export-button:hover {
+        color: var(--surface);
+        background: var(--accent);
+      }
+
+      .export-button:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 4px;
+      }
+
+      .export-button:disabled {
+        cursor: wait;
+        opacity: 0.6;
+      }
+
+      .export-status {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .eyebrow {
+        margin: 0 0 8px;
+        color: var(--accent);
+        font-family: "Geist Mono", ui-monospace, monospace;
+        font-size: 8px;
+        font-weight: 600;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+      }
+
+      h1 {
+        margin: 0;
+        font-family: "Instrument Serif", Georgia, serif;
+        font-size: 32px;
+        font-weight: 400;
+        line-height: 1.08;
+      }
+
+      .subtitle {
+        max-width: 72ch;
+        margin: 8px 0 0;
+        color: var(--muted);
+        font-size: 16px;
+        line-height: 1.5;
+      }
+
+      figure {
+        margin: 0;
+      }
+
+      svg {
+        display: block;
+        width: 100%;
+        height: auto;
+        color: var(--ink);
+        text-rendering: geometricPrecision;
+      }
+
+      .section-label,
+      .tag,
+      .arrow-label,
+      .technical,
+      .stage-number {
+        font-family: "Geist Mono", ui-monospace, monospace;
+      }
+
+      .section-label {
+        fill: var(--soft);
+        font-size: 12px;
+        font-weight: 600;
+        letter-spacing: 0.16em;
+      }
+
+      .node-name {
+        fill: var(--ink);
+        font-family: "Geist", Inter, system-ui, sans-serif;
+        font-size: 16px;
+        font-weight: 600;
+        text-anchor: middle;
+      }
+
+      .node-copy {
+        fill: var(--muted);
+        font-family: "Geist", Inter, system-ui, sans-serif;
+        font-size: 12px;
+        text-anchor: middle;
+      }
+
+      .technical {
+        fill: var(--soft);
+        font-size: 16px;
+        text-anchor: middle;
+      }
+
+      .detail {
+        fill: var(--soft);
+        font-family: "Geist Mono", ui-monospace, monospace;
+        font-size: 12px;
+        text-anchor: middle;
+      }
+
+      .tag {
+        fill: var(--soft);
+        font-size: 12px;
+        font-weight: 500;
+        letter-spacing: 0.08em;
+        text-anchor: middle;
+      }
+
+      .arrow {
+        fill: none;
+        stroke: var(--muted);
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-width: 1.2;
+        marker-end: url(#fusion-simple-arrow);
+      }
+
+      .arrow.secondary {
+        stroke: var(--soft);
+      }
+
+      .arrow.accent {
+        stroke: var(--accent);
+        stroke-width: 1.2;
+        marker-end: url(#fusion-simple-arrow-accent);
+      }
+
+      .arrow-label {
+        fill: var(--soft);
+        font-size: 12px;
+        letter-spacing: 0.06em;
+        text-anchor: middle;
+      }
+
+      .node-mask {
+        fill: var(--paper);
+      }
+
+      .node-box {
+        fill: var(--surface);
+        stroke: var(--ink);
+        stroke-width: 1;
+      }
+
+      .node-box.input {
+        fill: var(--input-tint);
+        stroke: var(--soft);
+      }
+
+      .node-box.focal {
+        fill: var(--accent-tint);
+        stroke: var(--accent);
+        stroke-width: 1.2;
+      }
+
+      .node-box.output {
+        fill: var(--output-tint);
+        stroke: var(--muted);
+      }
+
+      .lane {
+        fill: rgba(31, 41, 51, 0.025);
+        stroke: var(--rule);
+        stroke-width: 0.8;
+      }
+
+      .lane.accent-lane {
+        fill: rgba(29, 111, 138, 0.05);
+        stroke: rgba(29, 111, 138, 0.28);
+      }
+
+      .divider {
+        stroke: var(--rule);
+        stroke-width: 0.8;
+      }
+
+      figcaption {
+        max-width: 104ch;
+        margin: 12px auto 0;
+        color: var(--muted);
+        font-family: "Instrument Serif", Georgia, serif;
+        font-size: 16px;
+        line-height: 1.5;
+      }
+
+      @media (max-width: 720px) {
+        main {
+          width: min(100% - 16px, 1280px);
+          padding-top: 20px;
+        }
+
+        figure {
+          overflow-x: auto;
+        }
+
+        header {
+          align-items: flex-start;
+          flex-direction: column;
+          gap: 16px;
+        }
+
+        svg {
+          min-width: 960px;
+        }
+      }
+
+      @media print {
+        @page {
+          size: landscape;
+          margin: 10mm;
+        }
+
+        main {
+          width: 100%;
+          padding: 0;
+        }
+
+        header {
+          display: none;
+        }
+
+        figcaption {
+          margin-top: 4mm;
+          font-size: 9pt;
+        }
+      }
+
+      body.export-mode {
+        width: 1280px;
+        min-height: 344px;
+        overflow: hidden;
+      }
+
+      body.export-mode main {
+        width: 1280px;
+        margin: 0;
+        padding: 0;
+      }
+
+      body.export-mode header,
+      body.export-mode figcaption {
+        display: none;
+      }
+
+      body.export-mode svg {
+        width: 1280px;
+        height: 344px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <div class="header-copy">
+          <p class="eyebrow">MS thesis · architecture overview</p>
+          <h1>Dual-view speech enhancement and fusion</h1>
+          <p class="subtitle">
+            The same Whisper encoder reads the raw and enhanced views. Cross-attention then
+            lets each view correct the other before a learned gate chooses their blend.
+          </p>
+        </div>
+        <div class="export-controls">
+          <button id="export-png" class="export-button" type="button">Download PNG (3×)</button>
+          <span id="export-status" class="export-status" role="status" aria-live="polite"></span>
+        </div>
+      </header>
+
+      <figure aria-labelledby="fusion-simple-caption">
+        <svg viewBox="0 0 1280 344" role="img" aria-labelledby="fusion-simple-title fusion-simple-desc">
+          <title id="fusion-simple-title">Dual-view speech enhancement and fusion</title>
+          <desc id="fusion-simple-desc">Noisy log-Mel features follow both a raw path and an enhanced path through one shared Whisper encoder. Cross-attention refines the two encoded views, a learned gate merges them, and the Whisper decoder predicts Persian tokens.</desc>
+          <defs>
+            <marker id="fusion-simple-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+              <polygon points="0 0, 8 3, 0 6" fill="#52606d"/>
+            </marker>
+            <marker id="fusion-simple-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+              <polygon points="0 0, 8 3, 0 6" fill="#1d6f8a"/>
+            </marker>
+            <marker id="fusion-simple-arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+              <polygon points="0 0, 8 3, 0 6" fill="#52606d"/>
+            </marker>
+          </defs>
+
+          <rect width="1280" height="344" fill="#f7f6f2"/>
+
+          <text class="section-label" x="40" y="48">INFERENCE PATH</text>
+          <line class="divider" x1="40" y1="64" x2="1240" y2="64"/>
+
+          <!-- Connectors are drawn before nodes. -->
+          <path class="arrow" d="M168 276 H208"/>
+          <path class="arrow" d="M368 276 H408"/>
+          <path class="arrow" d="M536 276 H592"/>
+          <path class="arrow secondary" d="M104 228 V196 Q104 188 112 188 H592"/>
+          <path class="arrow secondary" d="M760 188 H816"/>
+          <path class="arrow" d="M760 276 H816"/>
+          <path class="arrow accent" d="M992 232 H1032"/>
+          <path class="arrow" d="M1128 232 H1168"/>
+
+          <rect x="288" y="156" width="88" height="16" rx="4" fill="#f7f6f2"/>
+          <text class="arrow-label" x="332" y="168">RAW VIEW</text>
+
+          <!-- Noisy log-Mel -->
+          <rect class="node-mask" x="40" y="228" width="128" height="96" rx="8"/>
+          <rect class="node-box input" x="40" y="228" width="128" height="96" rx="8"/>
+          <rect x="52" y="240" width="40" height="16" rx="4" fill="none" stroke="rgba(82, 96, 109, 0.35)" stroke-width="0.8"/>
+          <text class="tag" x="72" y="252">INPUT</text>
+          <text class="node-name" x="104" y="280">Noisy log-Mel</text>
+          <text class="technical" x="104" y="300">xₙ</text>
+
+          <!-- Enhancer -->
+          <rect class="node-mask" x="208" y="228" width="160" height="96" rx="8"/>
+          <rect class="node-box" x="208" y="228" width="160" height="96" rx="8"/>
+          <rect x="220" y="240" width="56" height="16" rx="4" fill="none" stroke="rgba(31, 41, 51, 0.32)" stroke-width="0.8"/>
+          <text class="tag" x="248" y="252">ENHANCE</text>
+          <text class="node-name" x="288" y="280">Residual U-Net</text>
+          <text class="technical" x="288" y="300">E(xₙ)</text>
+
+          <!-- Enhanced log-Mel -->
+          <rect class="node-mask" x="408" y="228" width="128" height="96" rx="8"/>
+          <rect class="node-box input" x="408" y="228" width="128" height="96" rx="8"/>
+          <rect x="420" y="240" width="40" height="16" rx="4" fill="none" stroke="rgba(82, 96, 109, 0.35)" stroke-width="0.8"/>
+          <text class="tag" x="440" y="252">VIEW</text>
+          <text class="node-name" x="472" y="276">Enhanced</text>
+          <text class="node-name" x="472" y="296">log-Mel</text>
+          <text class="technical" x="472" y="316">xₑ</text>
+
+          <!-- Shared Whisper encoder -->
+          <rect class="node-mask" x="592" y="128" width="168" height="196" rx="8"/>
+          <rect class="node-box" x="592" y="128" width="168" height="196" rx="8"/>
+          <rect x="604" y="140" width="48" height="16" rx="4" fill="none" stroke="rgba(31, 41, 51, 0.32)" stroke-width="0.8"/>
+          <text class="tag" x="628" y="152">SHARED</text>
+          <text class="node-name" x="676" y="176">Whisper encoder</text>
+          <rect class="lane" x="608" y="188" width="136" height="48" rx="4"/>
+          <text class="node-copy" x="676" y="208">Raw view</text>
+          <text class="technical" x="676" y="224">hₙ = Enc(xₙ)</text>
+          <rect class="lane" x="608" y="248" width="136" height="48" rx="4"/>
+          <text class="node-copy" x="676" y="268">Enhanced view</text>
+          <text class="technical" x="676" y="284">hₑ = Enc(xₑ)</text>
+          <text class="technical" x="676" y="316">one weight set</text>
+
+          <!-- Cross-view fusion -->
+          <rect class="node-mask" x="816" y="148" width="176" height="184" rx="8"/>
+          <rect class="node-box focal" x="816" y="148" width="176" height="184" rx="8"/>
+          <rect x="828" y="168" width="48" height="16" rx="4" fill="none" stroke="rgba(29, 111, 138, 0.42)" stroke-width="0.8"/>
+          <text class="tag" x="852" y="180" fill="#1d6f8a">FUSION</text>
+          <text class="node-name" x="904" y="208">Cross-view fusion</text>
+          <rect class="lane accent-lane" x="832" y="220" width="144" height="28" rx="4"/>
+          <text class="detail" x="904" y="240">cross-attention × 3</text>
+          <rect class="lane accent-lane" x="832" y="256" width="144" height="28" rx="4"/>
+          <text class="detail" x="904" y="276">learned sigmoid gate</text>
+          <text class="technical" x="904" y="300">h_f = g·h′ₑ</text>
+          <text class="technical" x="904" y="316">+ (1−g)·h′ₙ</text>
+
+          <!-- Decoder -->
+          <rect class="node-mask" x="1032" y="188" width="96" height="88" rx="8"/>
+          <rect class="node-box" x="1032" y="188" width="96" height="88" rx="8"/>
+          <rect x="1044" y="200" width="40" height="16" rx="4" fill="none" stroke="rgba(31, 41, 51, 0.32)" stroke-width="0.8"/>
+          <text class="tag" x="1064" y="212">ASR</text>
+          <text class="node-name" x="1080" y="240">Whisper</text>
+          <text class="node-name" x="1080" y="256">decoder</text>
+
+          <!-- Output -->
+          <rect class="node-mask" x="1168" y="188" width="80" height="88" rx="8"/>
+          <rect class="node-box output" x="1168" y="188" width="80" height="88" rx="8"/>
+          <rect x="1180" y="200" width="48" height="16" rx="4" fill="none" stroke="rgba(82, 96, 109, 0.35)" stroke-width="0.8"/>
+          <text class="tag" x="1204" y="212">OUTPUT</text>
+          <text class="node-name" x="1208" y="240">Persian</text>
+          <text class="node-name" x="1208" y="256">tokens</text>
+
+        </svg>
+        <figcaption id="fusion-simple-caption">
+          Figure 2. The enhancer creates a second acoustic view without discarding the noisy
+          input. A shared Whisper encoder contextualizes both views; three cross-attention
+          layers refine them, and a sigmoid gate supplies the fused representation to the
+          autoregressive decoder.
+        </figcaption>
+      </figure>
+    </main>
+    <script>
+      (() => {
+        "use strict";
+
+        if (new URLSearchParams(window.location.search).has("export")) {
+          document.body.classList.add("export-mode");
+        }
+
+        const button = document.querySelector("#export-png");
+        const status = document.querySelector("#export-status");
+
+        button.addEventListener("click", async () => {
+          button.disabled = true;
+          status.textContent = "Preparing image…";
+
+          try {
+            await document.fonts.ready;
+            const source = document.querySelector("svg");
+            const clone = source.cloneNode(true);
+            clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+            clone.setAttribute("width", "1280");
+            clone.setAttribute("height", "344");
+
+            const embeddedStyle = document.createElementNS("http://www.w3.org/2000/svg", "style");
+            embeddedStyle.textContent = document.querySelector("style").textContent;
+            clone.querySelector("defs").appendChild(embeddedStyle);
+
+            const serialized = new XMLSerializer().serializeToString(clone);
+            const svgBlob = new Blob([serialized], {type: "image/svg+xml;charset=utf-8"});
+            const svgUrl = URL.createObjectURL(svgBlob);
+            const image = new Image();
+
+            image.onload = () => {
+              const scale = 3;
+              const canvas = document.createElement("canvas");
+              canvas.width = 1280 * scale;
+              canvas.height = 344 * scale;
+              const context = canvas.getContext("2d");
+              context.scale(scale, scale);
+              context.drawImage(image, 0, 0, 1280, 344);
+              URL.revokeObjectURL(svgUrl);
+
+              canvas.toBlob((pngBlob) => {
+                if (!pngBlob) {
+                  status.textContent = "Export failed.";
+                  button.disabled = false;
+                  return;
+                }
+
+                const downloadUrl = URL.createObjectURL(pngBlob);
+                const link = document.createElement("a");
+                link.href = downloadUrl;
+                link.download = "fusion-model-architecture-simplified.png";
+                link.click();
+                URL.revokeObjectURL(downloadUrl);
+                status.textContent = "PNG downloaded.";
+                button.disabled = false;
+              }, "image/png");
+            };
+
+            image.onerror = () => {
+              URL.revokeObjectURL(svgUrl);
+              status.textContent = "Export failed.";
+              button.disabled = false;
+            };
+
+            image.src = svgUrl;
+          } catch (error) {
+            console.error(error);
+            status.textContent = "Export failed.";
+            button.disabled = false;
+          }
+        });
+      })();
+    </script>
+  </body>
+</html>

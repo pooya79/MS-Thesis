@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <title>Speech degradation pipeline — simplified</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --paper: #f7f6f2;
+        --surface: #ffffff;
+        --ink: #1f2933;
+        --muted: #52606d;
+        --soft: #7b8794;
+        --rule: rgba(31, 41, 51, 0.14);
+        --accent: #1d6f8a;
+        --accent-tint: #e8f3f6;
+        --input-tint: #edf1f3;
+        --output-tint: #eef4ef;
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; background: var(--paper); }
+      body { color: var(--ink); font-family: "Geist", Inter, ui-sans-serif, system-ui, sans-serif; }
+      main { width: min(100% - 32px, 1360px); margin: 0 auto; padding: 48px 0 64px; }
+      .page-header { display: grid; grid-template-columns: minmax(0, 1fr) minmax(240px, 360px); gap: 48px; align-items: end; padding: 0 8px 32px; border-bottom: 1px solid var(--rule); }
+      .eyebrow, .figure-label, .colophon { margin: 0; color: var(--accent); font: 500 12px/1.4 "Geist Mono", ui-monospace, monospace; letter-spacing: 0.16em; text-transform: uppercase; }
+      h1 { max-width: 760px; margin: 8px 0 0; font: 400 clamp(36px, 5vw, 56px)/0.96 "Instrument Serif", Georgia, serif; }
+      .lede { margin: 0; color: var(--muted); font-size: 16px; line-height: 1.6; }
+      section { padding-top: 48px; }
+      .section-header { display: grid; grid-template-columns: minmax(0, 1fr) minmax(240px, 420px); gap: 40px; align-items: end; margin: 0 8px 20px; }
+      h2 { margin: 8px 0 0; font: 400 32px/1.05 "Instrument Serif", Georgia, serif; }
+      .section-note { margin: 0; color: var(--muted); font-size: 16px; line-height: 1.55; }
+      figure { margin: 0; }
+      .diagram { display: block; width: 100%; height: auto; background: var(--paper); }
+      figcaption { max-width: 960px; margin: 16px 8px 0; color: var(--muted); font: 400 16px/1.6 "Instrument Serif", Georgia, serif; }
+      code { color: var(--ink); font: 500 12px/1.4 "Geist Mono", ui-monospace, monospace; }
+      footer { display: flex; justify-content: space-between; gap: 24px; margin-top: 56px; padding: 20px 8px 0; border-top: 1px solid var(--rule); }
+      .colophon { color: var(--soft); font-size: 8px; }
+      svg text { text-rendering: geometricPrecision; }
+      .svg-eyebrow { fill: var(--accent); font: 500 8px "Geist Mono", ui-monospace, monospace; letter-spacing: 0.16em; }
+      .svg-title { fill: var(--ink); font: 400 28px "Instrument Serif", Georgia, serif; }
+      .svg-copy { fill: var(--muted); font: 400 12px "Geist", Inter, ui-sans-serif, sans-serif; }
+      .node-name { fill: var(--ink); font: 600 12px "Geist", Inter, ui-sans-serif, sans-serif; text-anchor: middle; }
+      .node-sub { fill: var(--muted); font: 400 8px "Geist Mono", ui-monospace, monospace; text-anchor: middle; }
+      .tag-text, .arrow-text, .legend-text { fill: var(--soft); font: 500 8px "Geist Mono", ui-monospace, monospace; letter-spacing: 0.08em; text-anchor: middle; }
+      .arrow-text { fill: var(--muted); }
+      .legend-text { text-anchor: start; }
+      @media (max-width: 760px) {
+        main { width: min(100% - 16px, 1360px); padding-top: 28px; }
+        .page-header, .section-header { grid-template-columns: 1fr; gap: 16px; }
+        section { padding-top: 36px; }
+        .diagram { min-width: 960px; }
+        figure { overflow-x: auto; }
+        footer { flex-direction: column; }
+      }
+      @media print {
+        @page { size: landscape; margin: 10mm; }
+        main { width: 100%; padding: 0; }
+        .page-header, footer { display: none; }
+        section { break-after: page; padding: 0; }
+        section:last-of-type { break-after: auto; }
+        .section-header { margin-top: 0; }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header class="page-header">
+        <div>
+          <p class="eyebrow">MS thesis · speech enhancement data</p>
+          <h1>Speech degradation, without the wiring diagram</h1>
+        </div>
+        <p class="lede">Two views separate the stable end-to-end story from the codec and network decision. Exact probabilities and signal parameters remain in configuration.</p>
+      </header>
+
+      <section aria-labelledby="overview-heading">
+        <header class="section-header">
+          <div>
+            <p class="figure-label">Figure A · overview</p>
+            <h2 id="overview-heading">One reproducible variant becomes one aligned pair</h2>
+          </div>
+          <p class="section-note">Read left to right. The lower return path shows that the clean target comes from the original signal, not from the degraded working copy.</p>
+        </header>
+        <figure>
+          <svg class="diagram" viewBox="0 0 1280 720" role="img" aria-labelledby="degradation-overview-title degradation-overview-desc">
+            <title id="degradation-overview-title">Simplified speech degradation pair-generation pipeline</title>
+            <desc id="degradation-overview-desc">A clean clip is prepared at a working rate, assigned a deterministic profile, given acoustic effects, processed through a codec and network stage, aligned with a clean target, peak-protected, and written as audio plus metadata.</desc>
+            <defs>
+              <marker id="overview-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#52606d"/></marker>
+              <marker id="overview-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#1d6f8a"/></marker>
+              <marker id="overview-arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#1d6f8a"/></marker>
+            </defs>
+            <rect width="1280" height="720" fill="#f7f6f2"/>
+            <text class="svg-eyebrow" x="40" y="56">CLEAN → TRAINING PAIR</text>
+            <text class="svg-title" x="40" y="92">The stable pipeline</text>
+            <text class="svg-copy" x="40" y="124">A single seed controls every sampled choice for a source clip and variant.</text>
+            <line x1="40" y1="152" x2="1240" y2="152" stroke="rgba(31,41,51,0.14)" stroke-width="0.8"/>
+
+            <!-- Connectors are deliberately drawn before nodes. -->
+            <line x1="184" y1="316" x2="216" y2="316" stroke="#52606d" stroke-width="1.2" marker-end="url(#overview-arrow)"/>
+            <line x1="360" y1="316" x2="392" y2="316" stroke="#52606d" stroke-width="1.2" marker-end="url(#overview-arrow)"/>
+            <line x1="536" y1="316" x2="568" y2="316" stroke="#52606d" stroke-width="1.2" marker-end="url(#overview-arrow)"/>
+            <line x1="712" y1="316" x2="744" y2="316" stroke="#1d6f8a" stroke-width="1.2" marker-end="url(#overview-arrow-accent)"/>
+            <line x1="888" y1="316" x2="920" y2="316" stroke="#1d6f8a" stroke-width="1.2" marker-end="url(#overview-arrow-accent)"/>
+            <line x1="1064" y1="316" x2="1096" y2="316" stroke="#52606d" stroke-width="1.2" marker-end="url(#overview-arrow)"/>
+            <path d="M112 376 V448 Q112 456 120 456 H984 Q992 456 992 448 V376" fill="none" stroke="#52606d" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#overview-arrow)"/>
+            <rect x="500" y="432" width="112" height="12" rx="4" fill="#f7f6f2"/>
+            <text class="arrow-text" x="556" y="440">CLEAN TARGET</text>
+
+            <g>
+              <rect x="40" y="256" width="144" height="120" rx="8" fill="#f7f6f2"/>
+              <rect x="40" y="256" width="144" height="120" rx="8" fill="#edf1f3" stroke="#7b8794" stroke-width="1"/>
+              <rect x="52" y="268" width="28" height="16" rx="4" fill="none" stroke="rgba(82,96,109,0.45)" stroke-width="0.8"/><text class="tag-text" x="66" y="280">01</text>
+              <text class="node-name" x="112" y="312">Clean clip</text><text class="node-sub" x="112" y="336">SOURCE + TRANSCRIPT</text>
+            </g>
+            <g>
+              <rect x="216" y="256" width="144" height="120" rx="8" fill="#f7f6f2"/><rect x="216" y="256" width="144" height="120" rx="8" fill="#ffffff" stroke="#1f2933" stroke-width="1"/>
+              <rect x="228" y="268" width="28" height="16" rx="4" fill="none" stroke="rgba(31,41,51,0.35)" stroke-width="0.8"/><text class="tag-text" x="242" y="280">02</text>
+              <text class="node-name" x="288" y="304">Mono + resample</text><text class="node-sub" x="288" y="328">WORKING RATE</text><text class="node-sub" x="288" y="344">KEEP CLEAN COPY</text>
+            </g>
+            <g>
+              <rect x="392" y="256" width="144" height="120" rx="8" fill="#f7f6f2"/><rect x="392" y="256" width="144" height="120" rx="8" fill="#ffffff" stroke="#1f2933" stroke-width="1"/>
+              <rect x="404" y="268" width="28" height="16" rx="4" fill="none" stroke="rgba(31,41,51,0.35)" stroke-width="0.8"/><text class="tag-text" x="418" y="280">03</text>
+              <text class="node-name" x="464" y="304">Seed + profile</text><text class="node-sub" x="464" y="328">STABLE PER VARIANT</text><text class="node-sub" x="464" y="344">SAMPLE SETTINGS</text>
+            </g>
+            <g>
+              <rect x="568" y="256" width="144" height="120" rx="8" fill="#f7f6f2"/><rect x="568" y="256" width="144" height="120" rx="8" fill="#ffffff" stroke="#1f2933" stroke-width="1"/>
+              <rect x="580" y="268" width="28" height="16" rx="4" fill="none" stroke="rgba(31,41,51,0.35)" stroke-width="0.8"/><text class="tag-text" x="594" y="280">04</text>
+              <text class="node-name" x="640" y="304">Acoustic effects</text><text class="node-sub" x="640" y="328">NOISE · GAIN</text><text class="node-sub" x="640" y="344">OPTIONAL CLIPPING</text>
+            </g>
+            <g>
+              <rect x="744" y="256" width="144" height="120" rx="8" fill="#f7f6f2"/><rect x="744" y="256" width="144" height="120" rx="8" fill="#e8f3f6" stroke="#1d6f8a" stroke-width="1.2"/>
+              <rect x="756" y="268" width="28" height="16" rx="4" fill="rgba(29,111,138,0.12)" stroke="#1d6f8a" stroke-width="0.8"/><text x="770" y="280" fill="#1d6f8a" font-family="Geist Mono, ui-monospace, monospace" font-size="8" font-weight="500" text-anchor="middle">05</text>
+              <text class="node-name" x="816" y="304">Codec + network</text><text class="node-sub" x="816" y="328">CHANNEL BANDWIDTH</text><text class="node-sub" x="816" y="344">BRANCH BELOW</text>
+            </g>
+            <g>
+              <rect x="920" y="256" width="144" height="120" rx="8" fill="#f7f6f2"/><rect x="920" y="256" width="144" height="120" rx="8" fill="#ffffff" stroke="#1f2933" stroke-width="1"/>
+              <rect x="932" y="268" width="28" height="16" rx="4" fill="none" stroke="rgba(31,41,51,0.35)" stroke-width="0.8"/><text class="tag-text" x="946" y="280">06</text>
+              <text class="node-name" x="992" y="304">Align the pair</text><text class="node-sub" x="992" y="328">DELAY · MODEL RATE</text><text class="node-sub" x="992" y="344">TARGET BANDWIDTH</text>
+            </g>
+            <g>
+              <rect x="1096" y="256" width="144" height="120" rx="8" fill="#f7f6f2"/><rect x="1096" y="256" width="144" height="120" rx="8" fill="#eef4ef" stroke="#52606d" stroke-width="1"/>
+              <rect x="1108" y="268" width="28" height="16" rx="4" fill="none" stroke="rgba(82,96,109,0.45)" stroke-width="0.8"/><text class="tag-text" x="1122" y="280">07</text>
+              <text class="node-name" x="1168" y="304">Protect + write</text><text class="node-sub" x="1168" y="328">SHARED PEAK SCALE</text><text class="node-sub" x="1168" y="344">WAV PAIR + JSONL</text>
+            </g>
+
+            <line x1="40" y1="620" x2="1240" y2="620" stroke="rgba(31,41,51,0.14)" stroke-width="0.8"/>
+            <line x1="40" y1="656" x2="72" y2="656" stroke="#52606d" stroke-width="1.2" marker-end="url(#overview-arrow)"/><text class="legend-text" x="88" y="660">MAIN DEGRADED PATH</text>
+            <line x1="360" y1="656" x2="392" y2="656" stroke="#52606d" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#overview-arrow)"/><text class="legend-text" x="408" y="660">CLEAN REFERENCE PATH</text>
+            <rect x="744" y="644" width="20" height="20" rx="4" fill="#e8f3f6" stroke="#1d6f8a" stroke-width="1"/><text class="legend-text" x="780" y="660">FOCAL DEGRADATION STAGE</text>
+          </svg>
+          <figcaption>The overview deliberately collapses resampling and target construction details. The invariant is preserved: the degraded side is transformed, the clean target is derived separately, and one shared scale protects their amplitude relationship.</figcaption>
+        </figure>
+      </section>
+
+      <section aria-labelledby="branch-heading">
+        <header class="section-header">
+          <div><p class="figure-label">Figure B · branch detail</p><h2 id="branch-heading">Three channel paths, one alignment contract</h2></div>
+          <p class="section-note">Native packet loss is reserved for Opus with network impairment. Other codec and pass-through paths use decoded-waveform dropout when impairment is enabled.</p>
+        </header>
+        <figure>
+          <svg class="diagram" viewBox="0 0 1280 720" role="img" aria-labelledby="degradation-branches-title degradation-branches-desc">
+            <title id="degradation-branches-title">Codec and network branch decision flow</title>
+            <desc id="degradation-branches-desc">A guarded channel signal selects native Opus packet loss and concealment, an ffmpeg codec round-trip, or pass-through. The latter two optionally receive waveform dropout, and all paths rejoin at delay estimation and alignment.</desc>
+            <defs>
+              <marker id="branch-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#52606d"/></marker>
+              <marker id="branch-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#1d6f8a"/></marker>
+              <marker id="branch-arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#1d6f8a"/></marker>
+            </defs>
+            <rect width="1280" height="720" fill="#f7f6f2"/>
+            <text class="svg-eyebrow" x="40" y="56">CHANNEL · CODEC · NETWORK</text><text class="svg-title" x="40" y="92">The branching stage</text><text class="svg-copy" x="40" y="124">Bandwidth filtering and the pre-codec peak guard happen before this decision.</text>
+            <line x1="40" y1="152" x2="1240" y2="152" stroke="rgba(31,41,51,0.14)" stroke-width="0.8"/>
+
+            <!-- Connectors and their labels precede nodes. -->
+            <line x1="640" y1="208" x2="640" y2="240" stroke="#52606d" stroke-width="1.2" marker-end="url(#branch-arrow)"/>
+            <path d="M528 304 H240 Q232 304 232 312 V400" fill="none" stroke="#1d6f8a" stroke-width="1.2" marker-end="url(#branch-arrow-accent)"/><rect x="332" y="280" width="104" height="12" rx="4" fill="#f7f6f2"/><text class="arrow-text" x="384" y="288">OPUS + LOSS</text>
+            <line x1="640" y1="368" x2="640" y2="400" stroke="#52606d" stroke-width="1.2" marker-end="url(#branch-arrow)"/><rect x="660" y="372" width="96" height="16" rx="4" fill="#f7f6f2"/><text class="arrow-text" x="708" y="384">FFMPEG PATH</text>
+            <path d="M752 304 H1048 Q1056 304 1056 312 V400" fill="none" stroke="#52606d" stroke-width="1.2" marker-end="url(#branch-arrow)"/><rect x="848" y="280" width="112" height="12" rx="4" fill="#f7f6f2"/><text class="arrow-text" x="904" y="288">PASS-THROUGH</text>
+            <line x1="640" y1="480" x2="640" y2="496" stroke="#52606d" stroke-width="1.2" marker-end="url(#branch-arrow)"/>
+            <path d="M1056 480 V488 H688 Q680 488 680 496 V516" fill="none" stroke="#52606d" stroke-width="1.2" marker-end="url(#branch-arrow)"/>
+            <line x1="720" y1="536" x2="824" y2="536" stroke="#52606d" stroke-width="1.2" marker-end="url(#branch-arrow)"/><rect x="756" y="512" width="40" height="12" rx="4" fill="#f7f6f2"/><text class="arrow-text" x="776" y="520">YES</text>
+            <line x1="640" y1="576" x2="640" y2="608" stroke="#52606d" stroke-width="1.2" marker-end="url(#branch-arrow)"/><rect x="656" y="580" width="40" height="16" rx="4" fill="#f7f6f2"/><text class="arrow-text" x="676" y="592">NO</text>
+            <path d="M232 480 V624 Q232 632 240 632 H536" fill="none" stroke="#1d6f8a" stroke-width="1.2" marker-end="url(#branch-arrow-accent)"/>
+            <path d="M928 568 V624 Q928 632 920 632 H744" fill="none" stroke="#52606d" stroke-width="1.2" marker-end="url(#branch-arrow)"/>
+
+            <rect x="520" y="152" width="240" height="56" rx="20" fill="#f7f6f2"/><rect x="520" y="152" width="240" height="56" rx="20" fill="#edf1f3" stroke="#7b8794" stroke-width="1"/>
+            <text class="node-name" x="640" y="176">Guarded channel signal</text><text class="node-sub" x="640" y="192">FILTERED TO CHANNEL BANDWIDTH</text>
+            <polygon points="640 240 752 304 640 368 528 304" fill="#f7f6f2"/><polygon points="640 240 752 304 640 368 528 304" fill="#ffffff" stroke="#1f2933" stroke-width="1"/>
+            <text class="node-name" x="640" y="300">Selected codec path?</text><text class="node-sub" x="640" y="320">PROFILE-CONSTRAINED CHOICE</text>
+            <rect x="128" y="400" width="208" height="80" rx="8" fill="#f7f6f2"/><rect x="128" y="400" width="208" height="80" rx="8" fill="#e8f3f6" stroke="#1d6f8a" stroke-width="1.2"/>
+            <text class="node-name" x="232" y="432">Native Opus packets</text><text class="node-sub" x="232" y="452">BURST LOSS + PLC DECODE</text>
+            <rect x="536" y="400" width="208" height="80" rx="8" fill="#f7f6f2"/><rect x="536" y="400" width="208" height="80" rx="8" fill="#ffffff" stroke="#1f2933" stroke-width="1"/>
+            <text class="node-name" x="640" y="432">ffmpeg round-trip</text><text class="node-sub" x="640" y="452">ENCODE → DECODE</text>
+            <rect x="952" y="400" width="208" height="80" rx="8" fill="#f7f6f2"/><rect x="952" y="400" width="208" height="80" rx="8" fill="#ffffff" stroke="#1f2933" stroke-width="1"/>
+            <text class="node-name" x="1056" y="432">Pass-through</text><text class="node-sub" x="1056" y="452">NO CODEC ROUND-TRIP</text>
+            <polygon points="640 496 720 536 640 576 560 536" fill="#f7f6f2"/><polygon points="640 496 720 536 640 576 560 536" fill="#ffffff" stroke="#52606d" stroke-width="1" stroke-dasharray="4 4"/>
+            <text class="node-name" x="640" y="532">Network enabled?</text><text class="node-sub" x="640" y="548">FALLBACK PATHS</text>
+            <rect x="824" y="504" width="208" height="64" rx="8" fill="#f7f6f2"/><rect x="824" y="504" width="208" height="64" rx="8" fill="rgba(31,41,51,0.02)" stroke="rgba(31,41,51,0.28)" stroke-width="1" stroke-dasharray="4 4"/>
+            <text class="node-name" x="928" y="532">Waveform dropout</text><text class="node-sub" x="928" y="552">DECODED-FRAME FALLBACK</text>
+            <rect x="536" y="608" width="208" height="48" rx="8" fill="#f7f6f2"/><rect x="536" y="608" width="208" height="48" rx="8" fill="#eef4ef" stroke="#52606d" stroke-width="1"/>
+            <text class="node-name" x="640" y="636">Estimate delay + align</text>
+            <line x1="40" y1="680" x2="1240" y2="680" stroke="rgba(31,41,51,0.14)" stroke-width="0.8"/><text class="legend-text" x="40" y="704">DASHED = CONDITIONAL FALLBACK</text>
+            <rect x="360" y="688" width="16" height="16" rx="4" fill="#e8f3f6" stroke="#1d6f8a" stroke-width="1"/><text class="legend-text" x="392" y="704">NATIVE PACKET-LOSS PATH</text>
+          </svg>
+          <figcaption>Pass-through still receives channel resampling, band limiting, and peak guarding before this branch. Every exit uses the same delay-estimation and alignment function, including the normally zero-lag pass-through path.</figcaption>
+        </figure>
+      </section>
+
+      <footer><p class="colophon">STATIC HTML · INLINE SVG · 1280 × 720 FIGURES</p><p class="colophon">DESIGN PROFILE: DOCS/DIAGRAM-STYLE-GUIDE.MD</p></footer>
+    </main>
+  </body>
+</html>

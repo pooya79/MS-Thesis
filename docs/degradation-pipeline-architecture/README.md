@@ -1,7 +1,11 @@
 # Degradation Pipeline Architecture Diagram
 
-This document explains the blocks and branches in the accompanying
-[degradation pipeline diagram](index.html). The figure is a general view of the
+This document explains the blocks and branches in the accompanying original
+[degradation pipeline diagram](index.html). A second
+[simplified two-view redesign](simplified.html) separates the stable end-to-end flow from
+the codec/network decision. Both figures describe the same implementation; the original
+is retained for detailed reference. A compact [paper figure](paper.html) combines the
+pipeline and its branches into one A4-landscape schematic. The figure is a general view of the
 implemented pipeline in
 [`generate_degraded_pairs.py`](../../ml/speech_data/generate_degraded_pairs.py),
 not a snapshot of profile weights or degradation probabilities. Those values belong to
@@ -317,12 +321,17 @@ analysis.
 
 ## Diagram and thesis assets
 
-The standalone figure consists of:
+The diagram assets consist of:
 
 - [`index.html`](index.html), which provides the accessible page and export controls;
-- [`diagram.js`](diagram.js), which declares and renders the SVG scene; and
+- [`diagram.js`](diagram.js), which declares and renders the SVG scene;
 - [`styles.css`](styles.css), which provides responsive, print, and SVG presentation
-  styles.
+  styles; and
+- [`simplified.html`](simplified.html), a dependency-free redesign with separate overview
+  and branch-detail figures;
+- [`paper.html`](paper.html), a single A4-landscape figure for publication with a
+  diagram-only 3× PNG download button, following
+  [`docs/diagram-style-guide.md`](../diagram-style-guide.md).
 
 The thesis uses a 3× raster export at
 [`Thesis/figs/degradation-pipeline-architecture.png`](../../Thesis/figs/degradation-pipeline-architecture.png).

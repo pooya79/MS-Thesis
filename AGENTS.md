@@ -43,6 +43,11 @@ This repository is my research archive for my MS thesis.
 - CSS layering: `home.css` for home/dashboard-specific styles.
 - Keep shell interaction JS in `server/app/static/js/shell.js` (mobile sidebar toggle and TOC highlighting).
 
+## Diagram Conventions
+- Use `docs/diagram-style-guide.md` as the visual design system for thesis and research diagrams.
+- Prefer one self-contained HTML file with inline SVG and CSS for each new diagram.
+- Keep source diagrams intact when producing redesigns; add the new artifact beside the original.
+
 ## Auth and Static Rules
 - Static assets must remain mounted at `/static` from `server/app/static`.
 - Unauthenticated users must be allowed to read `/static/*` with `GET/HEAD`.
