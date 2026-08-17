@@ -1,0 +1,44 @@
+audio:
+  channels: 1
+  sample_rate: 16000
+  format: FLAC
+  subtype: PCM_16
+
+  # For the smallest output, replace the two lines above with:
+  # format: MP3
+  # bitrate_kbps: 48
+  #
+  # MP3 is re-encoded with FFmpeg, so it introduces another lossy codec pass.
+  # bitrate_kbps must be an integer from 8 through 160. At 48 kbps, output is
+  # about 22 MB per hour, compared with about 115 MB per hour for PCM WAV.
+  # Do not leave subtype enabled for MP3; MP3 uses bitrate_kbps instead.
+
+vad:
+  backend: silero
+  frame_samples: 512
+  merge_silence_seconds: 0.5
+  minimum_speech_seconds: 0.25
+  sample_rate: 16000
+  threshold: 0.5
+
+execution:
+  # Batched PyTorch inference changes recorded probabilities at about 1e-7,
+  # so batch size 1 remains the reproducible default.
+  vad_engine: pytorch
+  vad_device: cuda
+  vad_batch_size: 16
+  # Small recurrent VAD calls are faster without large thread pools. Increase
+  # only after benchmarking together with the command's --workers setting.
+  torch_threads: 1
+
+segmentation:
+  boundary_padding_seconds: 0.15
+  energy_search_start_seconds: 18.0
+  energy_window_seconds: 0.2
+  hard_max_seconds: 28.0
+  minimum_clip_seconds: 2.0
+  minimum_energy_dip_db: 6.0
+  preferred_max_seconds: 25.0
+  preferred_min_seconds: 15.0
+  target_seconds: 20.0
+  useful_boundary_silence_seconds: 0.3

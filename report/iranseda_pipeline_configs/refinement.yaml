@@ -1,0 +1,28 @@
+server:
+  base_url: http://127.0.0.1:8000
+  model: cyankiwi/Qwen3.6-27B-AWQ-INT4
+  timeout_seconds: 120
+  retry_count: 2
+  # Set to an environment-variable name, never an API key value.
+  api_key_env: null
+
+context:
+  size: 3
+
+batch:
+  size: 32
+
+generation:
+  temperature: 0
+  top_p: 1
+  n: 1
+  seed: 0
+  max_tokens: 2048
+
+validation:
+  maximum_normalized_edit_distance: 0.55
+
+selection:
+  # Optional JSON manifest produced by select_refinement_subset. Relative paths
+  # are resolved from this configuration file's directory.
+  manifest: /home/user01/MS-Thesis/data/iranseda/refinement-selection-250h.json

@@ -1,0 +1,11 @@
+model:
+  checkpoint: models/asr/whisper-medium/runs/whisper-medium-fa/final
+  processor: openai/whisper-medium
+  language: Persian
+  task: transcribe
+
+inference:
+  device: auto
+  mixed_precision: auto
+  batch_size: 128
+  generation_max_length: 225

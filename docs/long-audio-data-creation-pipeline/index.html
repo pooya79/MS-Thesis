@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Long-Audio Data Creation Pipeline</title>
+  <link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500;600&amp;family=Geist:wght@400;500;600&amp;family=Instrument+Serif&amp;display=swap" rel="stylesheet">
+  <style>
+    :root {
+      color-scheme: light;
+      --paper: #f7f6f2;
+      --surface: #ffffff;
+      --ink: #1f2933;
+      --muted: #52606d;
+      --soft: #7b8794;
+      --rule: rgba(31, 41, 51, 0.14);
+      --accent: #1d6f8a;
+      --accent-tint: #e8f3f6;
+      --input-tint: #edf1f3;
+      --output-tint: #eef4ef;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; background: var(--paper); }
+    body { min-height: 100vh; padding: 24px; }
+    main { width: min(100%, 1120px); margin: 0 auto; }
+    .controls {
+      direction: ltr;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin: 0 0 16px;
+      font: 500 16px/1.3 Geist, Inter, system-ui, sans-serif;
+    }
+    .export-button {
+      border: 1px solid var(--ink);
+      border-radius: 4px;
+      padding: 12px 16px;
+      color: var(--ink);
+      background: var(--surface);
+      font: 600 16px/1 Geist, Inter, system-ui, sans-serif;
+      text-decoration: none;
+    }
+    .export-button:hover { color: var(--accent); border-color: var(--accent); }
+    .export-button:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+    #export-status { color: var(--muted); }
+    figure { width: 100%; margin: 0; }
+    svg { display: block; width: 100%; height: auto; background: var(--paper); }
+    body:has(#diagram:target) { min-height: 0; padding: 0; }
+    body:has(#diagram:target) main,
+    body:has(#diagram:target) figure { width: 1120px; margin: 0; }
+    body:has(#diagram:target) .controls { display: none; }
+
+    .figure-title {
+      fill: var(--ink);
+      font: 400 40px/1.1 "Instrument Serif", Georgia, serif;
+    }
+    .figure-subtitle {
+      fill: var(--muted);
+      font: 400 20px/1.3 Geist, Inter, system-ui, sans-serif;
+    }
+    .phase-title {
+      fill: var(--muted);
+      font: 600 16px/1 Geist, Inter, system-ui, sans-serif;
+    }
+    .phase-number, .step-number, .arrow-label {
+      font-family: "Geist Mono", "DejaVu Sans Mono", monospace;
+    }
+    .phase-number {
+      fill: var(--soft);
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.12em;
+    }
+    .node-title {
+      fill: var(--ink);
+      font: 600 16px/1.15 Geist, Inter, system-ui, sans-serif;
+    }
+    .node-subtitle {
+      fill: var(--muted);
+      font: 400 16px/1.25 Geist, Inter, system-ui, sans-serif;
+    }
+    .step-number {
+      fill: var(--muted);
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .arrow-label {
+      fill: var(--accent);
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="controls">
+      <a class="export-button" href="long-audio-data-creation-pipeline.png" download>Download PNG</a>
+      <span id="export-status">Print size: 3360 × 2376</span>
+    </div>
+    <figure id="diagram">
+    <svg viewBox="0 0 1120 792" role="img" aria-labelledby="long-audio-data-pipeline-title long-audio-data-pipeline-desc">
+      <title id="long-audio-data-pipeline-title">Long-Audio Data Creation Pipeline</title>
+      <desc id="long-audio-data-pipeline-desc">Data flow from IranSeda source collection and validation through speech segmentation, pseudo-transcription, normalization, Qwen-based LLM refinement, and quality filtering to Whisper-small training using all accepted clips.</desc>
+      <defs>
+        <marker id="long-audio-data-pipeline-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+          <polygon points="0 0, 8 3, 0 6" fill="#52606d"/>
+        </marker>
+        <marker id="long-audio-data-pipeline-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+          <polygon points="0 0, 8 3, 0 6" fill="#1d6f8a"/>
+        </marker>
+        <marker id="long-audio-data-pipeline-arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+          <polygon points="0 0, 8 3, 0 6" fill="#1d6f8a"/>
+        </marker>
+      </defs>
+
+      <rect width="1120" height="792" fill="#f7f6f2"/>
+
+      <text class="figure-title" x="40" y="56">Long-Audio Data Creation Pipeline</text>
+      <text class="figure-subtitle" x="40" y="92">From untranscribed IranSeda audiobooks to pseudo-labelled data and Whisper-small training</text>
+
+      <!-- Phase containers -->
+      <rect x="40" y="120" width="312" height="592" rx="8" fill="rgba(82,96,109,0.035)" stroke="rgba(31,41,51,0.14)" stroke-width="1"/>
+      <rect x="388" y="120" width="312" height="592" rx="8" fill="rgba(82,96,109,0.035)" stroke="rgba(31,41,51,0.14)" stroke-width="1"/>
+      <rect x="744" y="120" width="336" height="592" rx="8" fill="rgba(82,96,109,0.035)" stroke="rgba(31,41,51,0.14)" stroke-width="1"/>
+
+      <text class="phase-number" x="64" y="148">PHASE 01</text>
+      <text class="phase-title" x="64" y="176">SOURCE PREPARATION</text>
+      <text class="phase-number" x="412" y="148">PHASE 02</text>
+      <text class="phase-title" x="412" y="176">PSEUDO-LABEL CREATION</text>
+      <text class="phase-number" x="768" y="148">PHASE 03</text>
+      <text class="phase-title" x="768" y="176">MODEL TRAINING</text>
+
+      <!-- Connectors: drawn before nodes -->
+      <line x1="196" y1="336" x2="196" y2="440" stroke="#52606d" stroke-width="1.2" marker-end="url(#long-audio-data-pipeline-arrow)"/>
+      <path d="M 316 496 H 356 Q 364 496 364 488 V 264 Q 364 256 372 256 H 424" fill="none" stroke="#52606d" stroke-width="1.2" marker-end="url(#long-audio-data-pipeline-arrow)"/>
+      <line x1="544" y1="304" x2="544" y2="328" stroke="#52606d" stroke-width="1.2" marker-end="url(#long-audio-data-pipeline-arrow)"/>
+      <line x1="544" y1="424" x2="544" y2="448" stroke="#52606d" stroke-width="1.2" marker-end="url(#long-audio-data-pipeline-arrow)"/>
+      <line x1="544" y1="544" x2="544" y2="568" stroke="#52606d" stroke-width="1.2" marker-end="url(#long-audio-data-pipeline-arrow)"/>
+      <path d="M 664 624 H 716 Q 724 624 724 616 V 392 Q 724 384 732 384 H 792" fill="none" stroke="#1d6f8a" stroke-width="1.2" marker-end="url(#long-audio-data-pipeline-arrow-accent)"/>
+      <rect x="736" y="480" width="104" height="20" rx="4" fill="#f7f6f2"/>
+      <text class="arrow-label" x="788" y="496" text-anchor="middle">TRAINING DATA</text>
+
+      <!-- 01: source collection and validation -->
+      <rect x="76" y="224" width="240" height="112" rx="8" fill="#f7f6f2"/>
+      <rect x="76" y="224" width="240" height="112" rx="8" fill="#edf1f3" stroke="#7b8794" stroke-width="1"/>
+      <rect x="88" y="236" width="40" height="20" rx="4" fill="none" stroke="rgba(82,96,109,0.45)" stroke-width="0.8"/>
+      <text class="step-number" x="108" y="252" text-anchor="middle">01</text>
+      <text class="node-title" x="196" y="284" text-anchor="middle">Source collection</text>
+      <text class="node-title" x="196" y="308" text-anchor="middle">and validation</text>
+      <text class="node-subtitle" x="196" y="328" text-anchor="middle">Manifest + checksum checks</text>
+
+      <!-- 02: segmentation -->
+      <rect x="76" y="440" width="240" height="112" rx="8" fill="#f7f6f2"/>
+      <rect x="76" y="440" width="240" height="112" rx="8" fill="#ffffff" stroke="#1f2933" stroke-width="1"/>
+      <rect x="88" y="452" width="40" height="20" rx="4" fill="none" stroke="rgba(31,41,51,0.35)" stroke-width="0.8"/>
+      <text class="step-number" x="108" y="468" text-anchor="middle">02</text>
+      <text class="node-title" x="196" y="504" text-anchor="middle">VAD-based segmentation</text>
+      <text class="node-subtitle" x="196" y="532" text-anchor="middle">Non-overlapping FLAC clips</text>
+
+      <!-- 03: transcription -->
+      <rect x="424" y="208" width="240" height="96" rx="8" fill="#f7f6f2"/>
+      <rect x="424" y="208" width="240" height="96" rx="8" fill="#ffffff" stroke="#1f2933" stroke-width="1"/>
+      <rect x="436" y="220" width="40" height="20" rx="4" fill="none" stroke="rgba(31,41,51,0.35)" stroke-width="0.8"/>
+      <text class="step-number" x="456" y="236" text-anchor="middle">03</text>
+      <text class="node-title" x="544" y="264" text-anchor="middle">Whisper-Medium ASR</text>
+      <text class="node-subtitle" x="544" y="292" text-anchor="middle">Raw pseudo-labels per clip</text>
+
+      <!-- 04: normalization -->
+      <rect x="424" y="328" width="240" height="96" rx="8" fill="#f7f6f2"/>
+      <rect x="424" y="328" width="240" height="96" rx="8" fill="#ffffff" stroke="#1f2933" stroke-width="1"/>
+      <rect x="436" y="340" width="40" height="20" rx="4" fill="none" stroke="rgba(31,41,51,0.35)" stroke-width="0.8"/>
+      <text class="step-number" x="456" y="356" text-anchor="middle">04</text>
+      <text class="node-title" x="544" y="376" text-anchor="middle">Deterministic Persian</text>
+      <text class="node-title" x="544" y="396" text-anchor="middle">normalization</text>
+      <text class="node-subtitle" x="544" y="416" text-anchor="middle">Persian text conventions</text>
+
+      <!-- 05: LLM refinement -->
+      <rect x="424" y="448" width="240" height="96" rx="8" fill="#f7f6f2"/>
+      <rect x="424" y="448" width="240" height="96" rx="8" fill="#ffffff" stroke="#1f2933" stroke-width="1"/>
+      <rect x="436" y="460" width="40" height="20" rx="4" fill="none" stroke="rgba(31,41,51,0.35)" stroke-width="0.8"/>
+      <text class="step-number" x="456" y="476" text-anchor="middle">05</text>
+      <text class="node-title" x="544" y="504" text-anchor="middle">LLM refinement</text>
+      <text class="node-subtitle" x="544" y="536" text-anchor="middle">Qwen-based text correction</text>
+
+      <!-- 06: quality filtering -->
+      <rect x="424" y="568" width="240" height="112" rx="8" fill="#f7f6f2"/>
+      <rect x="424" y="568" width="240" height="112" rx="8" fill="#ffffff" stroke="#1f2933" stroke-width="1"/>
+      <rect x="436" y="580" width="40" height="20" rx="4" fill="none" stroke="rgba(31,41,51,0.35)" stroke-width="0.8"/>
+      <text class="step-number" x="456" y="596" text-anchor="middle">06</text>
+      <text class="node-title" x="544" y="620" text-anchor="middle">Quality filtering</text>
+      <text class="node-subtitle" x="544" y="648" text-anchor="middle">Reject invalid audio, labels,</text>
+      <text class="node-subtitle" x="544" y="672" text-anchor="middle">and Qwen edits</text>
+
+      <!-- 07: Whisper-small training -->
+      <rect x="792" y="304" width="240" height="160" rx="8" fill="#f7f6f2"/>
+      <rect x="792" y="304" width="240" height="160" rx="8" fill="#e8f3f6" stroke="#1d6f8a" stroke-width="1.2"/>
+      <rect x="804" y="316" width="40" height="20" rx="4" fill="none" stroke="rgba(29,111,138,0.55)" stroke-width="0.8"/>
+      <text class="step-number" x="824" y="332" text-anchor="middle" fill="#1d6f8a">07</text>
+      <text class="node-title" x="912" y="372" text-anchor="middle">Train Whisper-small</text>
+      <text class="node-subtitle" x="912" y="408" text-anchor="middle">All accepted clips</text>
+      <text class="node-subtitle" x="912" y="436" text-anchor="middle">Full baseline mixture</text>
+      </svg>
+    </figure>
+  </main>
+</body>
+</html>
