@@ -31,12 +31,12 @@ completed work.
 
 ### 4. Write the stable parts of the method chapter
 
-- [ ] Describe IranSeda scraping, source validation, and metadata collection.
-- [ ] Describe segmentation rules, audio format, and rejection rules.
-- [ ] Describe the current Whisper transcription process and saved outputs.
-- [ ] Draft the planned LLM-refinement method, including strict rules against paraphrasing or adding words.
-- [ ] Draft quality filtering, source-level dataset splitting, training, and evaluation procedures.
-- [ ] Add one end-to-end pipeline diagram and clearly mark any stage not yet executed.
+- [X] Describe IranSeda scraping, source validation, and metadata collection.
+- [X] Describe segmentation rules, audio format, and rejection rules.
+- [X] Describe the current Whisper transcription process and saved outputs.
+- [X] Draft the planned LLM-refinement method, including strict rules against paraphrasing or adding words.
+- [X] Draft quality filtering, source-level dataset splitting, training, and evaluation procedures.
+- [X] Add one end-to-end pipeline diagram and clearly mark any stage not yet executed.
 
 ### 5. Prepare the results chapter as a template
 
