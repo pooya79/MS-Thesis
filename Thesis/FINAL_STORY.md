@@ -16,10 +16,10 @@ sequence of controlled experiments rather than assumed in advance. A
 reproducible degradation pipeline and multi-condition training substantially
 improved Whisper-small, whereas the proposed enhancer–fusion model did not
 surpass that stronger data-trained baseline. This negative result motivated the
-final, data-centric stage of the thesis: constructing a large pseudo-labelled
-Persian speech dataset from long-form IranSeda audio and testing whether the
-same Whisper-small architecture improves when trained with more real Persian
-speech.
+final, data-centric stage of the thesis: a completed pseudo-labelled Persian
+speech dataset from long-form IranSeda audio, followed by the pending test of
+whether the same Whisper-small architecture improves when trained with more
+real Persian speech.
 
 ## The story in one page
 
@@ -69,41 +69,47 @@ This failure is a central result, not a discarded experiment. It suggests that
 the main bottleneck in the studied setting is better addressed through data
 than through additional architectural complexity. The final stage of the
 thesis therefore follows the evidence and asks a broader question: if exposing
-Whisper-small to more varied training data produced the strongest result, can
-its performance be improved further by constructing substantially more real
-Persian speech data?
+Whisper-small to more varied training data produced the strongest controlled
+small-model result, can its performance be improved further with substantially
+more real Persian speech data?
 
-To answer this question, a higher-capacity Whisper model was first adapted to
-Persian and used as a teacher. Whisper Medium was selected instead of a larger
-Whisper variant because of the available computational resources. In parallel,
-approximately 3,700 audiobooks were collected from the public IranSeda
-catalogue. The complete raw collection contains approximately 7,000 hours of
-audio. Because processing and training on the entire collection was not
-feasible within the thesis schedule and compute budget, approximately 1,000
-hours were selected for the final experiment.
+To answer this question, a higher-capacity Whisper model was adapted to Persian
+and used as a teacher. Whisper Medium was selected instead of a larger Whisper
+variant because of the available computational resources. Its completed
+evaluation on the same 21,848 eligible examples as the single-stream
+Whisper-small models produced **14.36% WER** and **6.68% CER**, the strongest
+completed aggregate result. Relative to multi-condition Whisper-small, these
+scores are lower by **3.47 WER percentage points** and **1.25 CER percentage
+points**. This is not a data-only controlled comparison because model capacity
+also changed.
 
-The selected long recordings are converted into training examples through a
-reproducible pipeline. Silero VAD detects speech regions, and clips are cut at
+In parallel, **3,777 audiobooks** were collected from the public IranSeda
+catalogue, representing approximately **6,300 raw hours**. A **250-hour subset**
+was selected for the final experiment in accordance with the available thesis
+schedule and compute budget.
+
+The selected long recordings were converted into training examples through a
+reproducible pipeline. Silero VAD detected speech regions, and clips were cut at
 natural boundaries with a target duration of 20 seconds and a preferred range
 of 15–25 seconds. The upper bound leaves a safety margin below Whisper's
-30-second input window. Each clip is independently transcribed by the
-Persian-adapted Whisper Medium teacher. The raw hypothesis is retained, and a
-deterministic Persian normalizer standardizes characters, whitespace, and the
+30-second input window. Each clip was independently transcribed by the
+Persian-adapted Whisper Medium teacher. The raw hypothesis was retained, and a
+deterministic Persian normalizer standardized characters, whitespace, and the
 project's transcription conventions. A constrained LLM refinement stage then
-performs orthographic cleanup only using the configured `Qwen/Qwen3.6-27B`
-model. It must not add, remove, infer, reorder, summarize, or
-paraphrase spoken content. Suspicious edits, uncertainty, invalid output, and
-large text changes are rejected or routed to review. All derived clips retain
-their IranSeda source identity, timestamps, checksums, processing settings,
-teacher identity, raw transcript, normalized transcript, and refined text.
+performed orthographic cleanup only using the configured `Qwen/Qwen3.6-27B`
+model, under rules prohibiting the addition, removal, inference, reordering,
+summarization, or paraphrasing of spoken content. Quality filtering and
+source-level preparation were also completed. All derived clips retain their
+IranSeda source identity, timestamps, checksums, processing settings, teacher
+identity, raw transcript, normalized transcript, and refined text.
 
-The accepted IranSeda clips will be added to the complete training mixture used
-by the strongest Whisper-small baseline. The final model therefore retains the
+The accepted IranSeda clips are ready to be added to the complete training
+mixture used by the strongest Whisper-small baseline. The final model retains the
 ordinary Persian speech, constructed long examples, and synthetically degraded
 examples, and adds the selected pseudo-labelled IranSeda speech. It is not
-trained on IranSeda plus ordinary data alone. Splits must be made at the
-original audiobook level so that clips from one source cannot appear in
-multiple splits. The final evaluation must reuse the same human-labelled test
+trained on IranSeda plus ordinary data alone. The prepared splits are made at
+the original audiobook level so that clips from one source cannot appear in
+multiple splits. The final evaluation will reuse the same human-labelled test
 sets, Persian normalization, WER/CER implementation, and comparison rules used
 for the earlier Whisper-small baselines. This gives the thesis a controlled
 final comparison: multi-condition Whisper-small trained with ordinary, long,
@@ -150,17 +156,19 @@ evaluation run.
    aligned clean–degraded pairs and records seeds, noise, gain, bandwidth,
    codec, packet-loss, alignment, and normalization metadata.
 3. **Controlled evidence for multi-condition training.** Training
-   Whisper-small with degraded examples produced the strongest completed
-   aggregate result and improved performance on real telephone/VoIP speech.
+   Whisper-small with degraded examples produced the strongest controlled
+   small-model baseline and improved performance on real telephone/VoIP speech.
 4. **An honestly evaluated enhancer–fusion architecture.** The work includes
    the pre-encoder enhancer, shared encoder, post-encoder fusion module, and
    multistage training procedure, together with the negative result and gate
    collapse that prevented it from beating the data-based baseline.
-5. **A reproducible long-audio dataset-construction pipeline.** The final phase
-   covers IranSeda acquisition, Silero-VAD segmentation, Whisper-Medium
+5. **A completed reproducible long-audio dataset-construction pipeline.** The
+   final phase covers IranSeda acquisition, Silero-VAD segmentation, Whisper-Medium
    pseudo-labelling, deterministic Persian normalization, constrained LLM
    refinement, quality filtering, provenance, and leakage-safe publication.
-6. **A controlled data-scaling experiment.** Whisper-small will be retrained
+6. **A completed higher-capacity teacher evaluation and a pending controlled
+   data-scaling experiment.** Whisper Medium achieved 14.36% WER and 6.68% CER;
+   Whisper-small will be retrained
    with ordinary, long, degraded, and selected IranSeda data, then compared
    with the existing multi-condition baseline on unchanged human-labelled test
    sets.
@@ -179,27 +187,20 @@ evaluation run.
   aggregate CER, outperforming the completed fusion model overall.
 - The final fusion model achieved 18.44% aggregate WER and 14.04% aggregate
   CER, and its gate relied almost entirely on the original stream.
-- Approximately 3,700 IranSeda audiobooks, representing about 7,000 raw audio
-  hours, were gathered; resource constraints limited the final experiment to
-  approximately 1,000 selected hours.
+- Whisper Medium training and evaluation are complete. On the same 21,848
+  eligible examples as the single-stream Whisper-small models, it achieved
+  14.36% aggregate WER and 6.68% aggregate CER. It reduced WER by 3.47 points
+  and CER by 1.25 points relative to multi-condition Whisper-small, although
+  the capacity change prevents a data-only interpretation. Its per-dataset
+  WER/CER scores were 21.99%/10.92% on AGFarsdat, 3.84%/1.65% on Common Voice,
+  17.14%/5.42% on FLEURS, 31.65%/13.99% on PersianSpeech, and 31.17%/17.29% on
+  Persian Speech Corpus.
+- The IranSeda pipeline is complete: 3,777 books and approximately 6,300 raw
+  hours were collected, and a 250-hour subset was segmented, transcribed,
+  normalized, refined, filtered, and prepared with source-level provenance.
 
-### In progress or awaiting final artifacts
+### Remaining experimental work
 
-- IranSeda segmentation uses Silero VAD and the checked-in 15–25-second
-  preferred-duration policy.
-- Transcription and deterministic normalization use the Persian-adapted
-  Whisper Medium checkpoint.
-- `TODO:` Insert exact source count, selected source count, segment count,
-  accepted hours, rejected hours, boundary statistics, and processing time
-  from the frozen manifests.
-- `TODO:` Insert the exact Whisper Medium checkpoint, training result, decoding
-  settings, software versions, and teacher evaluation scores.
-
-### Not complete and not yet safe to describe as a result
-
-- LLM refinement statistics and the human before/after audit.
-- Final quality-filter thresholds and accepted/rejected totals.
-- Leakage-safe train/dev split statistics for the IranSeda subset.
 - Final Whisper-small training with ordinary, long, degraded, and selected
   IranSeda data.
 - Final WER/CER and per-dataset comparison against the existing baseline.
@@ -213,6 +214,7 @@ evaluation run.
 | Whisper-small baseline | Original ordinary + long data | 23.27% | 10.84% |
 | Whisper-small multi-condition baseline | Original ordinary + long + degraded data | **17.83%** | **7.93%** |
 | Whisper enhancer–fusion | Original ordinary + long + degraded data | 18.44% | 14.04% |
+| Whisper-medium Persian | Persian adaptation described in the method chapter | **14.36%** | **6.68%** |
 | Whisper-small multi-condition + IranSeda | Original ordinary + long + degraded data + selected pseudo-labelled IranSeda data | `TODO:` | `TODO:` |
 
 The final row must be computed on the same eligible evaluation examples as the
@@ -236,8 +238,9 @@ identical evaluations.
   IranSeda acquisition-to-publication pipeline and the final controlled
   Whisper-small experiment.
 - **Chapter 5 — Results:** Preserve the completed degradation and fusion
-  results, including the negative finding. Add dataset statistics, transcript
-  audit results, and the fixed comparison with the IranSeda-trained model.
+  results, including the negative finding, and report the completed
+  Whisper-medium evaluation. Keep only the fixed comparison with the
+  IranSeda-trained Whisper-small model pending.
 - **Chapter 6 — Conclusion:** Conclude from the complete evidence. If the final
   experiment improves the baseline, emphasize the value of carefully curated
   data scaling; otherwise, emphasize the limits of pseudo-labelled volume and

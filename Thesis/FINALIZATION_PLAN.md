@@ -1,7 +1,10 @@
 # Thesis Writing and Finalization Plan
 
-Current state: IranSeda transcription is in progress. LLM refinement, final
-dataset creation, small-Whisper training, and evaluation are still pending.
+Current state: the IranSeda acquisition-to-dataset pipeline, including
+transcription and refinement, is complete for the selected 250-hour subset.
+Whisper-medium training and evaluation are also complete. The only remaining
+experimental work is final Whisper-small training on the controlled mixture
+with IranSeda and its fixed evaluation.
 
 The agreed end-to-end narrative, claim boundaries, research questions, and
 chapter mapping are recorded in [`FINAL_STORY.md`](FINAL_STORY.md).
@@ -9,7 +12,7 @@ chapter mapping are recorded in [`FINAL_STORY.md`](FINAL_STORY.md).
 Use `TODO:` placeholders for unknown values. Do not present planned work as
 completed work.
 
-## Phase A — Write now while transcription is running
+## Phase A — Completed thesis and pipeline groundwork
 
 ### 1. Fix the final thesis story
 
@@ -33,62 +36,70 @@ completed work.
 
 - [X] Describe IranSeda scraping, source validation, and metadata collection.
 - [X] Describe segmentation rules, audio format, and rejection rules.
-- [X] Describe the current Whisper transcription process and saved outputs.
-- [X] Draft the planned LLM-refinement method, including strict rules against paraphrasing or adding words.
-- [X] Draft quality filtering, source-level dataset splitting, training, and evaluation procedures.
-- [X] Add one end-to-end pipeline diagram and clearly mark any stage not yet executed.
+- [X] Describe the completed Whisper transcription process and saved outputs.
+- [X] Describe the completed LLM-refinement method, including strict rules against paraphrasing or adding words.
+- [X] Describe quality filtering, source-level dataset splitting, training, and evaluation procedures.
+- [X] Add one end-to-end pipeline diagram and distinguish the pending final training/evaluation stage.
 
-### 5. Prepare the results chapter as a template
+### 5. Prepare and update the results chapter
 
-- [ ] Write the evaluation protocol, datasets, metrics, and comparison rules now.
-- [ ] Create empty tables for dataset statistics, transcript audit, and ASR results.
+- [x] Write the evaluation protocol, datasets, metrics, and comparison rules.
+- [x] Add completed Whisper-medium aggregate and per-dataset results.
 - [ ] Compare the existing small Whisper model with the same model trained using the added IranSeda data.
-- [ ] Put `TODO:` in every unknown table cell instead of estimating values.
-- [ ] Draft headings for observations, errors, limitations, and answers to research questions.
+- [x] Put `TODO:` in the unknown final Whisper-small result cells instead of estimating values.
+- [x] Draft observations, errors, limitations, and answers to research questions 1–4.
 
 ### 6. Prepare reproducibility material
 
 - [ ] Keep a table of tool/model versions and important settings.
 - [ ] Save the Whisper model name, decoding settings, LLM model and prompt, filters, split seed, and training configuration.
-- [ ] Record enough provenance to trace each final segment to its IranSeda source.
+- [x] Record enough provenance to trace each final segment to its IranSeda source.
 
-## Phase B — Fill in facts as each run finishes
+## Phase B — Completed data preparation and teacher evaluation
 
 ### 7. After transcription finishes
 
-- [ ] Add transcription duration, failures, segment count, and total audio hours.
-- [ ] Manually inspect a small, fixed sample and record common transcription errors.
-- [ ] Freeze the transcription settings before LLM refinement.
+- [x] Complete IranSeda segmentation and transcription for the selected subset.
+- [x] Preserve transcription outputs and provenance.
+- [x] Freeze the transcription settings before LLM refinement.
 
 ### 8. After LLM refinement finishes
 
-- [ ] Report the model, prompt, settings, failures, and number of changed/rejected transcripts.
-- [ ] Audit a fixed sample before and after refinement to check that meaning was not changed.
-- [ ] Create final train/dev/test files without placing segments from one source in different splits.
-- [ ] Fill the final dataset-statistics table.
+- [x] Complete constrained LLM refinement and quality filtering.
+- [x] Preserve the refinement configuration and outputs.
+- [x] Create leakage-safe dataset files without placing segments from one source in different splits.
+- [x] Finalize the selected 250-hour IranSeda dataset.
 
-### 9. After small-Whisper training finishes
+### 9. After Whisper-medium training and evaluation
+
+- [x] Complete Persian Whisper-medium training.
+- [x] Evaluate on the same 21,848 eligible examples as the single-stream Whisper-small models.
+- [x] Record aggregate WER/CER of 14.36%/6.68% and all per-dataset scores.
+
+## Phase C — Remaining experiment
+
+### 10. After final Whisper-small training finishes
 
 - [ ] Record the exact data mixture, seed, epochs, learning rate, batch size, hardware, and runtime.
 - [ ] Preserve checkpoints, logs, and the selected-checkpoint rule outside the thesis repository when large.
 - [ ] Do not change the test set or evaluation rules after seeing results.
 
-### 10. After evaluation finishes
+### 11. After final Whisper-small evaluation finishes
 
 - [ ] Fill the prepared tables with WER/CER and dataset-specific results.
 - [ ] Compare against the existing small-Whisper baseline under the same evaluation conditions.
 - [ ] Describe improvements, regressions, and negative results without overstating them.
-- [ ] Answer each research question using the final evidence.
+- [ ] Replace the `TODO:` results and answer research questions 5–6 using the final evidence.
 
-## Phase C — Final thesis pass
+## Phase D — Final thesis pass
 
-### 11. Update conclusion and abstracts
+### 12. Update conclusion and abstracts
 
 - [ ] Revise contributions, limitations, future work, and conclusion from the final results.
 - [ ] Write the Persian and English abstracts last and include only final numbers.
 - [ ] Discuss resource limits, pseudo-label errors, LLM risks, source bias, copyright/ethics, and generalization.
 
-### 12. Check and submit
+### 13. Check and submit
 
 - [ ] Replace every `TODO:` and remove text describing abandoned experiments.
 - [ ] Cross-check all counts, hours, settings, tables, figures, citations, and terminology.
