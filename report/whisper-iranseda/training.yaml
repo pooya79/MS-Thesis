@@ -14,8 +14,6 @@ data:
     - FarsSpon_train_dev-long
     - cv-corpus-25.0-degraded-long-v2
     - fleurs-normalized
-    - youtube-persian-asr/normalized
-    - filimo-persian-asr/normalized
     - iranseda/audiobooks/segmented
   sample_rate: 16000
 
