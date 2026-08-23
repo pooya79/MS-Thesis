@@ -183,6 +183,11 @@ def test_helpers_prioritize_overrides_and_sample_deterministically(tmp_path: Pat
     assert resolved["transcriptions"] == root.resolve() / "transcriptions.jsonl"
 
     rows = [{"id": str(index)} for index in range(10)]
+    jsonl_path = tmp_path / "large.jsonl"
+    _write_jsonl(jsonl_path, rows)
+    assert namespace["read_jsonl"](jsonl_path, 3) == rows[:3]
+    assert len(namespace["ARTIFACT_RECORD_LIMITS"]) == 7
+
     assert namespace["sample_rows"](rows, 4, 42) == namespace["sample_rows"](rows, 4, 42)
     mixed = namespace["mixed_llm_sample"](rows[:5], rows[5:], 6, 42)
     assert len(mixed) == 6
