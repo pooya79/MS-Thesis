@@ -46,7 +46,7 @@
   ],
   "device": "cuda",
   "effective_config_path": "models/asr/fusion/evals/20260709-050354/config/eval.yaml",
-  "examples": 21854,
+  "examples": 21848,
   "gate_override": null,
   "processor": "openai/whisper-small",
   "split": "test",
@@ -54,7 +54,7 @@
   "view_usage": {
     "clean_view_weight_mean": 0.003939185834643946,
     "clean_view_weight_median": 0.003930253908038139,
-    "examples": 21854,
+    "examples": 21848,
     "noisy_view_weight_mean": 0.9960608141653561,
     "noisy_view_weight_median": 0.9960697460919619
   },
