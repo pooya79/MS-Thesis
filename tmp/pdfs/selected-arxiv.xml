@@ -1,0 +1,266 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<feed xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/" xmlns:arxiv="http://arxiv.org/schemas/atom" xmlns="http://www.w3.org/2005/Atom">
+  <id>https://arxiv.org/api/empdN7HwRDKLBWgqPDGu598ZTr8</id>
+  <title>arXiv Query: search_query=&amp;id_list=2510.09528,2505.21230,2607.11835,2601.04459,2508.12292,2207.04949,2512.17562,2506.04364,2411.05872&amp;start=0&amp;max_results=20</title>
+  <updated>2026-08-23T10:46:55Z</updated>
+  <link href="https://arxiv.org/api/query?search_query=&amp;start=0&amp;max_results=20&amp;id_list=2510.09528,2505.21230,2607.11835,2601.04459,2508.12292,2207.04949,2512.17562,2506.04364,2411.05872" type="application/atom+xml"/>
+  <opensearch:itemsPerPage>20</opensearch:itemsPerPage>
+  <opensearch:totalResults>9</opensearch:totalResults>
+  <opensearch:startIndex>0</opensearch:startIndex>
+  <entry>
+    <id>http://arxiv.org/abs/2510.09528v1</id>
+    <title>Accent-Invariant Automatic Speech Recognition via Saliency-Driven Spectrogram Masking</title>
+    <updated>2025-10-10T16:41:53Z</updated>
+    <link href="https://arxiv.org/abs/2510.09528v1" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/2510.09528v1" rel="related" type="application/pdf" title="pdf"/>
+    <summary>Pre-trained transformer-based models have significantly advanced automatic speech recognition (ASR), yet they remain sensitive to accent and dialectal variations, resulting in elevated word error rates (WER) in linguistically diverse languages such as English and Persian. To address this challenge, we propose an accent-invariant ASR framework that integrates accent and dialect classification into the recognition pipeline. Our approach involves training a spectrogram-based classifier to capture accent-specific cues, masking the regions most influential to its predictions, and using the masked spectrograms for data augmentation. This enhances the robustness of ASR models against accent variability. We evaluate the method using both English and Persian speech. For Persian, we introduce a newly collected dataset spanning multiple regional accents, establishing the first systematic benchmark for accent variation in Persian ASR that fills a critical gap in multilingual speech research and provides a foundation for future studies on low-resource, linguistically diverse languages. Experimental results with the Whisper model demonstrate that our masking and augmentation strategy yields substantial WER reductions in both English and Persian settings, confirming the effectiveness of the approach. This research advances the development of multilingual ASR systems that are resilient to accent and dialect diversity. Code and dataset are publicly available at: https://github.com/MH-Sameti/Accent_invariant_ASR</summary>
+    <category term="cs.CL" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="cs.SD" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="eess.AS" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2025-10-10T16:41:53Z</published>
+    <arxiv:comment>Submitted to ICASSP 2026</arxiv:comment>
+    <arxiv:primary_category term="cs.CL"/>
+    <author>
+      <name>Mohammad Hossein Sameti</name>
+    </author>
+    <author>
+      <name>Sepehr Harfi Moridani</name>
+    </author>
+    <author>
+      <name>Ali Zarean</name>
+    </author>
+    <author>
+      <name>Hossein Sameti</name>
+    </author>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/2512.17562v1</id>
+    <title>When De-noising Hurts: A Systematic Study of Speech Enhancement Effects on Modern Medical ASR Systems</title>
+    <updated>2025-12-19T13:32:19Z</updated>
+    <link href="https://arxiv.org/abs/2512.17562v1" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/2512.17562v1" rel="related" type="application/pdf" title="pdf"/>
+    <summary>Speech enhancement methods are commonly believed to improve the performance of automatic speech recognition (ASR) in noisy environments. However, the effectiveness of these techniques cannot be taken for granted in the case of modern large-scale ASR models trained on diverse, noisy data. We present a systematic evaluation of MetricGAN-plus-voicebank denoising on four state-of-the-art ASR systems: OpenAI Whisper, NVIDIA Parakeet, Google Gemini Flash 2.0, Parrotlet-a using 500 medical speech recordings under nine noise conditions. ASR performance is measured using semantic WER (semWER), a normalized word error rate (WER) metric accounting for domain-specific normalizations. Our results reveal a counterintuitive finding: speech enhancement preprocessing degrades ASR performance across all noise conditions and models. Original noisy audio achieves lower semWER than enhanced audio in all 40 tested configurations (4 models x 10 conditions), with degradations ranging from 1.1% to 46.6% absolute semWER increase. These findings suggest that modern ASR models possess sufficient internal noise robustness and that traditional speech enhancement may remove acoustic features critical for ASR. For practitioners deploying medical scribe systems in noisy clinical environments, our results indicate that preprocessing audio with noise reduction techniques might not just be computationally wasteful but also be potentially harmful to the transcription accuracy.</summary>
+    <category term="cs.SD" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="cs.AI" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="cs.LG" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="eess.AS" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2025-12-19T13:32:19Z</published>
+    <arxiv:comment>Technical Report</arxiv:comment>
+    <arxiv:primary_category term="cs.SD"/>
+    <author>
+      <name>Sujal Chondhekar</name>
+    </author>
+    <author>
+      <name>Vasanth Murukuri</name>
+    </author>
+    <author>
+      <name>Rushabh Vasani</name>
+    </author>
+    <author>
+      <name>Sanika Goyal</name>
+    </author>
+    <author>
+      <name>Rajshree Badami</name>
+    </author>
+    <author>
+      <name>Anushree Rana</name>
+    </author>
+    <author>
+      <name>Sanjana SN</name>
+    </author>
+    <author>
+      <name>Karthik Pandia</name>
+    </author>
+    <author>
+      <name>Sulabh Katiyar</name>
+    </author>
+    <author>
+      <name>Neha Jagadeesh</name>
+    </author>
+    <author>
+      <name>Sankalp Gulati</name>
+    </author>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/2601.04459v1</id>
+    <title>Latent-Level Enhancement with Flow Matching for Robust Automatic Speech Recognition</title>
+    <updated>2026-01-08T00:32:15Z</updated>
+    <link href="https://arxiv.org/abs/2601.04459v1" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/2601.04459v1" rel="related" type="application/pdf" title="pdf"/>
+    <summary>Noise-robust automatic speech recognition (ASR) has been commonly addressed by applying speech enhancement (SE) at the waveform level before recognition. However, speech-level enhancement does not always translate into consistent recognition improvements due to residual distortions and mismatches with the latent space of the ASR encoder. In this letter, we introduce a complementary strategy termed latent-level enhancement, where distorted representations are refined during ASR inference. Specifically, we propose a plug-and-play Flow Matching Refinement module (FM-Refiner) that operates on the output latents of a pretrained CTC-based ASR encoder. Trained to map imperfect latents-either directly from noisy inputs or from enhanced-but-imperfect speech-toward their clean counterparts, the FM-Refiner is applied only at inference, without fine-tuning ASR parameters. Experiments show that FM-Refiner consistently reduces word error rate, both when directly applied to noisy inputs and when combined with conventional SE front-ends. These results demonstrate that latent-level refinement via flow matching provides a lightweight and effective complement to existing SE approaches for robust ASR.</summary>
+    <category term="eess.AS" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="cs.SD" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2026-01-08T00:32:15Z</published>
+    <arxiv:comment>Accepted for publication in IEEE Signal Processing Letters</arxiv:comment>
+    <arxiv:primary_category term="eess.AS"/>
+    <author>
+      <name>Da-Hee Yang</name>
+    </author>
+    <author>
+      <name>Joon-Hyuk Chang</name>
+    </author>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/2607.11835v2</id>
+    <title>Stabilize-then-optimize: Feedback transformations as preconditioners in optimal control</title>
+    <updated>2026-07-14T07:12:22Z</updated>
+    <link href="https://arxiv.org/abs/2607.11835v2" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/2607.11835v2" rel="related" type="application/pdf" title="pdf"/>
+    <summary>Many numerical algorithms for optimal control leverage an elimination of the state via the control-to-state map such as condensed approaches or preconditioned conjugate gradient methods for the optimality system. As such, the norm of the control-to-state map directly enters the convergence estimates for these methods, e.g., via the condition number of the associated linear system. In this work we show that using feedback transformations one may reformulate the optimal control problem to decrease the norm of the (feedbacked) control-to-state map, leading to a drastic improvement of the involved condition numbers. We illustrate the abstract approach for ordinary and partial differential equations such as parabolic, hyperbolic or elliptic equations. For each of these problem classes we provide a constructive method to improve solution operator norms via feedbacks. Further, we showcase the efficacy of the method by means of various numerical examples with elliptic, parabolic and hyperbolic partial differential equations.</summary>
+    <category term="math.OC" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="math.NA" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2026-07-13T17:26:58Z</published>
+    <arxiv:comment>22 pages, 11 figures</arxiv:comment>
+    <arxiv:primary_category term="math.OC"/>
+    <author>
+      <name>Till Preuster</name>
+    </author>
+    <author>
+      <name>Manuel Schaller</name>
+    </author>
+    <author>
+      <name>Anton Schiela</name>
+    </author>
+    <author>
+      <name>Martin Stoll</name>
+    </author>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/2207.04949v1</id>
+    <title>pMCT: Patched Multi-Condition Training for Robust Speech Recognition</title>
+    <updated>2022-07-11T15:34:42Z</updated>
+    <link href="https://arxiv.org/abs/2207.04949v1" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/2207.04949v1" rel="related" type="application/pdf" title="pdf"/>
+    <summary>We propose a novel Patched Multi-Condition Training (pMCT) method for robust Automatic Speech Recognition (ASR). pMCT employs Multi-condition Audio Modification and Patching (MAMP) via mixing {\it patches} of the same utterance extracted from clean and distorted speech. Training using patch-modified signals improves robustness of models in noisy reverberant scenarios. Our proposed pMCT is evaluated on the LibriSpeech dataset showing improvement over using vanilla Multi-Condition Training (MCT). For analyses on robust ASR, we employed pMCT on the VOiCES dataset which is a noisy reverberant dataset created using utterances from LibriSpeech. In the analyses, pMCT achieves 23.1% relative WER reduction compared to the MCT.</summary>
+    <category term="eess.AS" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="cs.SD" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2022-07-11T15:34:42Z</published>
+    <arxiv:comment>Accepted at Interspeech 2022</arxiv:comment>
+    <arxiv:primary_category term="eess.AS"/>
+    <author>
+      <name>Pablo Peso Parada</name>
+    </author>
+    <author>
+      <name>Agnieszka Dobrowolska</name>
+    </author>
+    <author>
+      <name>Karthikeyan Saravanan</name>
+    </author>
+    <author>
+      <name>Mete Ozay</name>
+    </author>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/2505.21230v1</id>
+    <title>PSRB: A Comprehensive Benchmark for Evaluating Persian ASR Systems</title>
+    <updated>2025-05-27T14:14:55Z</updated>
+    <link href="https://arxiv.org/abs/2505.21230v1" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/2505.21230v1" rel="related" type="application/pdf" title="pdf"/>
+    <summary>Although Automatic Speech Recognition (ASR) systems have become an integral part of modern technology, their evaluation remains challenging, particularly for low-resource languages such as Persian. This paper introduces Persian Speech Recognition Benchmark(PSRB), a comprehensive benchmark designed to address this gap by incorporating diverse linguistic and acoustic conditions. We evaluate ten ASR systems, including state-of-the-art commercial and open-source models, to examine performance variations and inherent biases. Additionally, we conduct an in-depth analysis of Persian ASR transcriptions, identifying key error types and proposing a novel metric that weights substitution errors. This metric enhances evaluation robustness by reducing the impact of minor and partial errors, thereby improving the precision of performance assessment. Our findings indicate that while ASR models generally perform well on standard Persian, they struggle with regional accents, children's speech, and specific linguistic challenges. These results highlight the necessity of fine-tuning and incorporating diverse, representative training datasets to mitigate biases and enhance overall ASR performance. PSRB provides a valuable resource for advancing ASR research in Persian and serves as a framework for developing benchmarks in other low-resource languages. A subset of the PSRB dataset is publicly available at https://huggingface.co/datasets/PartAI/PSRB.</summary>
+    <category term="eess.AS" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="cs.AI" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="cs.CL" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="cs.SD" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2025-05-27T14:14:55Z</published>
+    <arxiv:comment>25 pages, 7 figures</arxiv:comment>
+    <arxiv:primary_category term="eess.AS"/>
+    <author>
+      <name>Nima Sedghiyeh</name>
+    </author>
+    <author>
+      <name>Sara Sadeghi</name>
+    </author>
+    <author>
+      <name>Reza Khodadadi</name>
+    </author>
+    <author>
+      <name>Farzin Kashani</name>
+    </author>
+    <author>
+      <name>Omid Aghdaei</name>
+    </author>
+    <author>
+      <name>Somayeh Rahimi</name>
+    </author>
+    <author>
+      <name>Mohammad Sadegh Safari</name>
+    </author>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/2508.12292v1</id>
+    <title>HuBERT-VIC: Improving Noise-Robust Automatic Speech Recognition of Speech Foundation Model via Variance-Invariance-Covariance Regularization</title>
+    <updated>2025-08-17T08:54:25Z</updated>
+    <link href="https://arxiv.org/abs/2508.12292v1" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/2508.12292v1" rel="related" type="application/pdf" title="pdf"/>
+    <summary>Noise robustness in speech foundation models (SFMs) has been a critical challenge, as most models are primarily trained on clean data and experience performance degradation when the models are exposed to noisy speech. To address this issue, we propose HuBERT-VIC, a noise-robust SFM with variance, in-variance, and covariance regularization (VICReg) objectives. These objectives adjust the statistics of noisy speech representations, enabling the model to capture diverse acoustic characteristics and improving the generalization ability across different types of noise. When applied to HuBERT, our model shows relative performance improvements of 23.3% on LibriSpeech test-clean and 13.2% on test-other, compared to the baseline model pre-trained on noisy speech.</summary>
+    <category term="cs.SD" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="cs.AI" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="eess.AS" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2025-08-17T08:54:25Z</published>
+    <arxiv:comment>Accepted at Interspeech 2025</arxiv:comment>
+    <arxiv:primary_category term="cs.SD"/>
+    <author>
+      <name>Hyebin Ahn</name>
+    </author>
+    <author>
+      <name>Kangwook Jang</name>
+    </author>
+    <author>
+      <name>Hoirin Kim</name>
+    </author>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/2411.05872v3</id>
+    <title>Dialectal Coverage And Generalization in Arabic Speech Recognition</title>
+    <updated>2025-05-29T18:48:44Z</updated>
+    <link href="https://arxiv.org/abs/2411.05872v3" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/2411.05872v3" rel="related" type="application/pdf" title="pdf"/>
+    <summary>Developing robust automatic speech recognition (ASR) systems for Arabic requires effective strategies to manage its diversity. Existing ASR systems mainly cover the modern standard Arabic (MSA) variety and few high-resource dialects, but fall short in coverage and generalization across the multitude of spoken variants. Code-switching with English and French is also common in different regions of the Arab world, which challenges the performance of monolingual Arabic models. In this work, we introduce a suite of ASR models optimized to effectively recognize multiple variants of spoken Arabic, including MSA, various dialects, and code-switching. We provide open-source pre-trained models that cover data from 17 Arabic-speaking countries, and fine-tuned MSA and dialectal ASR models that include at least 11 variants, as well as multi-lingual ASR models covering embedded languages in code-switched utterances. We evaluate ASR performance across these spoken varieties and demonstrate both coverage and performance gains compared to prior models.</summary>
+    <category term="cs.CL" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="cs.SD" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="eess.AS" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2024-11-07T22:23:30Z</published>
+    <arxiv:primary_category term="cs.CL"/>
+    <author>
+      <name>Amirbek Djanibekov</name>
+    </author>
+    <author>
+      <name>Hawau Olamide Toyin</name>
+    </author>
+    <author>
+      <name>Raghad Alshalan</name>
+    </author>
+    <author>
+      <name>Abdullah Alitr</name>
+    </author>
+    <author>
+      <name>Hanan Aldarmaki</name>
+    </author>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/2506.04364v1</id>
+    <title>Effects of Speaker Count, Duration, and Accent Diversity on Zero-Shot Accent Robustness in Low-Resource ASR</title>
+    <updated>2025-06-04T18:23:08Z</updated>
+    <link href="https://arxiv.org/abs/2506.04364v1" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/2506.04364v1" rel="related" type="application/pdf" title="pdf"/>
+    <summary>To build an automatic speech recognition (ASR) system that can serve everyone in the world, the ASR needs to be robust to a wide range of accents including unseen accents. We systematically study how three different variables in training data -- the number of speakers, the audio duration per each individual speaker, and the diversity of accents -- affect ASR robustness towards unseen accents in a low-resource training regime. We observe that for a fixed number of ASR training hours, it is more beneficial to increase the number of speakers (which means each speaker contributes less) than the number of hours contributed per speaker. We also observe that more speakers enables ASR performance gains from scaling number of hours. Surprisingly, we observe minimal benefits to prioritizing speakers with different accents when the number of speakers is controlled. Our work suggests that practitioners should prioritize increasing the speaker count in ASR training data composition for new languages.</summary>
+    <category term="cs.CL" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="cs.SD" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="eess.AS" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2025-06-04T18:23:08Z</published>
+    <arxiv:comment>Accepted to INTERSPEECH 2025</arxiv:comment>
+    <arxiv:primary_category term="cs.CL"/>
+    <author>
+      <name>Zheng-Xin Yong</name>
+    </author>
+    <author>
+      <name>Vineel Pratap</name>
+    </author>
+    <author>
+      <name>Michael Auli</name>
+    </author>
+    <author>
+      <name>Jean Maillard</name>
+    </author>
+  </entry>
+</feed>

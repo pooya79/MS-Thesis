@@ -1,0 +1,328 @@
+                                            ACCENT-INVARIANT AUTOMATIC SPEECH RECOGNITION VIA SALIENCY-DRIVEN
+                                                                 SPECTROGRAM MASKING
+
+                                                     Mohammad Hossein Sameti1 , Sepehr Harfi Moridani1 , Ali Zarean2 , Hossein Sameti1
+                                                             1
+                                                                 Department of Computer Engineering, Sharif University of Technology
+                                                                     2
+                                                                       Department of Computer Engineering, University of Tehran
+
+
+                                                                   ABSTRACT                                 shown remarkable performance in transcribing spoken lan-
+arXiv:2510.09528v1 [cs.CL] 10 Oct 2025
+
+
+
+
+                                                                                                            guage across diverse contexts, including noisy environments
+                                         Pre-trained transformer-based models have significantly ad-
+                                                                                                            and spontaneous conversations [3]. However, despite their
+                                         vanced automatic speech recognition (ASR), yet they re-
+                                                                                                            effectiveness, they indicate notable sensitivity to accent and
+                                         main sensitive to accent and dialectal variations, resulting
+                                                                                                            dialect variations, particularly in linguistically diverse lan-
+                                         in elevated word error rates (WER) in linguistically diverse
+                                                                                                            guages like English and Persian [4]. This sensitivity often
+                                         languages such as English and Persian. To address this chal-
+                                                                                                            results in high Word Error Rates (WER) when processing
+                                         lenge, we propose an accent-invariant ASR framework that
+                                                                                                            speech from speakers with non-native or regional accents,
+                                         integrates accent and dialect classification into the recogni-
+                                                                                                            thereby limiting the accessibility and effectiveness of ASR
+                                         tion pipeline. Our approach involves training a spectrogram-
+                                                                                                            technologies in global applications [5].
+                                         based classifier to capture accent-specific cues, masking the
+                                                                                                                Accents encapsulate unique phonetic and prosodic fea-
+                                         regions most influential to its predictions, and using the
+                                                                                                            tures that can obscure the underlying linguistic content, pos-
+                                         masked spectrograms for data augmentation. This enhances
+                                                                                                            ing a substantial challenge for ASR systems trained mostly on
+                                         the robustness of ASR models against accent variability. We
+                                                                                                            standard or homogeneous datasets. These variations can lead
+                                         evaluate the method using both English and Persian speech.
+                                                                                                            to misinterpretations of phonemes and intonations, which
+                                         For Persian, we introduce a newly collected dataset spanning
+                                                                                                            are crucial for accurate speech recognition. Traditional ap-
+                                         multiple regional accents, establishing the first systematic
+                                                                                                            proaches to mitigating accent-related discrepancies involve
+                                         benchmark for accent variation in Persian ASR that fills a
+                                                                                                            augmenting training datasets with diverse speech samples or
+                                         critical gap in multilingual speech research and provides a
+                                                                                                            fine-tuning models on accent-specific data [5, 6]. While these
+                                         foundation for future studies on low-resource, linguistically
+                                                                                                            methods can improve performance, they often demand exten-
+                                         diverse languages. Experimental results with the Whisper
+                                                                                                            sive data collection and may not generalize well to unseen
+                                         model demonstrate that our masking and augmentation strat-
+                                                                                                            accents or dialects, making them resource-intensive and less
+                                         egy yields substantial WER reductions in both English and
+                                                                                                            scalable.
+                                         Persian settings, confirming the effectiveness of the approach.
+                                                                                                                Our main contributions are as follows:
+                                         This research advances the development of multilingual ASR
+                                         systems that are resilient to accent and dialect diversity. Code
+                                                                                                            • We propose a saliency-driven spectrogram masking
+                                         and dataset are publicly available at: https://github.com/MH-
+                                                                                                              framework that leverages Grad-CAM to identify accent-
+                                         Sameti/Accent invariant ASR
+                                                                                                              sensitive regions and suppress them, enabling ASR models
+                                             Index Terms— Automatic Speech Recognition, Accent                to focus on accent-neutral linguistic features.
+                                         Invariant, Data Augmentation, Persian accents
+                                                                                                            • We design a lightweight, model-agnostic training strat-
+                                                                                                              egy that improves robustness to both known and unseen ac-
+                                                            1. INTRODUCTION
+                                                                                                              cents without requiring architectural modifications or full
+                                                                                                              model retraining.
+                                         Automatic Speech Recognition (ASR) systems have evolved
+                                         from providing transcription services for virtual assistants       • We introduce the Persian Dialect IDentification (PDID), a
+                                         to enabling sophisticated healthcare applications [1]. This          new multi-accent corpus covering 10 regional Persian ac-
+                                         development demonstrates the critical role of ASR systems            cents, providing the first systematic benchmark for Persian
+                                         in enhancing accessibility and efficiency across various do-         accent robustness.
+                                         mains. Recent advancements in transformer-based models,
+                                         such as the Whisper family, have significantly improved            • We conduct extensive experiments on English (LibriSpeech,
+                                         ASR performance by leveraging deep learning techniques               EdAcc, CommonAccent) and Persian (CommonVoice-
+                                         to capture complex speech patterns [2]. These models have            fa, PDID), showing that our method consistently reduces
+  WER/CER over SpecAugment baselines on accented speech [7–
+  10].
+
+                   2. RELATED WORK
+
+Recent advances in transformer-based ASR models such as
+Whisper [2] have significantly improved speech recognition
+across noisy and spontaneous conditions. However, these
+models still exhibit notable sensitivity to accent and dialectal
+variations, with disproportionately high WER for non-native
+and regional speakers [4].
+     More recently, large language model (LLM)-based ap-
+proaches have been integrated into ASR pipelines to enhance
+robustness under accented and conversational speech [11,12].
+While these methods leverage powerful contextual reasoning
+to improve recognition, they drastically increase computa-
+tional and memory costs, making them impractical for real-
+time or resource-constrained deployment. Moreover, their ef-
+fectiveness diminishes in low-resource languages where train-
+ing data and linguistic coverage are limited, reducing their
+utility for accent-heavy domains such as Persian.
+     A growing body of work focuses on enhancing accent
+robustness. Parameter-efficient adaptation methods like Mix-       Fig. 1. Overview of our accent suppression pipeline. First,
+ture of Accent-Specific LoRAs (MAS-LoRA) [13] deploy               the spectrogram is used to classify accents and generate a
+accent-specialized LoRA experts, achieving improvements            Grad-CAM saliency map highlighting accent-specific fea-
+on accented corpora without full model retraining. Com-            tures. Next, a masking strategy is applied to suppress these
+plementary to this, Qifusion-Net [14] introduces a layer-          accent-related regions while preserving essential information.
+adapted fusion strategy that dynamically integrates multi-         Finally, the modified spectrogram is fed into the ASR model
+accent acoustic features, reducing CER by over 20% on              to improve generalization across diverse accents.
+large-scale benchmarks.
+     Beyond architecture, spectrogram manipulation and aug-        such as local TV/radio and online platforms like Aparat
+mentation strategies remain underexplored for accent mitiga-       and YouTube. Following a pipeline similar to the EMILIA
+tion. While supervised contrastive learning has been applied       dataset [16], we applied preprocessing steps including voice
+to accented speech [15], direct masking of accent-related          activity detection, speaker diarization, silence-based seg-
+spectrogram regions has yet to be widely investigated—a gap        mentation, and speech–music separation. All samples were
+our work explicitly targets to inject gradient information to      standardized to 16kHz, mono-channel, 16-bit WAV format
+the pipeline.                                                      with normalized loudness, and segmented into 3–30 second
+                                                                   clips. After quality filtering, about 23 hours of clean accent-
+                   3. METHODOLOGY                                  labeled data remained from 200+ hours of raw speech, with
+                                                                   Tajiki, Shirazi, and Balochi accents included only in the test
+This section details the proposed methodology for enhanc-          set for robustness evaluation. Table 1 shows the distribution
+ing accent invariance in ASR systems. Our approach inte-           of samples and hours across the training accents.
+grates accent and dialect classification into the ASR training
+pipeline through a multi-step process involving spectrogram-       3.2. Accent Classification on Spectrograms
+based classification, Grad-CAM for the localization of accent
+features, spectrogram masking, and fine-tuning a pre-trained       To effectively identify accent-specific features within speech
+ASR model on augmented data. The following subsections             data, we first train an accent classifier using spectrogram rep-
+elaborate on each component of the method.                         resentations of the input audio. Spectrograms provide a com-
+                                                                   prehensive visualization of the frequency content of speech
+3.1. PDID Dataset                                                  signals over time, capturing both phonetic and prosodic char-
+                                                                   acteristics essential for distinguishing accents.
+We collected speech samples from 10 regional Persian ac-               We utilize a diverse dataset comprising speech samples
+cents (Isfahani, Yazdi, Lori, Kurdish, Balochi, Southern,          from various accents and dialects of English. The resulting
+Northern, Tajiki, Mashhadi, and Shirazi) using sources             spectrograms are normalized to ensure consistent input scales
+                                                                     3.3. Masking Strategy
+Table 1. Distribution of samples and hours across Persian
+accents in our dataset                                               To identify the regions in the spectrograms most indicative
+              Accent     Samples     Hours                           of accent-specific features, Gradient-weighted Class Activa-
+              Isfahani       996    ∼2.2 h                           tion Mapping (Grad-CAM) is utilized [18], which provides a
+              Yazdi         1114    ∼2.4 h                           visual explanation by highlighting the areas of the input that
+              Shomali       7632    ∼10.9 h                          significantly influence the classifier’s decision.
+              Jonubi        147     ∼1.1 h                               Specifically, for each input spectrogram, the gradients of
+              Lori          2220    ∼4.0 h                           the predicted accent class are computed concerning the fea-
+              Kurdish       125     ∼1.0 h                           ture maps of the last convolutional layer. These gradients are
+              Mashhadi       379    ∼1.5 h                           then global-average-pooled to obtain weights, combined with
+              Train        12613    ∼23.0 h                          the corresponding feature maps to produce a heatmap high-
+                                                                     lighting the salient regions associated with the accent classi-
+                                                                     fication.
+    Table 2. Number of Samples per Class in the Dataset                  A probabilistic masking strategy based on the normalized
+          Class            Number of Samples                         Grad-CAM scores is applied to suppress accent-specific fea-
+                                                                     tures in the spectrograms. After normalizing the Grad-CAM
+          Standard                 1000
+                                                                     activation map to obtain scores in the range [0, 1], denoted
+          Southern British          965                              as C(i, j) for pixel (i, j), a binary threshold mask T (i, j) is
+          Irish                     704                              defined as:
+          Italian                   443
+                                                                                                (
+                                                                                                  1,   if C(i, j) > 0.3
+          Egyptian                  346                                              T (i, j) =                                    (1)
+                                                                                                  0,   otherwise.
+          Vietnamese                332
+          Total                    3790                                   Next, random probability map R(i, j) is generated, where
+                                                                     each R(i, j) is sampled from a uniform distribution over
+                                                                     [0, 1]. Furthermore, U (A, B) declares sampling from a ran-
+                                                                     dom uniform distribution over [A, B]. The final mask M (i, j)
+for the classifier. Our accent classification dataset includes       is computed as:
+samples from the Edinburgh dataset for Southern British,                       
+Irish, Egyptian, and Italian and the LibriSpeech dataset for                   
+                                                                               1,    if T (i, j) = 0
+                                                                               
+Standard English [7, 8]. Table 2 contains the exact number of                  1,    if C(i, j) ≥ 0.7 and R(i, j) > 1
+                                                                               
+                                                                               
+                                                                               
+samples per accent.                                                  M (i, j) = 1,    if 0.5 ≤ C(i, j) < 0.7 and R(i, j) > U (0.7, 0.9)
+                                                                               
+                                                                               1,
+                                                                               
+                                                                                      if C(i, j) < 0.5 and R(i, j) > U (0, 0.05)
+    For accent classification, we utilize a convolutional neu-                 
+                                                                               
+                                                                               
+ral network (CNN) architecture consisting of multiple convo-                    0,    otherwise.
+                                                                               
+
+lutional layers with ReLU activations and max-pooling lay-                                                                          (2)
+ers to capture hierarchical acoustic features. More specifi-            In this strategy:
+cally, the architecture inputs normalized spectrograms of size
+80 × 3000, where 80 is the number of frequency bins and                  • If a pixel belongs to the region where T (i, j) = 0, it
+3000 is the number of time frames. Furthermore, four convo-                always remains unchanged.
+lutional layers with 32, 64, 128, and 256 filters of size 3 × 3,
+each followed by ReLU activation. Max-pooling layers with a              • If a pixel is located in a region that is considered
+kernel size of 2×2 are applied after certain layers and dropout            strongly accent-related (C(i, j) ≥ 0.7) all such pixels
+layers to prevent overfitting. Finally, a flattening layer is fol-         are masked.
+lowed by a fully connected layer with 128 neurons and ReLU
+                                                                         • If a pixel belongs to the region with a moderate to high
+activation, including dropout for regularization, and a fully
+                                                                           score (0.5 ≤ C(i, j) < 0.7), it is masked with a prob-
+connected layer maps to the number of accent classes in the
+                                                                           ability between 0.7 and 0.9 using a uniform probabil-
+dataset.
+                                                                           ity distribution (U (0.7, 0.9)), This ensures that nonrel-
+    The classifier is trained using the cross-entropy loss func-           evant pixels have a chance to be included in accent-
+tion and optimized with the Adam optimizer. Data augmen-                   related features, thereby reducing errors to some extent.
+tation techniques such as SpecAugment are applied during
+training to enhance the classifier’s robustness to variability           • If a pixel falls within the low to moderate score
+in speech signals [17]. The final accuracy of the classifier               (C(i, j) < 0.5), it is masked with a probability be-
+model is 74.6% for English accents. When applied with the                  tween U (0, 0.05), to account for accent-related regions
+same settings to our Persian accented dataset, the classifier              that might have been mistakenly assigned a low score,
+achieved accuracy of 95%,                                                  thus mitigating errors to some extent.
+Table 3. WER/CER results for English datasets (LibriSpeech, EdAcc, Unseen accents, and CommonAccent). WsPr t: Whis-
+per tiny, WsPrLS t: WhisperLS tiny, WsPrSAug t: SpecAugment baseline, ARWsPr t: ours
+                          Model                  LS      Accented     Unseen         CMA
+                          WsPr t [2]          8.0 / 3.2 42.0 / 37.7 34.7 / 26.7 62.2/38.5
+                          WsPrLS t [7]        7.0 / 2.7 26.1 / 16.0 29.3 / 19.4 36.3/18.5
+                          WsPrSAug t [17] 7.3 / 2.9 27.0 / 17.8 30.1 / 20.3 38.3/21.6
+                          ARWsPr t (ours) 6.8 / 2.7 23.4 / 15.1 26.7 / 17.9 34.8/18.2
+
+
+Table 4. WER/CER results for Persian datasets (CommonVoice-fa and regional accents). WsPr b: Whisper base,
+WsPrCV b/m: Whisper fine-tuned on CommonVoice (base/medium), SpcAug: SpecAugment, ARWsPr: ours , ARWsPr++:
+ours with GradCam++
+                                Model                Standard      Accented
+                                WsPr b [2]          186.4 / 209.4 128.6 / 93.6
+                                WsPrCV b [10]        62.2 / 25.4   97.2 / 61.7
+                                WsPrSpcAug b [17]    61.5 / 23.9   92.8 / 51.6
+                                ARWsPr++ b [19]      62.4 / 22.1   90.3 / 41.5
+                                ARWsPr b (ours)      61.9/ 21.1    88.8 / 40.6
+                                WsPr m [2]           68.3 / 32.1  129.5 / 89.1
+                                WsPrCV m [10]         30.7 / 8.9   70.4 / 42.5
+                                ARWsPr m (ours)       31.1 / 9.9   67.5 / 36.5
+
+
+   The masked spectrogram is then generated by element-            16, and 4 respectively, and 10 epochs. The evaluation met-
+wise multiplication of the original spectrogram with the mask      rics were WER and CER, complemented by ablations using
+M (i, j):                                                          Grad-CAM and Grad-CAM++ to generate accent-masking
+                                                                   policies. Results show that our method significantly outper-
+  Masked Spectrogram(i, j) = Spectrogram(i, j) × M (i, j).   (3)
+                                                                   forms both pre-trained Whisper and LibriSpeech fine-tuned
+  This probabilistic masking strategy ensures that accent-         baselines, as well as a SpecAugment baseline, particularly
+related features are suppressed while retaining essential lin-     in accented and unseen-accent settings [19]. For Persian,
+guistic information, enhancing the ASR model’s ability to          fine-tuning on CommonVoice (fa) improves performance, but
+generalize across different accents. As shown in Figure 1,         our accent-masked approach yields further gains across both
+the original spectrogram, Grad-CAM activation map, and             base and medium sizes.
+masked spectrogram illustrate the accent feature localization          Overall, these results confirm that accent-masked train-
+and suppression process.                                           ing consistently reduces CER and WER across both English
+    The masked spectrograms are combined with the primary          and Persian. The improvements are particularly strong on un-
+dataset to form an augmented training dataset. This augmen-        seen accents, highlighting the robustness and generalizability
+tation encourages the ASR model to learn accent-neutral rep-       of the proposed method.
+resentations by exposing it to accented and accent-suppressed
+versions of the same speech samples. Leveraging this dataset,                          5. CONCLUSION
+we fine-tune a state-of-the-art transformer-based ASR model
+to improve its robustness in accent and dialect variations.        We proposed a saliency-driven spectrogram masking frame-
+                                                                   work that uses Grad-CAM to suppress accent-specific fea-
+          4. EXPERIMENTS AND RESULTS                               tures and encourage ASR models to learn accent-neutral rep-
+                                                                   resentations. Our approach is lightweight, model-agnostic,
+We conducted experiments on both English and Persian               and improves robustness without architectural modifications
+datasets to evaluate the effectiveness of our proposed accent-     or full retraining. In addition, we introduced the PDID
+aware masking method. As Table 3 shows For English, we             dataset, the first multi-accent benchmark for Persian ASR
+used LibriSpeech, EdAcc, and CommonAccent, while Table             covering 10 regional dialects. Experiments on English and
+4 shows for Persian we used the CommonVoice (fa) sub-              Persian showed consistent WER/CER reductions, with rel-
+set along with our newly collected accented dataset PDID.          ative gains up to 14% on accented speech compared to
+Training was performed on NVIDIA RTX 3090 GPUs using               SpecAugment baselines. These results confirm that targeted
+AdamW optimizer, with learning rates of 1 × 10−5 for tiny          spectrogram masking is an effective strategy for accent-robust
+and 3 × 10−6 for base/medium models, batch sizes of 32,            ASR.
+                   6. REFERENCES                               [10] R. Ardila, M. Branson, K. Davis, L. Henretty, F. M.
+                                                                    Tyers, and G. Weber, “Common voice: A massively-
+[1] Matthew Perez, Duc Le, Amrit Romana, Elise Jones,               multilingual speech corpus,” in Proceedings of the
+    Keli Licata, and Emily Mower Provost, “Seq2seq for au-          12th Conference on Language Resources and Evalua-
+    tomatic paraphasia detection in aphasic speech,” arXiv          tion (LREC 2020), 2020, pp. 4211–4215.
+    preprint arXiv:2312.10518, 2023.
+                                                               [11] Bingshen Mu, Xucheng Wan, Naijun Zheng, Huan
+[2] Alec Radford, Jong Wook Kim, Tao Xu, Greg Brock-                Zhou, and Lei Xie, “Mmger: Multi-modal and multi-
+    man, Christine McLeavey, and Ilya Sutskever, “Robust            granularity generative error correction with llm for joint
+    speech recognition via large-scale weak supervision,” in        accent and speech recognition,” IEEE Signal Processing
+    International conference on machine learning. PMLR,             Letters, 2024.
+    2023, pp. 28492–28518.
+                                                               [12] Tianyi Xu, Hongjie Chen, Wang Qing, Lv Hang, Jian
+[3] Yingzhi Wang, Abdelmoumene Boumadane, and Ab-                   Kang, Li Jie, Zhennan Lin, Yongxiang Li, and Xie Lei,
+    delwahab Heba, “A fine-tuned wav2vec 2.0/hubert                 “Leveraging llm and self-supervised training models for
+    benchmark for speech emotion recognition, speaker ver-          speech recognition in chinese dialects: A comparative
+    ification and spoken language understanding,” arXiv             analysis,” arXiv preprint arXiv:2505.21138, 2025.
+    preprint arXiv:2111.02735, 2021.
+                                                               [13] Raphaël Bagat, Irina Illina, and Emmanuel Vincent,
+[4] Allison Koenecke, Andrew Nam, Emily Lake, Joe                   “Mixture of lora experts for low-resourced multi-
+    Nudell, Minnie Quartey, Zion Mengesha, Connor                   accent automatic speech recognition,” arXiv preprint
+    Toups, John Rickford, Dan Jurafsky, and Sharad Goel,            arXiv:2505.20006, 2025.
+    “Racial disparities in automated speech recognition,”
+                                                               [14] Jinming Chen, Jingyi Fang, Yuanzhong Zheng, Yaoxuan
+    Proceedings of the National Academy of Sciences, vol.
+                                                                    Wang, and Haojun Fei, “Qifusion-net: Layer-adapted
+    117, pp. 201915768, 03 2020.
+                                                                    stream/non-stream model for end-to-end multi-accent
+[5] Abhinav Jain, Minali Upreti, and Preethi Jyothi, “Im-           speech recognition,” arXiv preprint arXiv:2407.03026,
+    proved accented speech recognition using accent em-             2024.
+    beddings and multi-task learning.,” in Interspeech,
+                                                               [15] Tao Han, Hantao Huang, Ziang Yang, and Wei Han,
+    2018, pp. 2454–2458.
+                                                                    “Supervised contrastive learning for accented speech
+[6] Xian Shi, Fan Yu, Yizhou Lu, Daliang Liang, Yanmin              recognition,” ArXiv, vol. abs/2107.00921, 2021.
+    Qian, and Lei Xie, “The accented english speech recog-     [16] Haorui He, Zengqiang Shang, Chaoren Wang, Xuyuan
+    nition challenge 2020: Open datasets, tracks, baselines,        Li, Yicheng Gu, Hua Hua, Liwei Liu, Chen Yang, Jiaqi
+    results and methods,” in ICASSP 2021 - 2021 IEEE In-            Li, Peiyang Shi, et al., “Emilia: An extensive, multilin-
+    ternational Conference on Acoustics, Speech and Signal          gual, and diverse speech dataset for large-scale speech
+    Processing (ICASSP), 2021, pp. 6918–6922.                       generation,” in 2024 IEEE Spoken Language Technol-
+[7] Vassil Panayotov, Guoguo Chen, Daniel Povey, and San-           ogy Workshop (SLT). IEEE, 2024, pp. 885–890.
+    jeev Khudanpur, “Librispeech: An asr corpus based          [17] Daniel S Park, William Chan, Yu Zhang, Ekin D Chiu,
+    on public domain audio books,” in 2015 IEEE Inter-              and Quoc V Le, “Specaugment: A simple data augmen-
+    national Conference on Acoustics, Speech and Signal             tation method for automatic speech recognition,” arXiv
+    Processing (ICASSP), 2015, pp. 5206–5210.                       preprint arXiv:1904.08779, 2019.
+[8] Ramon Sanabria, Nikolay Bogoychev, Nina Markl, An-         [18] Ramprasaath R. Selvaraju, Michael Cogswell, Devi
+    drea Carmantini, Ondrej Klejch, and Peter Bell, “The            Das, and Dhruv Batra, “Grad-cam: Visual explanations
+    edinburgh international accents of english corpus: To-          from deep networks via gradient-based localization,” in
+    wards the democratization of english asr,” in ICASSP            2017 IEEE International Conference on Computer Vi-
+    2023-2023 IEEE International Conference on Acous-               sion (ICCV), 2017, pp. 618–626.
+    tics, Speech and Signal Processing (ICASSP). IEEE,
+    2023, pp. 1–5.                                             [19] Aditya Chattopadhay, Anirban Sarkar, Prantik
+                                                                    Howlader, and Vineeth N Balasubramanian, “Grad-
+[9] Juan Zuluaga-Gomez, Sara Ahmed, Danielius Vi-                   cam++: Generalized gradient-based visual explanations
+    sockas, and Cem Subakan, “Commonaccent: Explor-                 for deep convolutional networks,”     in 2018 IEEE
+    ing large acoustic pretrained models for accent clas-           Winter Conference on Applications of Computer Vision
+    sification based on common voice,” arXiv preprint               (WACV). Mar. 2018, IEEE.
+    arXiv:2305.18283, 2023.
+
