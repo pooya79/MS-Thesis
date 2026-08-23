@@ -195,6 +195,14 @@ def test_helpers_prioritize_overrides_and_sample_deterministically(tmp_path: Pat
     assert any(row in rows[5:] for row in mixed)
     assert namespace["mixed_llm_sample"]([], rows[5:], 3, 42) == namespace["mixed_llm_sample"]([], rows[5:], 3, 42)
 
+    llm_rows = [
+        {"target_whisper_text": "abcd", "cleaned_text": "abcd"},
+        {"target_whisper_text": "abcd", "parsed_response": {"cleaned_text": "abxd"}},
+        {"target_whisper_text": "abcd", "cleaned_text": "wxyz"},
+    ]
+    assert namespace["normalized_edit_distance"]("abcd", "abxd") == 0.25
+    assert namespace["filter_by_edit_distance"](llm_rows, 0.25) == [llm_rows[2]]
+
 
 def test_notebook_executes_against_saved_synthetic_artifacts(
     tmp_path: Path, monkeypatch: Any
@@ -212,7 +220,11 @@ def test_notebook_executes_against_saved_synthetic_artifacts(
             exec(compile(cell.source, f"{NOTEBOOK_PATH}:{cell.id}", "exec"), namespace)
 
     assert namespace["audit_record"]["rendered_prompt"].startswith("[TARGET WHISPER TEXT]")
-    assert {row.get("reason") for row in namespace["gallery"]} == {None, "model_uncertain"}
+    assert {row.get("reason") for row in namespace["gallery"]} == {"model_uncertain"}
+    assert all(
+        namespace["llm_edit_distance"](row) > namespace["MIN_LLM_EDIT_DISTANCE"]
+        for row in namespace["gallery"]
+    )
     assert namespace["refined_rows"] == [
         {"path": "book-1_000000.flac", "sentence": "سلام دنیا"}
     ]
