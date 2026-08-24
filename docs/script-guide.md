@@ -13,6 +13,9 @@ uv run python -m ml.speech_data.scripts.download_fleurs_persian --help
 uv run python -m ml.speech_data.scripts.download_persian_eval_sets --help
 uv run python -m ml.speech_data.scripts.download_youtube_persian_asr --help
 uv run python -m ml.speech_data.scripts.compute_audio_hours --help
+uv run python -m ml.speech_data.scripts.summarize_hf_audio_dataset --help
+uv run python -m ml.speech_data.scripts.upload_hf_audio_dataset --help
+bash ml/speech_data/scripts/upload_persian_audiobook_subset.sh --help
 uv run python -m ml.speech_data.scripts.prepare_common_voice_25 --help
 uv run python -m ml.speech_data.scripts.prepare_degradation_assets --help
 uv run python -m ml.speech_data.scripts.prepare_filimo_persian_asr --help
@@ -94,6 +97,121 @@ FLAC's PCM bit depth. Missing and unexpected output files fail verification.
 Pass the same `--splits` selection used for conversion when only a subset was
 converted. A successful command exits with status 0; a mismatch exits with
 status 1 and lists all detected failures.
+
+## Publish a refined audio dataset to Hugging Face
+
+See [`persian-audiobook-hugging-face-publication.md`](persian-audiobook-hugging-face-publication.md)
+for the recorded initial release, access policy, resumable-upload operations,
+and the checklist for publishing the later complete configuration.
+
+The uploader publishes a `path` / `sentence` TSV as standard Parquet audio
+shards. Each Parquet row contains a typed Hugging Face `Audio` value plus `id`,
+`sentence`, and available segmentation metadata. This avoids the Hub's
+recommended 100,000-file repository and 10,000-entry directory thresholds when
+the complete IranSeda collection is published.
+
+Only one bounded shard is assembled in the temporary directory at a time. It
+is uploaded, checkpointed, and immediately deleted, so the command never needs
+a second full copy of the dataset. The default 512 MiB source-audio target uses
+roughly that amount of temporary disk plus Parquet overhead.
+
+First extract exact statistics and a Markdown table for the dataset card:
+
+```bash
+uv run python -m ml.speech_data.scripts.summarize_hf_audio_dataset \
+  --manifest data/iranseda/250h-refinement-reports/refined_transcription.tsv \
+  --audio-root data/iranseda/audiobooks/segmented \
+  --segments-manifest data/iranseda/audiobooks/segmented/segments.jsonl \
+  --refinement-summary data/iranseda/250h-refinement-reports/refinement_summary.json \
+  --output data/iranseda/250h-refinement-reports/hf_dataset_summary.json \
+  --card-snippet-output data/iranseda/250h-refinement-reports/hf_card_statistics.md \
+  --workers 8
+```
+
+Validate the upload without contacting Hugging Face:
+
+```bash
+uv run python -m ml.speech_data.scripts.upload_hf_audio_dataset \
+  --manifest data/iranseda/250h-refinement-reports/refined_transcription.tsv \
+  --audio-root data/iranseda/audiobooks/segmented \
+  --segments-manifest data/iranseda/audiobooks/segmented/segments.jsonl \
+  --repo-id USER_OR_ORG/REPOSITORY \
+  --config-name refined-subset \
+  --state-file data/iranseda/hf-upload/refined-subset.state.json \
+  --temp-dir data/iranseda/hf-upload/tmp \
+  --dry-run
+```
+
+For a deliberately slow resumable upload, put a write-scoped token in
+`HF_TOKEN` without adding it to the command line, then upload a bounded number
+of shards per invocation:
+
+```bash
+uv run python -m ml.speech_data.scripts.upload_hf_audio_dataset \
+  --manifest data/iranseda/250h-refinement-reports/refined_transcription.tsv \
+  --audio-root data/iranseda/audiobooks/segmented \
+  --segments-manifest data/iranseda/audiobooks/segmented/segments.jsonl \
+  --repo-id USER_OR_ORG/REPOSITORY \
+  --config-name refined-subset \
+  --state-file data/iranseda/hf-upload/refined-subset.state.json \
+  --temp-dir data/iranseda/hf-upload/tmp \
+  --target-shard-mib 512 \
+  --row-group-size 100 \
+  --max-workers 1 \
+  --sleep-seconds 10 \
+  --max-shards 1 \
+  --card docs/huggingface/PersianAudiobook/README.md \
+  --card-asset Thesis/figs/long-audio-data-creation-pipeline.png
+```
+
+The checkpoint is written atomically after every successful commit. Rerunning
+the same command skips completed shards. `--max-gib` can bound transferred
+source audio instead of, or together with, `--max-shards`. Use `--create-repo --private` for
+the first run if the target does not yet exist; publish privately until the
+redistribution license and dataset card have been reviewed. Add `--card
+path/to/README.md` once the card is ready.
+
+The manifest checksum, segmentation-manifest checksum, shard size, row-group
+size, config, and split form an immutable shard plan. Keep the state file for
+resumes. When the complete refined TSV is available, use the same repository
+but a new config and state file, for example `--config-name refined-full` and
+`--state-file data/iranseda/hf-upload/refined-full.state.json`. The dataset card
+YAML should list both configs and their `CONFIG/train-*.parquet` patterns. A
+random 250-hour subset is not a prefix of the full manifest, so trying to append
+to its existing Parquet shards would silently duplicate or reorder examples;
+the uploader rejects that unsafe reuse.
+
+On the current IranSeda server, prepend `/home/user01/.local/bin` to `PATH` or
+invoke `/home/user01/.local/bin/uv` directly because non-interactive SSH shells
+do not include that directory.
+
+For the initial manually gated `PersianAudiobook` research upload, authenticate
+on the server first. The uploader makes the repository public but configures
+manual gating before committing any card or data file. Then start the prepared
+launcher in a named, logged `screen` session:
+
+The standard Hugging Face gate collects each requester's username and email.
+One additional single-line field asks for their intended use and research
+purpose. Keep approval in manual mode, contact each requester using that
+information, verify their permission, and only then accept or reject the
+pending request.
+
+```bash
+cd /home/user01/MS-Thesis
+/home/user01/MS-Thesis/.venv/bin/hf auth login
+mkdir -p data/iranseda/hf-upload
+screen -L -Logfile data/iranseda/hf-upload/screen.log \
+  -S persian-audiobook-upload \
+  bash ml/speech_data/scripts/upload_persian_audiobook_subset.sh \
+  OWNER/PersianAudiobook
+```
+
+Detach with `Ctrl-A`, then `D`. Reattach with
+`screen -r persian-audiobook-upload`. If the process is interrupted after a
+successful shard commit, rerun the same launcher: its state file skips every
+checkpointed shard. The launcher deliberately refuses a different repository
+name or a card missing the gated-research restriction. The generic Python uploader remains
+available for the later complete manifest with a new config and state file.
 
 ## IranSeda Raw Audio Discovery
 
