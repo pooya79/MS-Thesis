@@ -27,6 +27,7 @@ def test_asr_demo_has_one_cuda_cell_per_requested_model() -> None:
         "model-4",
         "model-5",
         "model-6",
+        "model-7",
     ]
 
     all_code = "\n".join(cell.source for cell in notebook.cells if cell.cell_type == "code")
@@ -37,10 +38,12 @@ def test_asr_demo_has_one_cuda_cell_per_requested_model() -> None:
         "Whisper-medium",
         "Normal FastConformer",
         "Multiconditioned FastConformer",
+        "Multiconditioned + IranSeda Whisper-small",
     ):
         assert expected in all_code
     assert "torch.cuda.is_available()" in all_code
     assert "torch.cuda.empty_cache()" in all_code
+    assert "models/asr/whisper-small-iranseda/runs/whisper-small-fa/best" in all_code
 
 
 def test_asr_demo_samples_each_configured_test_tsv_once_for_all_models() -> None:
@@ -61,3 +64,18 @@ def test_asr_demo_samples_each_configured_test_tsv_once_for_all_models() -> None
         "selected_examples" in helper_cell.source or "run_" in cell.source
         for cell in model_cells
     )
+
+
+def test_fusion_demo_mirrors_eval_inference_and_defaults_to_fp32() -> None:
+    notebook = _notebook()
+    configuration = next(cell for cell in notebook.cells if cell.id == "configuration")
+    helpers = next(cell for cell in notebook.cells if cell.id == "helpers")
+
+    assert "FUSION_MIXED_PRECISION = False" in configuration.source
+    assert "resolve_existing_path(FUSION_CHECKPOINT)" in helpers.source
+    assert "resolve_source(FUSION_BASE_ASR)" in helpers.source
+    assert "is_loadable_checkpoint(base_asr_checkpoint)" in helpers.source
+    assert "amp_enabled = use_amp(FUSION_MIXED_PRECISION, DEVICE)" in helpers.source
+    assert "configure_generation(model, WHISPER_LANGUAGE, WHISPER_TASK)" in helpers.source
+    assert "view_mode=view_mode, gate_override=gate_override" in helpers.source
+    assert "amp_enabled=True" not in helpers.source
