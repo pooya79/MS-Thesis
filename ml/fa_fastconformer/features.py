@@ -14,9 +14,9 @@ CONSTANT = 1e-5
 
 
 def normalize_batch(x, seq_len, normalize_type):
-    """Per-feature mean/std normalization over the valid (unpadded) time steps.
+    """Mean/std normalization over the valid (unpadded) feature frames.
 
-    Mirrors nemo ...preprocessing/features.py::normalize_batch for 'per_feature'.
+    Mirrors NeMo for the supported ``per_feature`` and ``all_features`` modes.
     """
     if normalize_type == "per_feature":
         x_mean = torch.zeros((seq_len.shape[0], x.shape[1]), dtype=x.dtype, device=x.device)
@@ -28,8 +28,20 @@ def normalize_batch(x, seq_len, normalize_type):
         # make sure x_std is not zero
         x_std += CONSTANT
         return (x - x_mean.unsqueeze(2)) / x_std.unsqueeze(2), x_mean, x_std
-    else:
-        raise NotImplementedError(f"normalize_type={normalize_type} not supported in this standalone port")
+    if normalize_type == "all_features":
+        x_mean = torch.zeros(seq_len.shape, dtype=x.dtype, device=x.device)
+        x_std = torch.zeros(seq_len.shape, dtype=x.dtype, device=x.device)
+        for i in range(x.shape[0]):
+            if seq_len[i] > 0:
+                x_mean[i] = x[i, :, : seq_len[i]].mean()
+                x_std[i] = x[i, :, : seq_len[i]].std()
+        x_std += CONSTANT
+        return (
+            (x - x_mean[:, None, None]) / x_std[:, None, None],
+            x_mean,
+            x_std,
+        )
+    raise NotImplementedError(f"normalize_type={normalize_type} not supported in this standalone port")
 
 
 class MelSpectrogramPreprocessor(nn.Module):
@@ -72,7 +84,9 @@ class MelSpectrogramPreprocessor(nn.Module):
         self.log = log
         self.log_zero_guard_type = log_zero_guard_type
         self.log_zero_guard_value = log_zero_guard_value
-        self.normalize = normalize
+        # NeMo treats only these two strings as enabled normalization modes;
+        # values such as "NA" intentionally disable normalization for streaming.
+        self.normalize = normalize if normalize in {"per_feature", "all_features"} else None
         self.pad_to = pad_to
         self.pad_value = pad_value
         self.nfilt = features
@@ -155,7 +169,7 @@ class MelSpectrogramPreprocessor(nn.Module):
             else:
                 raise ValueError(self.log_zero_guard_type)
 
-        # per-feature normalization over valid frames
+        # optional normalization over valid frames
         if self.normalize:
             x, _, _ = normalize_batch(x, out_len, self.normalize)
 
