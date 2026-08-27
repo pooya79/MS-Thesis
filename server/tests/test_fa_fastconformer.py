@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from ml.fa_fastconformer.conformer import ConvSubsampling
+from ml.fa_fastconformer.conformer import ConformerEncoder, ConvSubsampling
 from ml.fa_fastconformer.features import MelSpectrogramPreprocessor, normalize_batch
 
 
@@ -64,3 +64,38 @@ def test_all_features_normalization_matches_nemo_mode() -> None:
 
     assert normalized[0, :, :4].mean().item() == pytest.approx(0.0, abs=1e-6)
     assert normalized[1, :, :3].mean().item() == pytest.approx(0.0, abs=1e-6)
+
+
+def test_encoder_selects_first_nested_attention_context_for_inference() -> None:
+    encoder = ConformerEncoder(
+        feat_in=80,
+        n_layers=1,
+        d_model=16,
+        subsampling_factor=8,
+        subsampling_conv_channels=8,
+        n_heads=4,
+        conv_kernel_size=3,
+        att_context_size=([70, 13], [70, 6], [70, 0]),
+        causal_downsampling=True,
+    ).eval()
+    features = torch.randn(2, 80, 33)
+    lengths = torch.tensor([33, 25], dtype=torch.long)
+
+    encoded, encoded_lengths = encoder(features, lengths)
+
+    assert encoder.att_context_size == [70, 13]
+    assert encoded.shape == (2, 16, 5)
+    assert encoded_lengths.tolist() == [5, 4]
+
+
+@pytest.mark.parametrize("context", [[[-1]], [70], [70, "13"]])
+def test_encoder_rejects_malformed_attention_context(context: list[object]) -> None:
+    with pytest.raises(ValueError, match="att_context_size"):
+        ConformerEncoder(
+            feat_in=80,
+            n_layers=1,
+            d_model=16,
+            n_heads=4,
+            conv_kernel_size=3,
+            att_context_size=context,
+        )

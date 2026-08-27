@@ -373,7 +373,15 @@ class ConformerEncoder(nn.Module):
         d_ff = d_model * ff_expansion_factor
         self.d_model = d_model
         self.xscale = math.sqrt(d_model) if xscaling else None
-        self.att_context_size = list(att_context_size)
+        contexts = list(att_context_size) if att_context_size else [-1, -1]
+        # NeMo accepts either one [left, right] pair or several pairs. During
+        # validation/inference it deterministically uses the first configured
+        # pair; additional pairs are sampled only while training.
+        if contexts and isinstance(contexts[0], (list, tuple)):
+            contexts = list(contexts[0])
+        if len(contexts) != 2 or not all(isinstance(value, int) for value in contexts):
+            raise ValueError("att_context_size must be [left, right] or a list of [left, right] pairs")
+        self.att_context_size = contexts
         if subsampling_conv_channels is None or subsampling_conv_channels == -1:
             subsampling_conv_channels = d_model
 
