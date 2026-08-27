@@ -111,7 +111,23 @@ def normalize_rows(
     return normalized_rows
 
 
-def build_splits(source_root: Path) -> tuple[dict[str, list[PreparedRow]], Audit]:
+def preserve_rows(rows: Iterable[FleursRow]) -> list[PreparedRow]:
+    """Keep every source row and transcription unchanged."""
+    return [
+        PreparedRow(
+            path=wav_name(row.path),
+            sentence=row.sentence,
+            source_audio_path=row.source_audio_path,
+        )
+        for row in rows
+    ]
+
+
+def build_splits(
+    source_root: Path,
+    *,
+    normalize_transcriptions: bool = True,
+) -> tuple[dict[str, list[PreparedRow]], Audit]:
     source_rows = {split: read_source_jsonl(source_root, split) for split in SOURCE_TO_OUTPUT_SPLIT}
     audit = Audit(
         source_train_rows=len(source_rows["train"]),
@@ -119,11 +135,18 @@ def build_splits(source_root: Path) -> tuple[dict[str, list[PreparedRow]], Audit
         source_test_rows=len(source_rows["test"]),
     )
 
-    splits = {
-        "train": normalize_rows(source_rows["train"], audit),
-        "dev": normalize_rows(source_rows["validation"], audit),
-        "test": normalize_rows(source_rows["test"], audit, keep_rejected_with_raw_text=True),
-    }
+    if normalize_transcriptions:
+        splits = {
+            "train": normalize_rows(source_rows["train"], audit),
+            "dev": normalize_rows(source_rows["validation"], audit),
+            "test": normalize_rows(source_rows["test"], audit, keep_rejected_with_raw_text=True),
+        }
+    else:
+        splits = {
+            "train": preserve_rows(source_rows["train"]),
+            "dev": preserve_rows(source_rows["validation"]),
+            "test": preserve_rows(source_rows["test"]),
+        }
     audit.final_train_rows = len(splits["train"])
     audit.final_dev_rows = len(splits["dev"])
     audit.final_test_rows = len(splits["test"])
@@ -157,6 +180,12 @@ def convert_clip(source_path: Path, output_path: Path) -> None:
     )
 
 
+def copy_clip(source_path: Path, output_path: Path) -> None:
+    """Copy an exported FLEURS WAV without decoding or changing its bytes."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source_path, output_path)
+
+
 def convert_clip_job(paths: tuple[str, str]) -> None:
     source_path, output_path = paths
     convert_clip(Path(source_path), Path(output_path))
@@ -171,10 +200,10 @@ def convert_required_clips(
     show_progress: bool = True,
     workers: int = 1,
 ) -> None:
-    if converter is convert_clip and shutil.which("ffmpeg") is None:
-        raise RuntimeError("ffmpeg is required to convert FLEURS clips to WAV")
     if workers < 1:
         raise ValueError("workers must be >= 1")
+    if converter is convert_clip and shutil.which("ffmpeg") is None:
+        raise RuntimeError("ffmpeg is required to convert FLEURS clips to WAV")
 
     unique_rows: dict[str, Path] = {}
     for row in rows:
@@ -225,22 +254,31 @@ def print_audit(audit: Audit) -> None:
     print(f"  wav skipped existing: {audit.wav_skipped_existing}")
 
 
-def prepare_fleurs_persian(source_root: Path, output_root: Path, *, workers: int = 1) -> Audit:
-    splits, audit = build_splits(source_root)
+def prepare_fleurs_persian(
+    source_root: Path,
+    output_root: Path,
+    *,
+    workers: int = 1,
+    normalize: bool = True,
+) -> Audit:
+    splits, audit = build_splits(source_root, normalize_transcriptions=normalize)
     output_root.mkdir(parents=True, exist_ok=True)
     for split, rows in splits.items():
         write_prepared_split_tsv(output_root / f"{split}.tsv", rows)
 
     all_rows = [row for rows in splits.values() for row in rows]
-    convert_required_clips(output_root, all_rows, audit, workers=workers)
+    if normalize:
+        convert_required_clips(output_root, all_rows, audit, workers=workers)
+    else:
+        convert_required_clips(output_root, all_rows, audit, converter=copy_clip, workers=workers)
     return audit
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Prepare normalized Persian FLEURS data with train/dev/test TSVs "
-            "and mono 16 kHz WAV clips."
+            "Prepare Persian FLEURS with train/dev/test TSVs and a clips directory, "
+            "with optional transcript and audio normalization."
         )
     )
     parser.add_argument(
@@ -253,7 +291,7 @@ def main(argv: list[str] | None = None) -> int:
         "--output-root",
         type=Path,
         default=Path("data/fleurs/fa_ir/normalized"),
-        help="Output directory for train.tsv, dev.tsv, test.tsv, and converted WAV clips.",
+        help="Output directory for train.tsv, dev.tsv, test.tsv, and WAV clips.",
     )
     parser.add_argument(
         "--workers",
@@ -261,9 +299,22 @@ def main(argv: list[str] | None = None) -> int:
         default=max(1, min(8, os.cpu_count() or 1)),
         help="Number of parallel ffmpeg conversion worker processes. Use 1 for single-process conversion.",
     )
+    parser.add_argument(
+        "--no-normalize",
+        action="store_true",
+        help=(
+            "Keep every FLEURS row and transcription verbatim and copy source WAV bytes "
+            "unchanged; only create the standard train/dev/test TSV and clips layout."
+        ),
+    )
     args = parser.parse_args(argv)
 
-    audit = prepare_fleurs_persian(args.source_root, args.output_root, workers=args.workers)
+    audit = prepare_fleurs_persian(
+        args.source_root,
+        args.output_root,
+        workers=args.workers,
+        normalize=not args.no_normalize,
+    )
     print_audit(audit)
     return 0
 

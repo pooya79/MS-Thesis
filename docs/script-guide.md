@@ -478,6 +478,17 @@ uv run python -m ml.speech_data.scripts.prepare_fleurs_persian \
   --workers 4
 ```
 
+To retain every FLEURS row and transcription exactly as exported, and copy the
+source WAV files without re-encoding them, pass `--no-normalize`. This mode only
+maps `validation` to `dev` and creates the standard TSV/`clips/` layout:
+
+```bash
+uv run python -m ml.speech_data.scripts.prepare_fleurs_persian \
+  --source-root data/fleurs/fa_ir/source \
+  --output-root data/fleurs/fa_ir/structured \
+  --no-normalize
+```
+
 ## PerSets YouTube and Filimo Preparation
 
 Prepare each downloaded PerSets corpus as a train-only project ASR dataset. The

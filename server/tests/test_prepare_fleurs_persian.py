@@ -84,6 +84,30 @@ def test_build_splits_maps_validation_to_dev_and_normalizes_rows(tmp_path: Path)
     assert audit.test_fallback_rows == 1
 
 
+def test_build_splits_can_preserve_every_row_and_transcription_verbatim(tmp_path: Path) -> None:
+    source_root = tmp_path / "source"
+    build_fake_source(source_root)
+
+    splits, audit = build_splits(source_root, normalize_transcriptions=False)
+
+    assert [row.sentence for row in splits["train"]] == [
+        "سلام! «دوست»؛",
+        "hello سلام",
+    ]
+    assert [row.sentence for row in splits["dev"]] == ["خب ، تو چیكار می كنی؟"]
+    assert [row.sentence for row in splits["test"]] == [
+        "این تست است.",
+        "hello تست؟.",
+    ]
+    assert audit.final_train_rows == audit.source_train_rows == 2
+    assert audit.final_dev_rows == audit.source_validation_rows == 1
+    assert audit.final_test_rows == audit.source_test_rows == 2
+    assert audit.normalized_rows == 0
+    assert audit.changed_rows == 0
+    assert audit.discarded_rows == 0
+    assert audit.test_fallback_rows == 0
+
+
 def test_prepare_fleurs_persian_writes_common_voice_style_tsvs_and_clips(tmp_path: Path) -> None:
     source_root = tmp_path / "source"
     output_root = tmp_path / "normalized"
@@ -136,6 +160,29 @@ def test_prepare_fleurs_persian_runs_end_to_end_with_injected_converter(tmp_path
     assert audit.final_test_rows == 2
     assert audit.wav_converted == 4
     assert (output_root / "dev.tsv").exists()
+
+
+def test_prepare_fleurs_persian_no_normalize_only_restructures_source(tmp_path: Path) -> None:
+    source_root = tmp_path / "source"
+    output_root = tmp_path / "structured"
+    build_fake_source(source_root)
+
+    audit = prepare_fleurs_persian(source_root, output_root, normalize=False)
+
+    assert read_simple_tsv(output_root / "train.tsv") == [
+        {"path": "train-a.wav", "sentence": "سلام! «دوست»؛"},
+        {"path": "train-skip.wav", "sentence": "hello سلام"},
+    ]
+    assert read_simple_tsv(output_root / "dev.tsv") == [
+        {"path": "valid-a.wav", "sentence": "خب ، تو چیكار می كنی؟"}
+    ]
+    assert read_simple_tsv(output_root / "test.tsv") == [
+        {"path": "test-a.wav", "sentence": "این تست است."},
+        {"path": "test-reject.wav", "sentence": "hello تست؟."},
+    ]
+    assert (output_root / "clips" / "train-a.wav").read_bytes() == b"audio-train-a"
+    assert (output_root / "clips" / "train-skip.wav").read_bytes() == b"audio-train-skip"
+    assert audit.wav_converted == 5
 
 
 def test_convert_required_clips_converts_unique_targets_and_skips_existing(tmp_path: Path) -> None:
