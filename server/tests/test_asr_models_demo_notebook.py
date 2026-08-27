@@ -79,3 +79,15 @@ def test_fusion_demo_mirrors_eval_inference_and_defaults_to_fp32() -> None:
     assert "configure_generation(model, WHISPER_LANGUAGE, WHISPER_TASK)" in helpers.source
     assert "view_mode=view_mode, gate_override=gate_override" in helpers.source
     assert "amp_enabled=True" not in helpers.source
+
+
+def test_transcription_tables_show_complete_wrapped_text() -> None:
+    notebook = _notebook()
+    setup = next(cell for cell in notebook.cells if cell.id == "setup")
+    helpers = next(cell for cell in notebook.cells if cell.id == "helpers")
+    sampling = next(cell for cell in notebook.cells if cell.id == "sample-test-rows")
+
+    assert "pd.set_option('display.max_colwidth', None)" in setup.source
+    assert "subset=['reference', 'hypothesis']" in helpers.source
+    assert "'white-space': 'pre-wrap'" in helpers.source
+    assert "subset=['reference']" in sampling.source
