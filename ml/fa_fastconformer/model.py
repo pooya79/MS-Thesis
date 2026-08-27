@@ -169,6 +169,7 @@ class FastConformerCTC(nn.Module):
             xscaling=ecfg.get("xscaling", True),
             pos_emb_max_len=ecfg.get("pos_emb_max_len", 5000),
             att_context_size=tuple(ecfg.get("att_context_size", [-1, -1])),
+            causal_downsampling=ecfg.get("causal_downsampling", False),
         )
 
         # CTC head dims come from aux_ctc.decoder

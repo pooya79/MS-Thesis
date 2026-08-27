@@ -39,39 +39,75 @@ def calc_length(lengths, all_paddings, kernel_size, stride, ceil_mode, repeat_nu
     return lengths.to(torch.int)
 
 
+class CausalConv2D(nn.Conv2d):
+    """NeMo-compatible causal Conv2D with asymmetric explicit padding."""
+
+    def __init__(self, *args, kernel_size: int, stride: int, **kwargs):
+        self._left_padding = kernel_size - 1
+        self._right_padding = stride - 1
+        super().__init__(*args, kernel_size=kernel_size, stride=stride, padding=0, **kwargs)
+
+    def forward(self, x):
+        padding = (
+            self._left_padding,
+            self._right_padding,
+            self._left_padding,
+            self._right_padding,
+        )
+        return super().forward(F.pad(x, padding))
+
+
 class ConvSubsampling(nn.Module):
     """dw_striding subsampling. Conv module is a plain Sequential whose child
     indices match NeMo's MaskedConvSequential, so weights map 1:1."""
 
-    def __init__(self, subsampling_factor, feat_in, feat_out, conv_channels):
+    def __init__(
+        self,
+        subsampling_factor,
+        feat_in,
+        feat_out,
+        conv_channels,
+        causal_downsampling=False,
+    ):
         super().__init__()
         self._sampling_num = int(math.log(subsampling_factor, 2))
         self._stride = 2
         self._kernel_size = 3
         self._ceil_mode = False
-        self._left_padding = (self._kernel_size - 1) // 2
-        self._right_padding = (self._kernel_size - 1) // 2
+        if causal_downsampling:
+            self._left_padding = self._kernel_size - 1
+            self._right_padding = self._stride - 1
+        else:
+            self._left_padding = (self._kernel_size - 1) // 2
+            self._right_padding = (self._kernel_size - 1) // 2
+
+        def strided_conv(in_channels, out_channels, *, groups=1):
+            if causal_downsampling:
+                return CausalConv2D(
+                    in_channels,
+                    out_channels,
+                    kernel_size=self._kernel_size,
+                    stride=self._stride,
+                    groups=groups,
+                )
+            return nn.Conv2d(
+                in_channels,
+                out_channels,
+                self._kernel_size,
+                stride=self._stride,
+                padding=self._left_padding,
+                groups=groups,
+            )
 
         in_channels = 1
         layers = []
         # Layer 1: full conv
-        layers.append(
-            nn.Conv2d(in_channels, conv_channels, self._kernel_size, stride=self._stride, padding=self._left_padding)
-        )
+        layers.append(strided_conv(in_channels, conv_channels))
         in_channels = conv_channels
         layers.append(nn.ReLU(True))
         # remaining: depthwise + pointwise
         for _ in range(self._sampling_num - 1):
-            layers.append(
-                nn.Conv2d(
-                    in_channels,
-                    in_channels,
-                    self._kernel_size,
-                    stride=self._stride,
-                    padding=self._left_padding,
-                    groups=in_channels,
-                )
-            )
+            layers.append(strided_conv(in_channels, in_channels, groups=in_channels))
             layers.append(nn.Conv2d(in_channels, conv_channels, 1, stride=1, padding=0, groups=1))
             layers.append(nn.ReLU(True))
             in_channels = conv_channels
@@ -104,8 +140,16 @@ class ConvSubsampling(nn.Module):
             x = x * mask
             x = layer(x)
             if isinstance(layer, nn.Conv2d) and layer.stride != (1, 1):
-                p = layer.padding
-                cur = torch.div(cur + p[0] + p[0] - layer.kernel_size[0], layer.stride[0], rounding_mode="floor") + 1
+                left_padding = getattr(layer, "_left_padding", layer.padding[0])
+                right_padding = getattr(layer, "_right_padding", layer.padding[0])
+                cur = (
+                    torch.div(
+                        cur + left_padding + right_padding - layer.kernel_size[0],
+                        layer.stride[0],
+                        rounding_mode="floor",
+                    )
+                    + 1
+                )
                 mask = self._mask(x, cur.long())
         x = x * mask
         b, c, t, f = x.size()
@@ -323,6 +367,7 @@ class ConformerEncoder(nn.Module):
         xscaling=True,
         pos_emb_max_len=5000,
         att_context_size=(-1, -1),
+        causal_downsampling=False,
     ):
         super().__init__()
         d_ff = d_model * ff_expansion_factor
@@ -332,7 +377,13 @@ class ConformerEncoder(nn.Module):
         if subsampling_conv_channels is None or subsampling_conv_channels == -1:
             subsampling_conv_channels = d_model
 
-        self.pre_encode = ConvSubsampling(subsampling_factor, feat_in, d_model, subsampling_conv_channels)
+        self.pre_encode = ConvSubsampling(
+            subsampling_factor,
+            feat_in,
+            d_model,
+            subsampling_conv_channels,
+            causal_downsampling=causal_downsampling,
+        )
         self.pos_enc = RelPositionalEncoding(d_model, xscale=self.xscale, max_len=pos_emb_max_len)
 
         self.layers = nn.ModuleList(
