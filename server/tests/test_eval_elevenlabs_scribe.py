@@ -38,8 +38,6 @@ def make_dataset(root: Path) -> Path:
 class FakeElevenLabsClient:
     predictions = {0: "سلام، دنیا!", 1: "کتاب خوب"}
     calls: list[int] = []
-    credits = 100
-    increment = 10
 
     def __init__(self, api_key: str, **kwargs: Any) -> None:
         assert api_key == "test-key"
@@ -50,20 +48,11 @@ class FakeElevenLabsClient:
     def __exit__(self, *args: Any) -> None:
         return None
 
-    def subscription(self) -> dict[str, Any]:
-        return {
-            "tier": "starter",
-            "character_count": self.credits,
-            "character_limit": 1000,
-            "current_overage": {"amount": "0", "currency": "usd"},
-        }
-
     def transcribe(self, model: str, row: EvalRow, language: str, seed: int) -> dict[str, Any]:
         assert model == "scribe_v2"
         assert language == "fa"
         assert seed == 0
         self.calls.append(row.index)
-        type(self).credits += self.increment
         return {
             "text": self.predictions[row.index],
             "language_code": "fa",
@@ -75,11 +64,9 @@ class FakeElevenLabsClient:
 
 def reset_fake() -> None:
     FakeElevenLabsClient.calls = []
-    FakeElevenLabsClient.credits = 100
-    FakeElevenLabsClient.increment = 10
 
 
-def test_evaluation_writes_predictions_metrics_credits_cost_and_provider_response(
+def test_evaluation_writes_predictions_metrics_cost_and_provider_response(
     tmp_path: Path,
 ) -> None:
     reset_fake()
@@ -88,7 +75,6 @@ def test_evaluation_writes_predictions_metrics_credits_cost_and_provider_respons
     exit_code = evaluate(
         dataset_root=make_dataset(tmp_path / "mixed"),
         output_dir=output,
-        max_run_credits=100,
         max_estimated_cost=Decimal("1"),
         api_key="test-key",
         client_factory=FakeElevenLabsClient,
@@ -103,8 +89,6 @@ def test_evaluation_writes_predictions_metrics_credits_cost_and_provider_respons
     assert [record["prediction"] for record in records] == ["سلام، دنیا!", "کتاب خوب"]
     assert [record["source_dataset"] for record in records] == ["dataset-a", "dataset-b"]
     assert records[0]["prediction_normalized"] == "سلام دنیا"
-    assert records[0]["observed_credit_delta"] == 10
-    assert records[0]["account_credits_after"]["used"] == 110
     assert records[0]["estimated_cost_usd"] == pytest.approx(0.22 / 60)
     assert records[0]["provider_response"]["language_code"] == "fa"
     assert records[0]["response_headers"]["request-id"] == "req-0"
@@ -112,18 +96,16 @@ def test_evaluation_writes_predictions_metrics_credits_cost_and_provider_respons
     metrics = json.loads((output / "metrics.json").read_text(encoding="utf-8"))
     assert metrics["complete"] is True
     assert metrics["overall"]["wer"] == 0
-    assert metrics["overall"]["observed_credit_delta"] == 20
     assert {item["source_dataset"] for item in metrics["datasets"]} == {
         "dataset-a",
         "dataset-b",
     }
-    assert metrics["latest_account_credits"]["used"] == 120
     assert (output / "predictions.tsv").is_file()
     config_text = (output / "run_config.json").read_text(encoding="utf-8")
     assert "test-key" not in config_text
 
 
-def test_credit_guard_stops_and_resume_skips_checkpointed_rows(tmp_path: Path) -> None:
+def test_cost_guard_stops_and_resume_skips_checkpointed_rows(tmp_path: Path) -> None:
     reset_fake()
     dataset = make_dataset(tmp_path / "mixed")
     output = tmp_path / "results"
@@ -131,8 +113,7 @@ def test_credit_guard_stops_and_resume_skips_checkpointed_rows(tmp_path: Path) -
     stopped = evaluate(
         dataset_root=dataset,
         output_dir=output,
-        max_run_credits=10,
-        max_estimated_cost=Decimal("1"),
+        max_estimated_cost=Decimal("0.004"),
         api_key="test-key",
         client_factory=FakeElevenLabsClient,
         duration_reader=lambda _: 60.0,
@@ -143,7 +124,6 @@ def test_credit_guard_stops_and_resume_skips_checkpointed_rows(tmp_path: Path) -
     resumed = evaluate(
         dataset_root=dataset,
         output_dir=output,
-        max_run_credits=100,
         max_estimated_cost=Decimal("1"),
         resume=True,
         api_key="test-key",
@@ -159,7 +139,6 @@ def test_estimated_cost_guard_stops_before_sending_clip(tmp_path: Path) -> None:
     exit_code = evaluate(
         dataset_root=make_dataset(tmp_path / "mixed"),
         output_dir=tmp_path / "results",
-        max_run_credits=100,
         max_estimated_cost=Decimal("0.001"),
         api_key="test-key",
         client_factory=FakeElevenLabsClient,
@@ -169,23 +148,7 @@ def test_estimated_cost_guard_stops_before_sending_clip(tmp_path: Path) -> None:
     assert FakeElevenLabsClient.calls == []
 
 
-def test_minimum_account_remaining_guard_stops_before_request(tmp_path: Path) -> None:
-    reset_fake()
-    exit_code = evaluate(
-        dataset_root=make_dataset(tmp_path / "mixed"),
-        output_dir=tmp_path / "results",
-        max_run_credits=100,
-        max_estimated_cost=Decimal("1"),
-        min_account_remaining_credits=900,
-        api_key="test-key",
-        client_factory=FakeElevenLabsClient,
-        duration_reader=lambda _: 60.0,
-    )
-    assert exit_code == 2
-    assert FakeElevenLabsClient.calls == []
-
-
-def test_client_uses_subscription_and_multipart_scribe_v2_endpoints(tmp_path: Path) -> None:
+def test_client_uses_only_multipart_scribe_v2_endpoint(tmp_path: Path) -> None:
     audio = tmp_path / "clip.wav"
     audio.write_bytes(b"audio-bytes")
     requests: list[httpx.Request] = []
@@ -193,11 +156,6 @@ def test_client_uses_subscription_and_multipart_scribe_v2_endpoints(tmp_path: Pa
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
         assert request.headers["xi-api-key"] == "secret"
-        if request.url.path.endswith("/user/subscription"):
-            return httpx.Response(
-                200,
-                json={"character_count": 25, "character_limit": 100, "tier": "free"},
-            )
         body = request.content
         assert b'name="model_id"' in body and b"scribe_v2" in body
         assert b'name="language_code"' in body and b"fa" in body
@@ -215,15 +173,11 @@ def test_client_uses_subscription_and_multipart_scribe_v2_endpoints(tmp_path: Pa
         "secret", timeout=5, attempts=1, retry_delay=0,
         transport=httpx.MockTransport(handler),
     ) as client:
-        assert client.subscription()["character_count"] == 25
         response = client.transcribe("scribe_v2", row, "fa", 42)
         assert response["text"] == "متن"
         assert response["_response_headers"]["request-id"] == "request-123"
 
-    assert [request.url.path for request in requests] == [
-        "/v1/user/subscription",
-        "/v1/speech-to-text",
-    ]
+    assert [request.url.path for request in requests] == ["/v1/speech-to-text"]
 
 
 def test_client_reopens_audio_stream_for_retry(tmp_path: Path) -> None:
