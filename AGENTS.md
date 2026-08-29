@@ -63,4 +63,4 @@ This repository is my research archive for my MS thesis.
 
 
 ## Important Notes
-- When writing or changing a script, expose clear `--help` text with argument types/defaults, add or update its command in `docs/script-guide.md`, and keep CLI help covered by tests.
+- When writing or changing a script, expose clear `--help` text with argument types/defaults, add or update its command and workflow documentation under `docs/script-guides/`, and keep CLI help covered by tests.

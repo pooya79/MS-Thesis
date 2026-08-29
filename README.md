@@ -74,7 +74,7 @@ selected codec is unavailable.
 ## Script-First Workflow
 
 Every maintained script provides `--help`. The full argument and workflow
-reference is in [docs/script-guide.md](docs/script-guide.md).
+reference is in the [script guides](docs/script-guides/README.md).
 
 ### 1. Download and Prepare Datasets
 

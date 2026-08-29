@@ -17,7 +17,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Everything runs through `uv` (Python 3.13). `torch`/`torchvision` come from the `pytorch-cu130` CUDA index pinned in `pyproject.toml`. `pythonpath = ["."]` is set for pytest, so modules import as `server.*` / `ml.*` from the repo root.
 
-For every data/training/inspection script and its exact CLI flags, see `docs/script-guide.md` — it is the canonical, test-covered list. All maintained scripts expose `--help`; when adding or changing a script, update both `docs/script-guide.md` and its `--help` test (this is an enforced rule, see AGENTS.md).
+For every data/training/inspection script and its exact CLI flags, see `docs/script-guides/README.md` — it is the canonical index for the topic-based script guides. All maintained scripts expose `--help`; when adding or changing a script, update the relevant guide, the command index, and its `--help` test (this is an enforced rule, see AGENTS.md).
 
 ## Architecture
 
