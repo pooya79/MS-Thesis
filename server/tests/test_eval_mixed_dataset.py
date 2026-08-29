@@ -163,9 +163,12 @@ def test_run_evaluation_dispatches_models_and_writes_comparison(
         (model_output / "metrics.json").write_text('{"wer": 0.0}\n', encoding="utf-8")
         return 0
 
+    cleanup_calls: list[None] = []
     monkeypatch.setattr("ml.asr.eval_mixed_dataset.load_runner", lambda _model_type: fake_runner)
+    monkeypatch.setattr("ml.asr.eval_mixed_dataset.release_model_memory", lambda: cleanup_calls.append(None))
 
     assert run_evaluation(config_path) == 0
+    assert cleanup_calls == [None]
     summary = json.loads((output / "summary.json").read_text(encoding="utf-8"))
     assert summary["models"][0]["overall"] == {"examples": 2, "wer": 0.0, "cer": 0.0}
     enriched = [json.loads(line) for line in (output / "models/test-model/predictions.jsonl").read_text().splitlines()]
@@ -173,3 +176,36 @@ def test_run_evaluation_dispatches_models_and_writes_comparison(
     model_metrics = json.loads((output / "models/test-model/metrics.json").read_text(encoding="utf-8"))
     assert model_metrics["source_dataset_metrics"]["complete"] is True
 
+
+def test_run_evaluation_releases_model_memory_when_runner_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dataset = tmp_path / "mixed"
+    make_mixed_dataset(dataset)
+    model_config = tmp_path / "model.yaml"
+    model_config.write_text("model: {}\n", encoding="utf-8")
+    config_path = tmp_path / "mixed-eval.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "dataset_root": str(dataset),
+                "output_dir": str(tmp_path / "output"),
+                "models": [
+                    {"name": "test-model", "type": "fastconformer", "config": str(model_config)}
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    cleanup_calls: list[None] = []
+
+    def failing_runner(_config: Path, _output: Path | None) -> int:
+        raise RuntimeError("inference failed")
+
+    monkeypatch.setattr("ml.asr.eval_mixed_dataset.load_runner", lambda _model_type: failing_runner)
+    monkeypatch.setattr("ml.asr.eval_mixed_dataset.release_model_memory", lambda: cleanup_calls.append(None))
+
+    with pytest.raises(RuntimeError, match="inference failed"):
+        run_evaluation(config_path)
+
+    assert cleanup_calls == [None]

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import gc
 import importlib
 import json
 import re
@@ -173,6 +174,18 @@ def load_runner(model_type: str) -> Callable[[Path, Path | None], int]:
     return getattr(importlib.import_module(module_name), function_name)
 
 
+def release_model_memory() -> None:
+    """Release unreachable model objects and PyTorch's cached CUDA allocations."""
+    gc.collect()
+    try:
+        import torch
+    except ImportError:
+        return
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.ipc_collect()
+
+
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     with path.open("r", encoding="utf-8") as handle:
@@ -292,7 +305,10 @@ def run_evaluation(config_path: Path, output_dir_override: Path | None = None) -
         model_output = config.output_dir / "models" / spec.name
         adapted_config = config.output_dir / "configs" / f"{spec.name}.yaml"
         write_adapted_config(spec, config.dataset_root, adapted_config)
-        result = load_runner(spec.type)(adapted_config, model_output)
+        try:
+            result = load_runner(spec.type)(adapted_config, model_output)
+        finally:
+            release_model_memory()
         if result != 0:
             raise RuntimeError(f"model {spec.name} ({spec.type}) evaluator exited with status {result}")
         predictions_path = model_output / "predictions.jsonl"

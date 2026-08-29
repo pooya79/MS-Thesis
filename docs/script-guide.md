@@ -993,6 +993,9 @@ processor, device, batch-size, and generation settings; only its `data.root_dir`
 `data.datasets`, and `data.split` fields are adapted to the mixed test set. This
 means checkpoints do not need to be copied and each underlying evaluator still
 writes its usual logs, effective config, manifest, metrics, and predictions.
+After every model finishes (including a failed evaluation), the runner collects
+unreachable Python objects and clears PyTorch's CUDA cache and IPC allocations
+before loading the next model.
 
 The runner joins predictions back to the mixed manifest by resolved audio path,
 not by row position. It adds `source_dataset`, the original and normalized
