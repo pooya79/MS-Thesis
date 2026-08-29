@@ -998,8 +998,10 @@ unreachable Python objects and clears PyTorch's CUDA cache and IPC allocations
 before loading the next model.
 
 The runner joins predictions back to the mixed manifest by resolved audio path,
-not by row position. It adds `source_dataset`, the original and normalized
-reference, and the normalized hypothesis to every model's `predictions.jsonl`.
+not by row position. Repeated rows for the same audio are supported when their
+source and reference agree; conflicting labels for one audio are rejected as
+ambiguous. It adds `source_dataset`, the original and normalized reference, and
+the normalized hypothesis to every model's `predictions.jsonl`.
 For fair cross-model comparison, the new scores consistently use the repository's
 Persian ASR normalization. `<output_dir>/summary.json` and `summary.tsv` contain
 overall and per-source-dataset WER/CER for every model. Each model directory also

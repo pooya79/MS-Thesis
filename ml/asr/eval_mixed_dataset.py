@@ -203,22 +203,31 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
 def score_predictions(
     predictions: Sequence[dict[str, Any]], rows: Sequence[EvalRow]
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    rows_by_audio = {str(row.audio_path.resolve()): row for row in rows}
-    if len(rows_by_audio) != len(rows):
-        raise ValueError("mixed test.tsv contains duplicate resolved audio paths")
+    rows_by_audio: dict[str, list[EvalRow]] = defaultdict(list)
+    for row in rows:
+        rows_by_audio[str(row.audio_path.resolve())].append(row)
+    for audio_path, matching_rows in rows_by_audio.items():
+        labels = {(row.source_dataset, row.reference) for row in matching_rows}
+        if len(labels) > 1:
+            raise ValueError(
+                "mixed test.tsv contains the same resolved audio path with conflicting "
+                f"source/reference values: {audio_path}"
+            )
     enriched: list[dict[str, Any]] = []
-    seen: set[str] = set()
+    matched_occurrences: dict[str, int] = defaultdict(int)
     for index, prediction in enumerate(predictions, start=1):
         raw_audio = prediction.get("audio_path")
         if not isinstance(raw_audio, str) or not raw_audio.strip():
             raise ValueError(f"prediction {index} has no audio_path")
         audio_key = str(Path(raw_audio).resolve())
-        row = rows_by_audio.get(audio_key)
-        if row is None:
+        matching_rows = rows_by_audio.get(audio_key)
+        if matching_rows is None:
             raise ValueError(f"prediction audio is not present in mixed test.tsv: {raw_audio}")
-        if audio_key in seen:
-            raise ValueError(f"duplicate prediction for audio: {raw_audio}")
-        seen.add(audio_key)
+        occurrence = matched_occurrences[audio_key]
+        if occurrence >= len(matching_rows):
+            raise ValueError(f"more predictions than mixed test.tsv rows for audio: {raw_audio}")
+        row = matching_rows[occurrence]
+        matched_occurrences[audio_key] += 1
         hypothesis = str(prediction.get("hypothesis") or "")
         reference_normalized = normalize_for_scoring(row.reference)
         hypothesis_normalized = normalize_for_scoring(hypothesis)

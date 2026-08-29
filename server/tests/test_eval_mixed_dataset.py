@@ -116,6 +116,23 @@ def test_score_predictions_reports_overall_and_source_metrics(tmp_path: Path) ->
     assert enriched[0]["reference_original"] == "سلام دنیا"
 
 
+def test_score_predictions_accepts_repeated_identical_manifest_rows(tmp_path: Path) -> None:
+    dataset = tmp_path / "mixed"
+    make_mixed_dataset(dataset)
+    rows = read_mixed_test_rows(dataset)
+    repeated_rows = [rows[0], rows[0], rows[1]]
+    predictions = [
+        {"audio_path": str(row.audio_path), "hypothesis": row.reference}
+        for row in repeated_rows
+    ]
+
+    metrics, enriched = score_predictions(predictions, repeated_rows)
+
+    assert metrics["complete"] is True
+    assert metrics["overall"] == {"examples": 3, "wer": 0.0, "cer": 0.0}
+    assert [record["source_dataset"] for record in enriched] == ["first", "first", "second"]
+
+
 def test_run_evaluation_dispatches_models_and_writes_comparison(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
