@@ -44,6 +44,7 @@ SCRIPT_MODULES = [
     "ml.asr.eval_whisper_medium",
     "ml.asr.train_fastconformer",
     "ml.asr.eval_fastconformer",
+    "ml.asr.eval_openrouter_stt",
     "ml.fusion.train_fusion",
     "ml.fusion.eval_fusion",
     "ml.enhancement.diagnose_enhancement",

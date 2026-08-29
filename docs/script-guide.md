@@ -40,10 +40,66 @@ uv run python -m ml.pmct.train_whisper_small --help
 uv run python -m ml.asr.eval_whisper_small --help
 uv run python -m ml.asr.train_fastconformer --help
 uv run python -m ml.asr.eval_fastconformer --help
+uv run python -m ml.asr.eval_openrouter_stt --help
 uv run python -m ml.fusion.train_fusion --help
 uv run python -m ml.fusion.eval_fusion --help
 uv run python -m ml.enhancement.diagnose_enhancement --help
 ```
+
+## Evaluate OpenRouter Speech-to-Text Models
+
+Evaluate multiple OpenRouter STT models against the mixed test dataset while
+retaining every exact prediction and tracking actual API cost:
+
+```bash
+export OPENROUTER_API_KEY='YOUR_DEDICATED_EVALUATION_KEY'
+
+uv run python -m ml.asr.eval_openrouter_stt \
+  --dataset-root data/mixed-persian-test \
+  --model openai/whisper-large-v3 \
+  --model openai/gpt-4o-mini-transcribe \
+  --max-run-cost-usd 5.00 \
+  --min-key-remaining-usd 1.00 \
+  --output-dir artifacts/openrouter-stt/mixed-persian-test
+```
+
+Use OpenRouter model slugs that advertise the `transcription` output modality.
+The API key is read only from `OPENROUTER_API_KEY`; do not put it in a config,
+command argument, or committed file. For the strongest cost protection, create
+a dedicated OpenRouter key with its own server-side spending limit. The required
+`--max-run-cost-usd` is also checked locally before every sequential request,
+and `--min-key-remaining-usd` stops when the key's reported `limit_remaining`
+reaches that reserve. Because OpenRouter reports exact cost only after a request,
+the local run cap alone can be exceeded by one in-flight request; the dedicated
+key limit is the hard remote guard.
+
+The output is checkpointed after each successful request. `predictions.jsonl`
+is the append-only source of truth and includes the exact model response,
+reference, normalized scoring strings, per-clip WER/CER, source dataset, full
+usage object, and request cost. `predictions.tsv` is a convenient tabular view;
+`metrics.json` reports corpus-level WER/CER and cost for every model, overall and
+for every `source_dataset`. `events.jsonl` records each budget check and request
+transition, while `logs/openrouter_stt.log` is the human-readable live log.
+Interrupted or budget-stopped evaluations can continue with `--resume` and the
+same dataset, ordered model list, language, and output directory. A completed
+run exits 0, API failures/incomplete results exit 1, and a safe budget stop exits
+2. WER/CER use the repository's Persian ASR normalization, but raw references
+and predictions are always preserved for auditability.
+
+```bash
+uv run python -m ml.asr.eval_openrouter_stt \
+  --dataset-root data/mixed-persian-test \
+  --model openai/whisper-large-v3 \
+  --model openai/gpt-4o-mini-transcribe \
+  --max-run-cost-usd 5.00 \
+  --min-key-remaining-usd 1.00 \
+  --output-dir artifacts/openrouter-stt/mixed-persian-test \
+  --resume
+```
+
+OpenRouter's current-key endpoint is queried before each transcription. The log
+therefore shows the key's cumulative usage and remaining key limit alongside
+this evaluator's independently checkpointed run cost.
 
 ## Create a Mixed Test Dataset
 
