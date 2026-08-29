@@ -13,6 +13,7 @@ uv run python -m ml.speech_data.scripts.download_fleurs_persian --help
 uv run python -m ml.speech_data.scripts.download_persian_eval_sets --help
 uv run python -m ml.speech_data.scripts.download_youtube_persian_asr --help
 uv run python -m ml.speech_data.scripts.compute_audio_hours --help
+uv run python -m ml.speech_data.scripts.create_mixed_test_dataset --help
 uv run python -m ml.speech_data.scripts.summarize_hf_audio_dataset --help
 uv run python -m ml.speech_data.scripts.upload_hf_audio_dataset --help
 bash ml/speech_data/scripts/upload_persian_audiobook_subset.sh --help
@@ -43,6 +44,36 @@ uv run python -m ml.fusion.train_fusion --help
 uv run python -m ml.fusion.eval_fusion --help
 uv run python -m ml.enhancement.diagnose_enhancement --help
 ```
+
+## Create a Mixed Test Dataset
+
+Randomly select an exact number of clips from multiple datasets' `test.tsv`
+files, using a reproducible seed and relative proportions:
+
+```bash
+uv run python -m ml.speech_data.scripts.create_mixed_test_dataset \
+  --dataset AGFarsdat_test_normalized data/AGFarsdat_test_normalized 1 \
+  --dataset cv-corpus-25.0 data/cv-corpus-25.0 1 \
+  --dataset fleurs-normalized data/fleurs-normalized 1 \
+  --dataset PersianSpeech_test data/PersianSpeech_test 1 \
+  --dataset persian-speech-corpus-test data/persian-speech-corpus-test 1 \
+  --count 1000 \
+  --seed 42 \
+  --output-root data/mixed-persian-test
+```
+
+Each `--dataset` takes a unique safe name, its dataset directory, and a
+positive relative weight. Weights are normalized, so `70 20 10` is equivalent
+to `0.7 0.2 0.1`; the example gives all five datasets equal weight. Integer
+sample counts use the largest-remainder method and always sum to `--count`; the
+command fails before creating output if a source does not contain its allocated
+number of rows.
+
+The output contains `test.tsv` with `path`, `sentence`, and `source_dataset`
+columns. Selected audio is copied under `clips/NAME/`, preserving its path
+within the source `clips/` directory. Both `path` styles accepted by the project
+dataset contract (`file.wav` and `clips/file.wav`) are supported. Existing
+output is rejected unless `--overwrite` is passed.
 
 ## Compute Total Audio Hours
 

@@ -17,6 +17,7 @@ SCRIPT_MODULES = [
     "ml.speech_data.scripts.download_persian_eval_sets",
     "ml.speech_data.scripts.download_youtube_persian_asr",
     "ml.speech_data.scripts.compute_audio_hours",
+    "ml.speech_data.scripts.create_mixed_test_dataset",
     "ml.speech_data.scripts.summarize_hf_audio_dataset",
     "ml.speech_data.scripts.upload_hf_audio_dataset",
     "ml.speech_data.scripts.normalize_tsv_dataset",
