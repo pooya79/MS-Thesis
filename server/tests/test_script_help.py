@@ -45,6 +45,7 @@ SCRIPT_MODULES = [
     "ml.asr.train_fastconformer",
     "ml.asr.eval_fastconformer",
     "ml.asr.eval_openrouter_stt",
+    "ml.asr.eval_elevenlabs_scribe",
     "ml.fusion.train_fusion",
     "ml.fusion.eval_fusion",
     "ml.enhancement.diagnose_enhancement",

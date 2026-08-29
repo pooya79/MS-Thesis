@@ -41,6 +41,7 @@ uv run python -m ml.asr.eval_whisper_small --help
 uv run python -m ml.asr.train_fastconformer --help
 uv run python -m ml.asr.eval_fastconformer --help
 uv run python -m ml.asr.eval_openrouter_stt --help
+uv run python -m ml.asr.eval_elevenlabs_scribe --help
 uv run python -m ml.fusion.train_fusion --help
 uv run python -m ml.fusion.eval_fusion --help
 uv run python -m ml.enhancement.diagnose_enhancement --help
@@ -100,6 +101,70 @@ uv run python -m ml.asr.eval_openrouter_stt \
 OpenRouter's current-key endpoint is queried before each transcription. The log
 therefore shows the key's cumulative usage and remaining key limit alongside
 this evaluator's independently checkpointed run cost.
+
+## Evaluate ElevenLabs Scribe v2
+
+Evaluate ElevenLabs Scribe v2 on the same mixed Persian test dataset:
+
+```bash
+export ELEVENLABS_API_KEY='YOUR_DEDICATED_EVALUATION_KEY'
+
+uv run python -m ml.asr.eval_elevenlabs_scribe \
+  --dataset-root data/mixed-persian-test \
+  --max-run-credits 10000 \
+  --min-account-remaining-credits 1000 \
+  --max-estimated-cost-usd 5.00 \
+  --output-dir artifacts/elevenlabs-scribe/mixed-persian-test
+```
+
+The evaluator uses the synchronous `POST /v1/speech-to-text` endpoint with
+`scribe_v2`, Persian (`fa`), temperature 0, seed 0, and audio-event tagging and
+diarization disabled. This keeps the output focused on ASR text and makes the
+run as reproducible as the service permits. The key is read only from
+`ELEVENLABS_API_KEY`.
+
+ElevenLabs' subscription endpoint is queried before every request and after
+every successful transcription. The logs and prediction records retain the
+exact account credit counters (`character_count` is the API's legacy field name
+for credits), included-credit limit and remaining balance, observed per-request
+credit change, tier, and current overage. `--max-run-credits` stops when account
+credit growth since the run began reaches the cap; one in-flight request can
+cross this local cap. `--min-account-remaining-credits` is an optional reserve.
+For the strongest protection, create a dedicated ElevenLabs API key with its
+own credit quota in the ElevenLabs dashboard; that quota is enforced remotely.
+
+The STT response does not report exact request cost in USD. The evaluator
+therefore computes and clearly labels an estimate from each clip's duration.
+`--price-per-hour-usd` defaults to the current public Scribe v2 API price of
+`0.22`, and should be overridden if your contract or current price differs.
+Before sending a clip, `--max-estimated-cost-usd` checks its projected cost, so
+this estimate-based cap is not crossed by an in-flight request.
+
+`predictions.jsonl` preserves the exact raw prediction, raw provider response,
+response request IDs, reference, normalized scoring strings, source dataset,
+per-clip WER/CER, duration, estimated cost, and credit snapshots.
+`predictions.tsv` provides the main fields in tabular form. `metrics.json`
+reports corpus-level WER/CER, duration, estimated cost, and observed credit
+change overall and for every `source_dataset`; `events.jsonl` and
+`logs/elevenlabs_scribe.log` provide machine-readable and live operational
+logs. Exit codes are 0 for complete, 1 for incomplete/API failures, and 2 for a
+safe budget stop.
+
+Resume an interrupted or budget-stopped run after raising either local cap:
+
+```bash
+uv run python -m ml.asr.eval_elevenlabs_scribe \
+  --dataset-root data/mixed-persian-test \
+  --max-run-credits 20000 \
+  --min-account-remaining-credits 1000 \
+  --max-estimated-cost-usd 10.00 \
+  --output-dir artifacts/elevenlabs-scribe/mixed-persian-test \
+  --resume
+```
+
+The dataset, manifest, model, language, seed, and price assumption must match
+the original run. Completed clips are skipped safely. Local caps and the
+remaining-credit reserve may be changed when resuming.
 
 ## Create a Mixed Test Dataset
 
