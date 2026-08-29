@@ -12,6 +12,7 @@ import pytest
 import soundfile as sf
 
 from ml.speech_data.generate_degraded_dataset import generate_degraded_dataset
+from ml.speech_data.generate_noise_added_dataset import generate_noise_added_dataset
 from ml.speech_data.generate_degraded_pairs import (
     CODECS,
     NARROWBAND_CODECS,
@@ -316,6 +317,101 @@ def test_generate_degraded_dataset_rejects_invalid_worker_count(tmp_path: Path) 
 
     with pytest.raises(ValueError, match="dataset.workers must be >= 1"):
         generate_degraded_dataset(config)
+
+
+def test_generate_noise_added_dataset_only_adds_configured_noise(tmp_path: Path) -> None:
+    dataset_dir = tmp_path / "source"
+    clips_dir = dataset_dir / "clips"
+    clips_dir.mkdir(parents=True)
+    sample_rate = 16000
+    t = np.linspace(0, 0.25, sample_rate // 4, endpoint=False, dtype=np.float32)
+    clean = (0.1 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
+    sf.write(clips_dir / "sample.wav", clean, sample_rate)
+    for split in ("train", "dev"):
+        with (dataset_dir / f"{split}.tsv").open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=["path", "sentence"], delimiter="\t", lineterminator="\n")
+            writer.writeheader()
+            writer.writerow({"path": "sample.wav", "sentence": "سلام"})
+
+    noise = np.random.default_rng(9).normal(0, 0.05, sample_rate).astype(np.float32)
+    noise_path = tmp_path / "office.wav"
+    sf.write(noise_path, noise, sample_rate)
+    noise_index = tmp_path / "noise.jsonl"
+    noise_index.write_text(
+        json.dumps({"id": "office-1", "scene": "office", "path": str(noise_path)}) + "\n",
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / "noise-added"
+    config = {
+        "dataset": {
+            "source_dir": str(dataset_dir),
+            "output_dir": str(output_dir),
+            "splits": ["train.tsv", "dev.tsv"],
+            "variations_per_sample": 2,
+            "workers": 1,
+        },
+        "seed": 17,
+        "model_sample_rate": sample_rate,
+        "noise_index": str(noise_index),
+        "noise": {"snr_buckets_db": [[10, 10]]},
+        "normalization": {"peak": 0.99},
+    }
+
+    report = generate_noise_added_dataset(config)
+
+    assert report["splits"]["train"]["degraded_rows"] == 2
+    assert report["splits"]["dev"]["degraded_rows"] == 2
+    assert not (output_dir / "test.tsv").exists()
+    metadata_rows = [
+        json.loads(line)
+        for line in (output_dir / "noise_metadata.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert len(metadata_rows) == 4
+    assert {row["degradation_type"] for row in metadata_rows} == {"additive_noise"}
+    assert {row["noise_id"] for row in metadata_rows} == {"office-1"}
+    assert {row["noise_scene"] for row in metadata_rows} == {"office"}
+    assert {row["snr_db"] for row in metadata_rows} == {10.0}
+    for row in metadata_rows:
+        assert row["codec"] is None
+        assert row["network_impairment"] == {"enabled": False}
+        assert row["filtering"] == {"enabled": False}
+        assert row["random_gain"] == {"enabled": False}
+        noisy, noisy_rate = load_audio(row["degraded_path"])
+        assert noisy_rate == sample_rate
+        assert len(noisy) == len(clean)
+        assert not np.allclose(noisy, clean)
+        clean_saved, _ = load_audio(row["clean_path"])
+        clean_target = clean_saved * float(row["normalization_scale"])
+        measured_snr_db = 20 * np.log10(
+            np.sqrt(np.mean(np.square(clean_target)))
+            / np.sqrt(np.mean(np.square(noisy - clean_target)))
+        )
+        assert measured_snr_db == pytest.approx(10.0, abs=0.05)
+
+
+def test_generate_noise_added_dataset_requires_noise_assets(tmp_path: Path) -> None:
+    dataset_dir = tmp_path / "source"
+    clips_dir = dataset_dir / "clips"
+    clips_dir.mkdir(parents=True)
+    sf.write(clips_dir / "sample.wav", np.zeros(1600, dtype=np.float32), 16000)
+    with (dataset_dir / "train.tsv").open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["path", "sentence"], delimiter="\t", lineterminator="\n")
+        writer.writeheader()
+        writer.writerow({"path": "sample.wav", "sentence": "سلام"})
+    noise_index = tmp_path / "noise.jsonl"
+    noise_index.write_text("", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="at least one noise asset"):
+        generate_noise_added_dataset(
+            {
+                "dataset": {
+                    "source_dir": str(dataset_dir),
+                    "output_dir": str(tmp_path / "output"),
+                    "splits": ["train.tsv"],
+                },
+                "noise_index": str(noise_index),
+            }
+        )
 
 
 def test_generate_random_degraded_clip_writes_demo_variants(tmp_path: Path) -> None:

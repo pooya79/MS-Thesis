@@ -1,0 +1,29 @@
+dataset:
+  source_dir: data/cv-corpus-25.0
+  output_dir: data/cv-corpus-25.0-noise-added
+  splits:
+    - train.tsv
+    - dev.tsv
+  variations_per_sample: 2
+  workers: 1
+  mapping_filename: degraded_to_clean.jsonl
+  metadata_filename: noise_metadata.jsonl
+  report_filename: generation_report.json
+
+seed: 1337
+model_sample_rate: 16000
+noise_index: data/speech_enhancement/manifests/demand_noise_index.jsonl
+
+# Every output receives exactly one noise scene. Each SNR bucket has equal
+# selection probability; the precise SNR is sampled uniformly inside the bucket.
+noise:
+  snr_buckets_db:
+    - [0, 5]
+    - [5, 10]
+    - [10, 15]
+    - [15, 20]
+
+# Applied jointly to the clean target and noisy mixture only when necessary to
+# prevent PCM clipping. It does not change the configured speech-to-noise ratio.
+normalization:
+  peak: 0.99

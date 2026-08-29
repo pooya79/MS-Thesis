@@ -27,6 +27,7 @@ uv run python -m ml.speech_data.scripts.verify_flac_conversion --help
 uv run python -m ml.speech_data.scripts.generate_random_degraded_clip --help
 uv run python -m ml.speech_data.generate_degraded_dataset --help
 uv run python -m ml.speech_data.generate_degraded_pairs --help
+uv run python -m ml.speech_data.generate_noise_added_dataset --help
 uv run python -m ml.speech_data.inspect_manifest --help
 uv run python -m ml.speech_data.long_audio_asr_pipeline.segment_audio --help
 uv run python -m ml.speech_data.long_audio_asr_pipeline.transcribe_segments --help
@@ -640,6 +641,23 @@ split TSVs, variations per sample, and worker count. `--workers` overrides
 `test.tsv`, or any selected TSV names, writes degraded WAV files under `clips/`, and
 records clean-to-degraded traceability in `degraded_to_clean.jsonl`. Full per-variant
 degradation metadata is also written to `degradation_metadata.jsonl`.
+
+## Noise-only ASR Dataset Generation
+
+Create two noise-added variants of every `train.tsv` and `dev.tsv` sample without
+codec simulation, packet loss, filtering, random gain, clipping, or AGC:
+
+```bash
+uv run python -m ml.speech_data.generate_noise_added_dataset \
+  --config configs/speech_enhancement/noise_added_dataset.yaml \
+  --workers 4
+```
+
+Every output contains exactly one DEMAND noise scene. The default config selects
+the 0–5, 5–10, 10–15, and 15–20 dB SNR buckets with equal probability, then
+samples the exact SNR uniformly within the selected bucket. Output TSVs preserve
+the source columns, while `degraded_to_clean.jsonl` and `noise_metadata.jsonl`
+record the source clip, noise asset, scene, seed, SNR bucket, and exact SNR.
 
 ## Random Degraded Clip Demo
 
