@@ -42,6 +42,7 @@ uv run python -m ml.asr.train_fastconformer --help
 uv run python -m ml.asr.eval_fastconformer --help
 uv run python -m ml.asr.eval_openrouter_stt --help
 uv run python -m ml.asr.eval_elevenlabs_scribe --help
+uv run python -m ml.asr.eval_ivira_avanegar --help
 uv run python -m ml.fusion.train_fusion --help
 uv run python -m ml.fusion.eval_fusion --help
 uv run python -m ml.enhancement.diagnose_enhancement --help
@@ -165,6 +166,62 @@ uv run python -m ml.asr.eval_elevenlabs_scribe \
 The dataset, manifest, model, language, seed, and price assumption must match
 the original run. Completed clips are skipped safely. Local caps and the
 remaining-credit reserve may be changed when resuming.
+
+## Evaluate Ivira Avanegar
+
+Evaluate Avanegar on the same mixed Persian test dataset using its
+[documented synchronous short-audio API](https://api.ivira.ai/partai/avanegar?type=document):
+
+```bash
+export IVIRA_GATEWAY_TOKEN='YOUR_DEDICATED_EVALUATION_TOKEN'
+
+uv run python -m ml.asr.eval_ivira_avanegar \
+  --dataset-root data/mixed-persian-test \
+  --model default \
+  --max-run-units 10000 \
+  --output-dir artifacts/ivira-avanegar/mixed-persian-test
+```
+
+The token is read only from `IVIRA_GATEWAY_TOKEN`. The evaluator sends clips
+sequentially to `POST /avanegar/avanegar/request`, and rejects clips of 60
+seconds or longer before upload because the documented synchronous endpoint is
+for audio below one minute. The request always sends both `punctuation=false`
+and `spokenPunctuation=false`; these settings are fixed and cannot accidentally
+be enabled from the CLI. SRT, timestamps, inverse normalization, diarization,
+and speaker separation are also disabled.
+
+Avanegar reports `units` in each successful API response. The exact response
+and per-request units are checkpointed in `predictions.jsonl`, and cumulative
+units are written to `metrics.json`, `events.jsonl`, and
+`logs/ivira_avanegar.log`. `--max-run-units` is checked before every request.
+Because the next request's units are unknown until it succeeds, one in-flight
+request can cross the local cap. The public API document does not expose an
+account-balance endpoint or a conversion from units to currency, so the script
+does not invent a remaining-credit or USD figure. Use a dedicated gateway token
+with a provider-side quota, if your Ivira account supports one, for a remote
+hard cap.
+
+`predictions.jsonl` preserves the exact raw prediction, complete raw provider
+response, response IDs, reference, normalized scoring strings, source dataset,
+per-clip WER/CER, duration, request options, and billed units.
+`predictions.tsv` is the tabular view. `metrics.json` reports total and
+per-`source_dataset` WER/CER, duration, and units. Exit codes are 0 for complete,
+1 for incomplete/API failures, and 2 for a safe unit-cap stop.
+
+Resume after interruption or after raising the local unit cap:
+
+```bash
+uv run python -m ml.asr.eval_ivira_avanegar \
+  --dataset-root data/mixed-persian-test \
+  --model default \
+  --max-run-units 20000 \
+  --output-dir artifacts/ivira-avanegar/mixed-persian-test \
+  --resume
+```
+
+The dataset, manifest, model, duration limit, and fixed processing options must
+match the original run. Completed clips are skipped; `--max-run-units` may be
+raised when resuming.
 
 ## Create a Mixed Test Dataset
 
