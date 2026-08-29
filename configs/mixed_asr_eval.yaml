@@ -1,0 +1,24 @@
+# Evaluate all local thesis ASR systems on one dataset produced by
+# ml.speech_data.scripts.create_mixed_test_dataset. Model names become output
+# directory names and must be unique. Each referenced evaluator config supplies
+# the checkpoint and inference settings; its data section is replaced here.
+dataset_root: data/mixed-persian-test
+output_dir: artifacts/asr-mixed-eval/mixed-persian-test
+
+models:
+  - name: whisper-small
+    type: whisper_small
+    config: configs/whisper_small_eval.yaml
+
+  - name: whisper-medium
+    type: whisper_medium
+    config: configs/whisper_medium_eval.yaml
+
+  - name: fastconformer
+    type: fastconformer
+    config: configs/fastconformer_eval.yaml
+
+  - name: fusion
+    type: fusion
+    config: configs/speech_enhancement/fusion_eval.yaml
+

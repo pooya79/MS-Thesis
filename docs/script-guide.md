@@ -40,6 +40,7 @@ uv run python -m ml.pmct.train_whisper_small --help
 uv run python -m ml.asr.eval_whisper_small --help
 uv run python -m ml.asr.train_fastconformer --help
 uv run python -m ml.asr.eval_fastconformer --help
+uv run python -m ml.asr.eval_mixed_dataset --help
 uv run python -m ml.asr.eval_openrouter_stt --help
 uv run python -m ml.asr.eval_elevenlabs_scribe --help
 uv run python -m ml.asr.eval_ivira_avanegar --help
@@ -952,6 +953,58 @@ uv run python -m ml.asr.train_fastconformer \
 Set `model.checkpoint` to either the original `.nemo` archive or a converted `.pt` bundle to fine-tune from — the format is chosen by file extension (use `ml/fa_fastconformer/convert.py` to produce the `.pt` bundle; see the evaluation section below). Every checkpoint and the `final`/`best` models are written as the same self-contained `.pt` bundle that `eval_fastconformer` loads, so a trained checkpoint can be evaluated directly by pointing `fastconformer_eval.yaml`'s `model.checkpoint` at it. Resume state (optimizer, scheduler, AMP scaler, step) is stashed inside each rolling checkpoint bundle, so `--resume auto` (or `run.resume: auto`) continues from the latest one. Set `training.freeze_encoder: true` to train only the CTC head. Stop with Ctrl+C after a checkpoint exists, then re-run with `--resume auto` to continue.
 
 Clips outside `data.min_duration_sec` / `data.max_duration_sec` (default `0.1`–`20.0`) are dropped from both the train and dev splits before batching — durations come from the audio header only (no decoding). Conformer self-attention costs O(T²) memory per layer, so without an upper cap a single multi-minute utterance (common in spontaneous-speech corpora) can OOM the GPU even when typical fixed-size batches fit comfortably. Raise `data.max_duration_sec` to keep longer clips (watch GPU memory), or set it to `null` to disable the cap. The trainer also sets `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` (unless already set) to reduce allocator fragmentation across the variable-length batches.
+
+## Mixed-Dataset Local ASR Comparison
+
+Evaluate several local model families in one run against a dataset created by
+`ml.speech_data.scripts.create_mixed_test_dataset`:
+
+```bash
+uv run python -m ml.asr.eval_mixed_dataset \
+  --config configs/mixed_asr_eval.yaml
+```
+
+The top-level config contains `dataset_root`, `output_dir`, and a repeatable
+`models` list. Every model entry has a unique filesystem-safe `name`, a `type`,
+and the path to that model's normal evaluator config:
+
+```yaml
+dataset_root: data/mixed-persian-test
+output_dir: artifacts/asr-mixed-eval/mixed-persian-test
+models:
+  - name: whisper-small
+    type: whisper_small
+    config: configs/whisper_small_eval.yaml
+  - name: whisper-medium
+    type: whisper_medium
+    config: configs/whisper_medium_eval.yaml
+  - name: fastconformer
+    type: fastconformer
+    config: configs/fastconformer_eval.yaml
+  - name: fusion
+    type: fusion
+    config: configs/speech_enhancement/fusion_eval.yaml
+```
+
+Supported types are `whisper_small`, `whisper_medium`,
+`whisper_large_v3_turbo`, `fastconformer`, and `fusion` (hyphenated aliases are
+also accepted). The referenced model config remains the source of checkpoint,
+processor, device, batch-size, and generation settings; only its `data.root_dir`,
+`data.datasets`, and `data.split` fields are adapted to the mixed test set. This
+means checkpoints do not need to be copied and each underlying evaluator still
+writes its usual logs, effective config, manifest, metrics, and predictions.
+
+The runner joins predictions back to the mixed manifest by resolved audio path,
+not by row position. It adds `source_dataset`, the original and normalized
+reference, and the normalized hypothesis to every model's `predictions.jsonl`.
+For fair cross-model comparison, the new scores consistently use the repository's
+Persian ASR normalization. `<output_dir>/summary.json` and `summary.tsv` contain
+overall and per-source-dataset WER/CER for every model. Each model directory also
+gets `source_metrics.json`, and its original `metrics.json` gains a
+`source_dataset_metrics` block without losing the evaluator-specific metrics.
+The command returns a nonzero status if an underlying evaluator did not produce a
+prediction for every mixed-dataset row (for example, because a Whisper label was
+over its configured token limit).
 
 ## FastConformer-CTC Evaluation
 

@@ -44,6 +44,7 @@ SCRIPT_MODULES = [
     "ml.asr.eval_whisper_medium",
     "ml.asr.train_fastconformer",
     "ml.asr.eval_fastconformer",
+    "ml.asr.eval_mixed_dataset",
     "ml.asr.eval_openrouter_stt",
     "ml.asr.eval_elevenlabs_scribe",
     "ml.asr.eval_ivira_avanegar",
