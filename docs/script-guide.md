@@ -35,6 +35,7 @@ uv run python -m ml.speech_data.long_audio_asr_pipeline.select_refinement_subset
 uv run python -m ml.speech_data.long_audio_asr_pipeline.refine_transcriptions --help
 uv run python -m ml.speech_data.validate_degraded_dataset --help
 uv run python -m ml.asr.train_whisper_small --help
+uv run python -m ml.pmct.train_whisper_small --help
 uv run python -m ml.asr.eval_whisper_small --help
 uv run python -m ml.asr.train_fastconformer --help
 uv run python -m ml.asr.eval_fastconformer --help
