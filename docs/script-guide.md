@@ -42,6 +42,7 @@ uv run python -m ml.asr.train_fastconformer --help
 uv run python -m ml.asr.eval_fastconformer --help
 uv run python -m ml.asr.eval_mixed_dataset --help
 uv run python -m ml.asr.eval_openrouter_stt --help
+uv run python -m ml.asr.rescore_openrouter_stt --help
 uv run python -m ml.asr.eval_elevenlabs_scribe --help
 uv run python -m ml.asr.eval_ivira_avanegar --help
 uv run python -m ml.fusion.train_fusion --help
@@ -103,6 +104,31 @@ uv run python -m ml.asr.eval_openrouter_stt \
 OpenRouter's current-key endpoint is queried before each transcription. The log
 therefore shows the key's cumulative usage and remaining key limit alongside
 this evaluator's independently checkpointed run cost.
+
+### Re-score OpenRouter output with strict normalization
+
+Recompute WER/CER from an existing OpenRouter evaluation without making API
+requests:
+
+```bash
+uv run python -m ml.asr.rescore_openrouter_stt \
+  --output-dir artifacts/openrouter-stt/mixed-persian-test
+```
+
+The command always reads the raw `reference` and `prediction` values from
+`predictions.jsonl`; it does not reuse the evaluator's existing normalized
+fields. Both sides receive NFKC and Persian character normalization, followed
+by removal of every Unicode punctuation (`P*`) and format (`Cf`) character.
+The latter covers zero-width non-joiner, zero-width joiner, zero-width space,
+word joiner, and legacy zero-width no-break-space representations of
+half-spaces. Whitespace is then collapsed.
+
+The original evaluation artifacts remain unchanged. In
+`predictions_strict_normalized.jsonl`, both the `reference`/`prediction` fields
+and their `*_normalized` aliases contain only the strictly normalized text;
+the raw values remain available in the original `predictions.jsonl`.
+Per-example WER/CER is included alongside the text, while corpus WER/CER grouped
+by model and `source_dataset` is written to `metrics_strict_normalized.json`.
 
 ## Evaluate ElevenLabs Scribe v2
 
