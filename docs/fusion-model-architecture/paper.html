@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <title>Dual-view speech enhancement and fusion — paper figure</title>
+    <link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500;600&amp;family=Geist:wght@400;500;600&amp;family=Instrument+Serif&amp;display=swap" rel="stylesheet">
+    <style>
+      :root {
+        color-scheme: light;
+        --paper: #f7f6f2;
+        --surface: #ffffff;
+        --ink: #1f2933;
+        --muted: #3f4c59;
+        --soft: #52606d;
+        --rule: rgba(31, 41, 51, 0.18);
+        --accent: #1d6f8a;
+        --accent-tint: #e8f3f6;
+        --input-tint: #edf1f3;
+        --output-tint: #eef4ef;
+      }
+
+      * { box-sizing: border-box; }
+      html, body { margin: 0; background: var(--paper); }
+      body { min-height: 100vh; padding: 24px; color: var(--ink); font-family: "Geist", Inter, system-ui, sans-serif; }
+      main { width: min(100%, 1120px); margin: 0 auto; }
+      .controls { display: flex; align-items: center; gap: 16px; margin: 0 0 16px; font-size: 16px; }
+      .download { border: 1px solid var(--ink); border-radius: 4px; padding: 12px 16px; color: var(--ink); background: var(--surface); font-weight: 600; text-decoration: none; }
+      .download:hover { border-color: var(--accent); color: var(--accent); }
+      .download:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+      .status { color: var(--muted); }
+      figure { width: 100%; margin: 0; }
+      svg { display: block; width: 100%; height: auto; background: var(--paper); text-rendering: geometricPrecision; }
+
+      .figure-title { fill: var(--ink); font: 400 40px/1.1 "Instrument Serif", Georgia, serif; }
+      .figure-subtitle { fill: var(--muted); font: 400 16px/1.3 "Geist", Inter, system-ui, sans-serif; }
+      .section-label, .tag, .arrow-label, .technical, .detail { font-family: "Geist Mono", "DejaVu Sans Mono", monospace; }
+      .section-label { fill: var(--soft); font-size: 16px; font-weight: 600; letter-spacing: 0.08em; }
+      .tag { fill: var(--soft); font-size: 12px; font-weight: 600; letter-spacing: 0.04em; text-anchor: middle; }
+      .node-name { fill: var(--ink); font: 600 20px/1.15 "Geist", Inter, system-ui, sans-serif; text-anchor: middle; }
+      .node-copy { fill: var(--muted); font: 500 16px/1.25 "Geist", Inter, system-ui, sans-serif; text-anchor: middle; }
+      .technical { fill: var(--muted); font-size: 20px; font-weight: 500; text-anchor: middle; }
+      .detail { fill: var(--muted); font-size: 16px; font-weight: 500; text-anchor: middle; }
+      .arrow-label { fill: var(--muted); font-size: 16px; font-weight: 600; letter-spacing: 0.04em; text-anchor: middle; }
+      .node-mask { fill: var(--paper); }
+      .node-box { fill: var(--surface); stroke: var(--ink); stroke-width: 1.2; }
+      .node-box.input { fill: var(--input-tint); stroke: var(--soft); }
+      .node-box.focal { fill: var(--accent-tint); stroke: var(--accent); stroke-width: 1.2; }
+      .node-box.output { fill: var(--output-tint); stroke: var(--muted); }
+      .lane { fill: rgba(31, 41, 51, 0.025); stroke: var(--rule); stroke-width: 0.8; }
+      .lane.accent { fill: rgba(29, 111, 138, 0.06); stroke: rgba(29, 111, 138, 0.40); }
+      .arrow { fill: none; stroke: var(--muted); stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.2; marker-end: url(#fusion-paper-arrow); }
+      .arrow.accent { stroke: var(--accent); marker-end: url(#fusion-paper-arrow-accent); }
+
+      body:has(#diagram:target) { min-height: 0; padding: 0; }
+      body:has(#diagram:target) main, body:has(#diagram:target) figure { width: 1120px; margin: 0; }
+      body:has(#diagram:target) .controls { display: none; }
+
+      @media print {
+        @page { size: A4 landscape; margin: 10mm; }
+        body { padding: 0; }
+        .controls { display: none; }
+        main, figure { width: 100%; }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="controls" aria-label="Figure export information">
+        <a class="download" href="fusion-model-architecture.png" download>Download PNG</a>
+        <span class="status">Print size: 3360 × 2376</span>
+      </div>
+      <figure id="diagram">
+        <svg viewBox="0 0 1120 792" role="img" aria-labelledby="fusion-paper-title fusion-paper-desc">
+          <title id="fusion-paper-title">Dual-view speech enhancement and fusion</title>
+          <desc id="fusion-paper-desc">Noisy log-Mel features follow both a raw path and an enhanced path through one shared Whisper encoder. Cross-attention refines both encoded views, a learned gate merges them, and the Whisper decoder predicts Persian tokens.</desc>
+          <defs>
+            <marker id="fusion-paper-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+              <polygon points="0 0, 8 3, 0 6" fill="#3f4c59"/>
+            </marker>
+            <marker id="fusion-paper-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+              <polygon points="0 0, 8 3, 0 6" fill="#1d6f8a"/>
+            </marker>
+            <marker id="fusion-paper-arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+              <polygon points="0 0, 8 3, 0 6" fill="#1d6f8a"/>
+            </marker>
+          </defs>
+
+          <rect width="1120" height="792" fill="#f7f6f2"/>
+          <text class="figure-title" x="40" y="56">Dual-view speech enhancement and fusion</text>
+          <text class="figure-subtitle" x="40" y="92">Raw and enhanced acoustic views share one encoder before cross-attention and gated fusion</text>
+          <text class="section-label" x="40" y="144">INFERENCE ARCHITECTURE</text>
+          <line x1="40" y1="160" x2="1080" y2="160" stroke="rgba(31,41,51,0.18)" stroke-width="0.8"/>
+
+          <!-- Connectors are drawn before nodes. -->
+          <line class="arrow" x1="120" y1="376" x2="120" y2="440"/>
+          <line class="arrow" x1="200" y1="320" x2="456" y2="320"/>
+          <line class="arrow" x1="200" y1="496" x2="240" y2="496"/>
+          <path class="arrow" d="M408 496 H432 Q440 496 440 488 V456 Q440 448 448 448 H456"/>
+          <line class="arrow" x1="672" y1="320" x2="720" y2="320"/>
+          <line class="arrow" x1="672" y1="448" x2="720" y2="448"/>
+          <line class="arrow accent" x1="936" y1="372" x2="968" y2="372"/>
+          <line class="arrow" x1="1024" y1="428" x2="1024" y2="456"/>
+
+          <rect x="284" y="292" width="88" height="16" rx="4" fill="#f7f6f2"/>
+          <text class="arrow-label" x="328" y="304">RAW VIEW</text>
+          <!-- Noisy input -->
+          <rect class="node-mask" x="40" y="264" width="160" height="112" rx="8"/>
+          <rect class="node-box input" x="40" y="264" width="160" height="112" rx="8"/>
+          <rect x="52" y="276" width="56" height="20" rx="4" fill="none" stroke="rgba(82,96,109,0.55)" stroke-width="0.8"/>
+          <text class="tag" x="80" y="292">INPUT</text>
+          <text class="node-name" x="120" y="324">Noisy log-Mel</text>
+          <text class="technical" x="120" y="352">xₙ</text>
+
+          <!-- Enhancer -->
+          <rect class="node-mask" x="40" y="440" width="160" height="112" rx="8"/>
+          <rect class="node-box" x="40" y="440" width="160" height="112" rx="8"/>
+          <rect x="52" y="452" width="72" height="20" rx="4" fill="none" stroke="rgba(31,41,51,0.40)" stroke-width="0.8"/>
+          <text class="tag" x="88" y="468">ENHANCE</text>
+          <text class="node-name" x="120" y="504">Residual U-Net</text>
+          <text class="technical" x="120" y="532">E(xₙ)</text>
+
+          <!-- Enhanced view -->
+          <rect class="node-mask" x="240" y="440" width="168" height="112" rx="8"/>
+          <rect class="node-box input" x="240" y="440" width="168" height="112" rx="8"/>
+          <rect x="252" y="452" width="48" height="20" rx="4" fill="none" stroke="rgba(82,96,109,0.55)" stroke-width="0.8"/>
+          <text class="tag" x="276" y="468">VIEW</text>
+          <text class="node-name" x="324" y="496">Enhanced log-Mel</text>
+          <text class="technical" x="324" y="528">xₑ</text>
+
+          <!-- Shared encoder -->
+          <rect class="node-mask" x="456" y="192" width="216" height="360" rx="8"/>
+          <rect class="node-box" x="456" y="192" width="216" height="360" rx="8"/>
+          <rect x="468" y="208" width="72" height="20" rx="4" fill="none" stroke="rgba(31,41,51,0.40)" stroke-width="0.8"/>
+          <text class="tag" x="504" y="224">SHARED</text>
+          <text class="node-name" x="564" y="252">Whisper encoder</text>
+          <rect class="lane" x="472" y="272" width="184" height="96" rx="4"/>
+          <text class="node-copy" x="564" y="300">Raw view</text>
+          <text class="technical" x="564" y="332">hₙ = Enc(xₙ)</text>
+          <rect class="lane" x="472" y="400" width="184" height="96" rx="4"/>
+          <text class="node-copy" x="564" y="428">Enhanced view</text>
+          <text class="technical" x="564" y="460">hₑ = Enc(xₑ)</text>
+          <text class="detail" x="564" y="528">ONE SHARED WEIGHT SET</text>
+
+          <!-- Cross-view fusion -->
+          <rect class="node-mask" x="720" y="192" width="216" height="360" rx="8"/>
+          <rect class="node-box focal" x="720" y="192" width="216" height="360" rx="8"/>
+          <rect x="732" y="208" width="64" height="20" rx="4" fill="none" stroke="rgba(29,111,138,0.55)" stroke-width="0.8"/>
+          <text class="tag" x="764" y="224" fill="#1d6f8a">FUSION</text>
+          <text class="node-name" x="828" y="252">Cross-view fusion</text>
+          <rect class="lane accent" x="736" y="280" width="184" height="56" rx="4"/>
+          <text class="detail" x="828" y="316">CROSS-ATTENTION × 3</text>
+          <rect class="lane accent" x="736" y="352" width="184" height="56" rx="4"/>
+          <text class="detail" x="828" y="388">LEARNED SIGMOID GATE</text>
+          <text class="technical" x="828" y="448">h_f = g·h′ₑ</text>
+          <text class="technical" x="828" y="476">+ (1−g)·h′ₙ</text>
+          <text class="node-copy" x="828" y="524">Refined two-view blend</text>
+
+          <!-- Decoder -->
+          <rect class="node-mask" x="968" y="316" width="112" height="112" rx="8"/>
+          <rect class="node-box" x="968" y="316" width="112" height="112" rx="8"/>
+          <rect x="980" y="328" width="40" height="20" rx="4" fill="none" stroke="rgba(31,41,51,0.40)" stroke-width="0.8"/>
+          <text class="tag" x="1000" y="344">ASR</text>
+          <text class="node-name" x="1024" y="376">Whisper</text>
+          <text class="node-name" x="1024" y="400">decoder</text>
+
+          <!-- Output -->
+          <rect class="node-mask" x="968" y="456" width="112" height="96" rx="8"/>
+          <rect class="node-box output" x="968" y="456" width="112" height="96" rx="8"/>
+          <rect x="980" y="468" width="72" height="20" rx="4" fill="none" stroke="rgba(82,96,109,0.55)" stroke-width="0.8"/>
+          <text class="tag" x="1016" y="484">OUTPUT</text>
+          <text class="node-name" x="1024" y="516">Persian</text>
+          <text class="node-name" x="1024" y="540">tokens</text>
+        </svg>
+      </figure>
+    </main>
+  </body>
+</html>

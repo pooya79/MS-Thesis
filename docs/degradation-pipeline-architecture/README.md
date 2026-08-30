@@ -329,8 +329,8 @@ The diagram assets consist of:
   styles; and
 - [`simplified.html`](simplified.html), a dependency-free redesign with separate overview
   and branch-detail figures;
-- [`paper.html`](paper.html), a single A4-landscape figure for publication with a
-  diagram-only 3× PNG download button, following
+- [`paper.html`](paper.html), a single high-contrast A4-landscape figure for publication
+  with a link to the checked-in 3× PNG, following
   [`docs/diagram-style-guide.md`](../diagram-style-guide.md).
 
 The thesis uses a 3× raster export at

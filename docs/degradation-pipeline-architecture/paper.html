@@ -11,8 +11,8 @@
         --paper: #f7f6f2;
         --surface: #ffffff;
         --ink: #1f2933;
-        --muted: #52606d;
-        --soft: #7b8794;
+        --muted: #3f4c59;
+        --soft: #52606d;
         --accent: #1d6f8a;
         --accent-tint: #e8f3f6;
         --input-tint: #edf1f3;
@@ -24,24 +24,24 @@
       body { padding: 16px; }
       .actions { display: flex; justify-content: flex-end; align-items: center; gap: 12px; width: min(100%, 1120px); margin: 0 auto 12px; }
       .export-status { margin: 0; color: var(--muted); font: 400 12px Inter, Arial, sans-serif; }
-      button { border: 1px solid var(--muted); border-radius: 4px; padding: 8px 12px; color: var(--ink); background: var(--surface); font: 600 12px Inter, Arial, sans-serif; cursor: pointer; }
-      button:hover { border-color: var(--accent); color: var(--accent); }
-      button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-      button:disabled { cursor: wait; opacity: 0.6; }
+      .download { border: 1px solid var(--muted); border-radius: 4px; padding: 8px 12px; color: var(--ink); background: var(--surface); font: 600 12px Inter, Arial, sans-serif; text-decoration: none; }
+      .download:hover { border-color: var(--accent); color: var(--accent); }
+      .download:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
       figure { width: min(100%, 1120px); margin: 0 auto; }
       svg { display: block; width: 100%; height: auto; background: var(--paper); }
       svg text { text-rendering: geometricPrecision; }
       .title { fill: var(--ink); font: 400 32px Georgia, "Times New Roman", serif; }
-      .subtitle { fill: var(--muted); font: 400 12px Inter, Arial, sans-serif; }
-      .zone-label, .tag, .edge-label, .legend { font: 500 8px ui-monospace, "SFMono-Regular", Consolas, monospace; letter-spacing: 0.08em; }
+      .subtitle { fill: var(--muted); font: 400 16px Inter, Arial, sans-serif; }
+      .zone-label, .tag, .edge-label { font: 600 12px ui-monospace, "SFMono-Regular", Consolas, monospace; letter-spacing: 0.04em; }
+      .legend { font: 600 16px ui-monospace, "SFMono-Regular", Consolas, monospace; letter-spacing: 0.02em; }
       .zone-label, .tag, .legend { fill: var(--soft); }
       .edge-label { fill: var(--muted); text-anchor: middle; }
-      .node-name { fill: var(--ink); font: 600 12px Inter, Arial, sans-serif; text-anchor: middle; }
-      .node-sub { fill: var(--muted); font: 400 8px ui-monospace, "SFMono-Regular", Consolas, monospace; text-anchor: middle; }
+      .node-name { fill: var(--ink); font: 600 16px Inter, Arial, sans-serif; text-anchor: middle; }
+      .node-sub { fill: var(--muted); font: 500 12px ui-monospace, "SFMono-Regular", Consolas, monospace; text-anchor: middle; }
 
-      body.capture { padding: 0; overflow: hidden; }
-      body.capture .actions { display: none; }
-      body.capture figure { width: 100vw; max-width: none; }
+      body:has(#diagram:target) { padding: 0; overflow: hidden; }
+      body:has(#diagram:target) .actions { display: none; }
+      body:has(#diagram:target) figure { width: 1120px; max-width: none; margin: 0; }
 
       @media print {
         @page { size: A4 landscape; margin: 10mm; }
@@ -53,10 +53,10 @@
   </head>
   <body>
     <div class="actions" aria-label="Figure export controls">
-      <p id="export-status" class="export-status" role="status" aria-live="polite"></p>
-      <button id="export-png" type="button">Download PNG (3×)</button>
+      <p class="export-status">Print size: 3360 × 2376</p>
+      <a class="download" href="degradation-pipeline-architecture.png" download>Download PNG</a>
     </div>
-    <figure>
+    <figure id="diagram">
       <svg viewBox="0 0 1120 792" role="img" aria-labelledby="degradation-paper-title degradation-paper-desc">
         <title id="degradation-paper-title">Speech degradation pair-generation pipeline</title>
         <desc id="degradation-paper-desc">Clean speech is deterministically prepared and channel-filtered, processed by native Opus packet loss, an ffmpeg codec round-trip, or pass-through, then aligned with a clean target and written as a jointly peak-protected audio pair with reproducibility metadata.</desc>
@@ -80,22 +80,22 @@
         <!-- Branch zone: background → connectors → nodes. -->
         <rect x="80" y="288" width="960" height="240" rx="8" fill="rgba(31,41,51,0.02)" stroke="rgba(31,41,51,0.14)" stroke-width="0.8"/>
         <rect x="96" y="296" width="192" height="16" rx="4" fill="#f7f6f2"/>
-        <text class="zone-label" x="104" y="308">CHANNEL / CODEC / NETWORK PATH</text>
+        <text class="zone-label" x="104" y="308">CODEC / NETWORK PATH</text>
 
         <!-- Main preparation flow. -->
         <line x1="184" y1="208" x2="216" y2="208" stroke="#52606d" stroke-width="1.2" marker-end="url(#paper-arrow)"/>
         <line x1="400" y1="208" x2="432" y2="208" stroke="#52606d" stroke-width="1.2" marker-end="url(#paper-arrow)"/>
 
         <!-- Three distinct exits from channel preparation. -->
-        <path d="M480 248 V312 Q480 320 472 320 H240 Q232 320 232 328 V352" fill="none" stroke="#1d6f8a" stroke-width="1.2" marker-end="url(#paper-arrow-accent)"/>
+        <path d="M480 256 V312 Q480 320 472 320 H240 Q232 320 232 328 V352" fill="none" stroke="#1d6f8a" stroke-width="1.2" marker-end="url(#paper-arrow-accent)"/>
         <rect x="320" y="296" width="104" height="12" rx="4" fill="#f7f6f2"/>
         <text class="edge-label" x="372" y="304">OPUS + LOSS</text>
 
-        <path d="M524 248 V328 Q524 336 532 336 H552 Q560 336 560 344 V352" fill="none" stroke="#52606d" stroke-width="1.2" marker-end="url(#paper-arrow)"/>
+        <path d="M524 256 V328 Q524 336 532 336 H552 Q560 336 560 344 V352" fill="none" stroke="#52606d" stroke-width="1.2" marker-end="url(#paper-arrow)"/>
         <rect x="416" y="260" width="92" height="16" rx="4" fill="#f7f6f2"/>
         <text class="edge-label" x="460" y="272">FFMPEG</text>
 
-        <path d="M568 248 V328 Q568 336 576 336 H880 Q888 336 888 344 V352" fill="none" stroke="#52606d" stroke-width="1.2" marker-end="url(#paper-arrow)"/>
+        <path d="M568 256 V328 Q568 336 576 336 H880 Q888 336 888 344 V352" fill="none" stroke="#52606d" stroke-width="1.2" marker-end="url(#paper-arrow)"/>
         <rect x="704" y="312" width="112" height="12" rx="4" fill="#f7f6f2"/>
         <text class="edge-label" x="760" y="320">PASS-THROUGH</text>
 
@@ -105,35 +105,37 @@
         <path d="M888 464 V536 Q888 544 880 544 H632 Q624 544 624 552 V568" fill="none" stroke="#52606d" stroke-width="1.2" marker-end="url(#paper-arrow)"/>
 
         <!-- Clean target bypasses degradation and enters alignment independently. -->
-        <path d="M112 248 V264 Q112 272 104 272 H80 Q72 272 72 280 V680 Q72 688 80 688 H512 Q520 688 520 680 V648" fill="none" stroke="#52606d" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#paper-arrow)"/>
+        <path d="M112 256 V264 Q112 272 104 272 H80 Q72 272 72 280 V680 Q72 688 80 688 H512 Q520 688 520 680 V648" fill="none" stroke="#52606d" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#paper-arrow)"/>
         <rect x="264" y="664" width="104" height="12" rx="4" fill="#f7f6f2"/>
         <text class="edge-label" x="316" y="672">CLEAN TARGET</text>
 
         <line x1="664" y1="608" x2="824" y2="608" stroke="#52606d" stroke-width="1.2" marker-end="url(#paper-arrow)"/>
 
         <!-- 01 Clean source -->
-        <rect x="40" y="168" width="144" height="80" rx="8" fill="#f7f6f2"/>
-        <rect x="40" y="168" width="144" height="80" rx="8" fill="#edf1f3" stroke="#7b8794" stroke-width="1"/>
-        <rect x="52" y="180" width="28" height="16" rx="4" fill="none" stroke="rgba(82,96,109,0.45)" stroke-width="0.8"/>
-        <text class="tag" x="60" y="192">01</text>
+        <rect x="40" y="144" width="144" height="112" rx="8" fill="#f7f6f2"/>
+        <rect x="40" y="144" width="144" height="112" rx="8" fill="#edf1f3" stroke="#7b8794" stroke-width="1"/>
+        <rect x="52" y="156" width="40" height="20" rx="4" fill="none" stroke="rgba(82,96,109,0.45)" stroke-width="0.8"/>
+        <text class="tag" x="72" y="172">01</text>
         <text class="node-name" x="112" y="204">Clean speech</text>
-        <text class="node-sub" x="112" y="224">SOURCE + TRANSCRIPT</text>
+        <text class="node-sub" x="112" y="232">SOURCE + TRANSCRIPT</text>
 
         <!-- 02 Deterministic preparation -->
-        <rect x="216" y="168" width="184" height="80" rx="8" fill="#f7f6f2"/>
-        <rect x="216" y="168" width="184" height="80" rx="8" fill="#ffffff" stroke="#1f2933" stroke-width="1"/>
-        <rect x="228" y="180" width="28" height="16" rx="4" fill="none" stroke="rgba(31,41,51,0.35)" stroke-width="0.8"/>
-        <text class="tag" x="236" y="192">02</text>
-        <text class="node-name" x="308" y="204">Deterministic preparation</text>
-        <text class="node-sub" x="308" y="224">MONO · RATE · PROFILE · EFFECTS</text>
+        <rect x="216" y="144" width="184" height="112" rx="8" fill="#f7f6f2"/>
+        <rect x="216" y="144" width="184" height="112" rx="8" fill="#ffffff" stroke="#1f2933" stroke-width="1"/>
+        <rect x="228" y="156" width="40" height="20" rx="4" fill="none" stroke="rgba(31,41,51,0.35)" stroke-width="0.8"/>
+        <text class="tag" x="248" y="172">02</text>
+        <text class="node-name" x="308" y="204">Deterministic prep.</text>
+        <text class="node-sub" x="308" y="228">MONO · RATE · PROFILE</text>
+        <text class="node-sub" x="308" y="244">EFFECTS</text>
 
         <!-- 03 Channel preconditioning -->
-        <rect x="432" y="168" width="184" height="80" rx="8" fill="#f7f6f2"/>
-        <rect x="432" y="168" width="184" height="80" rx="8" fill="#ffffff" stroke="#1f2933" stroke-width="1"/>
-        <rect x="444" y="180" width="28" height="16" rx="4" fill="none" stroke="rgba(31,41,51,0.35)" stroke-width="0.8"/>
-        <text class="tag" x="452" y="192">03</text>
-        <text class="node-name" x="524" y="204">Channel preconditioning</text>
-        <text class="node-sub" x="524" y="224">PATH · BAND-LIMIT · PEAK GUARD</text>
+        <rect x="432" y="144" width="184" height="112" rx="8" fill="#f7f6f2"/>
+        <rect x="432" y="144" width="184" height="112" rx="8" fill="#ffffff" stroke="#1f2933" stroke-width="1"/>
+        <rect x="444" y="156" width="40" height="20" rx="4" fill="none" stroke="rgba(31,41,51,0.35)" stroke-width="0.8"/>
+        <text class="tag" x="464" y="172">03</text>
+        <text class="node-name" x="524" y="204">Channel conditioning</text>
+        <text class="node-sub" x="524" y="228">PATH · BAND-LIMIT</text>
+        <text class="node-sub" x="524" y="244">PEAK GUARD</text>
 
         <!-- Native Opus path -->
         <rect x="128" y="352" width="208" height="112" rx="8" fill="#f7f6f2"/>
@@ -147,16 +149,18 @@
         <rect x="456" y="352" width="208" height="112" rx="8" fill="#ffffff" stroke="#1f2933" stroke-width="1"/>
         <text class="node-name" x="560" y="388">ffmpeg codec round-trip</text>
         <text class="node-sub" x="560" y="408">ENCODE → DECODE</text>
-        <rect x="468" y="424" width="184" height="28" rx="4" fill="rgba(31,41,51,0.02)" stroke="rgba(31,41,51,0.28)" stroke-width="0.8" stroke-dasharray="4 4"/>
-        <text class="node-sub" x="560" y="444">IF NETWORK: WAVEFORM DROPOUT</text>
+        <rect x="468" y="416" width="184" height="40" rx="4" fill="rgba(31,41,51,0.02)" stroke="rgba(31,41,51,0.28)" stroke-width="0.8" stroke-dasharray="4 4"/>
+        <text class="node-sub" x="560" y="436">IF NETWORK: WAVEFORM</text>
+        <text class="node-sub" x="560" y="452">DROPOUT</text>
 
         <!-- Pass-through path with embedded optional impairment -->
         <rect x="784" y="352" width="208" height="112" rx="8" fill="#f7f6f2"/>
         <rect x="784" y="352" width="208" height="112" rx="8" fill="#ffffff" stroke="#1f2933" stroke-width="1"/>
         <text class="node-name" x="888" y="388">Pass-through</text>
         <text class="node-sub" x="888" y="408">NO CODEC ROUND-TRIP</text>
-        <rect x="796" y="424" width="184" height="28" rx="4" fill="rgba(31,41,51,0.02)" stroke="rgba(31,41,51,0.28)" stroke-width="0.8" stroke-dasharray="4 4"/>
-        <text class="node-sub" x="888" y="444">IF NETWORK: WAVEFORM DROPOUT</text>
+        <rect x="796" y="416" width="184" height="40" rx="4" fill="rgba(31,41,51,0.02)" stroke="rgba(31,41,51,0.28)" stroke-width="0.8" stroke-dasharray="4 4"/>
+        <text class="node-sub" x="888" y="436">IF NETWORK: WAVEFORM</text>
+        <text class="node-sub" x="888" y="452">DROPOUT</text>
 
         <!-- Common alignment -->
         <rect x="456" y="568" width="208" height="80" rx="8" fill="#f7f6f2"/>
@@ -168,104 +172,17 @@
         <rect x="824" y="568" width="240" height="80" rx="8" fill="#f7f6f2"/>
         <rect x="824" y="568" width="240" height="80" rx="8" fill="#eef4ef" stroke="#52606d" stroke-width="1"/>
         <text class="node-name" x="944" y="600">Peak-safe training pair</text>
-        <text class="node-sub" x="944" y="620">SHARED SCALE · WAVS · JSONL AUDIT TRAIL</text>
+        <text class="node-sub" x="944" y="620">SHARED SCALE · WAVS</text>
+        <text class="node-sub" x="944" y="636">JSONL AUDIT TRAIL</text>
 
         <line x1="40" y1="728" x2="1080" y2="728" stroke="rgba(31,41,51,0.14)" stroke-width="0.8"/>
-        <rect x="40" y="748" width="16" height="16" rx="4" fill="#e8f3f6" stroke="#1d6f8a" stroke-width="1"/>
-        <text class="legend" x="68" y="760">NATIVE PACKET-LOSS PATH</text>
-        <rect x="348" y="748" width="28" height="16" rx="4" fill="rgba(31,41,51,0.02)" stroke="rgba(31,41,51,0.28)" stroke-width="0.8" stroke-dasharray="4 4"/>
-        <text class="legend" x="388" y="760">CONDITIONAL WAVEFORM FALLBACK</text>
-        <line x1="772" y1="756" x2="804" y2="756" stroke="#52606d" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#paper-arrow)"/>
-        <text class="legend" x="816" y="760">CLEAN TARGET</text>
+        <rect x="40" y="744" width="24" height="24" rx="4" fill="#e8f3f6" stroke="#1d6f8a" stroke-width="1"/>
+        <text class="legend" x="76" y="764">NATIVE PACKET-LOSS PATH</text>
+        <rect x="348" y="744" width="32" height="24" rx="4" fill="rgba(31,41,51,0.02)" stroke="rgba(31,41,51,0.28)" stroke-width="0.8" stroke-dasharray="4 4"/>
+        <text class="legend" x="392" y="764">CONDITIONAL WAVEFORM FALLBACK</text>
+        <line x1="776" y1="756" x2="812" y2="756" stroke="#52606d" stroke-width="1.2" stroke-dasharray="4 4" marker-end="url(#paper-arrow)"/>
+        <text class="legend" x="828" y="764">CLEAN TARGET</text>
       </svg>
     </figure>
-    <script>
-      (() => {
-        "use strict";
-
-        if (new URLSearchParams(window.location.search).has("capture")) {
-          document.body.classList.add("capture");
-        }
-
-        const button = document.querySelector("#export-png");
-        const status = document.querySelector("#export-status");
-        const properties = [
-          "fill", "stroke", "stroke-width", "stroke-dasharray", "stroke-linecap",
-          "stroke-linejoin", "marker-end", "opacity", "font-family", "font-size",
-          "font-style", "font-weight", "letter-spacing", "text-anchor", "text-rendering"
-        ];
-
-        function localizeSvgUrl(value) {
-          return value.replace(/url\((?:["'])?.*?(#[\w-]+)(?:["'])?\)/g, "url($1)");
-        }
-
-        function serializedSvg() {
-          const source = document.querySelector("svg");
-          const clone = source.cloneNode(true);
-          const sourceElements = [source, ...source.querySelectorAll("*")];
-          const cloneElements = [clone, ...clone.querySelectorAll("*")];
-
-          sourceElements.forEach((element, index) => {
-            const computed = window.getComputedStyle(element);
-            properties.forEach((property) => {
-              const value = computed.getPropertyValue(property);
-              if (value) cloneElements[index].style.setProperty(property, localizeSvgUrl(value));
-            });
-          });
-
-          clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
-          clone.setAttribute("width", "1120");
-          clone.setAttribute("height", "792");
-          return `<?xml version="1.0" encoding="UTF-8"?>\n${new XMLSerializer().serializeToString(clone)}`;
-        }
-
-        function saveBlob(blob, filename) {
-          const url = URL.createObjectURL(blob);
-          const link = document.createElement("a");
-          link.href = url;
-          link.download = filename;
-          document.body.appendChild(link);
-          link.click();
-          link.remove();
-          setTimeout(() => URL.revokeObjectURL(url), 1000);
-        }
-
-        async function exportPng() {
-          button.disabled = true;
-          status.textContent = "Preparing 3360 × 2376 PNG…";
-
-          try {
-            await document.fonts.ready;
-            const svgBlob = new Blob([serializedSvg()], {type: "image/svg+xml;charset=utf-8"});
-            const svgUrl = URL.createObjectURL(svgBlob);
-            const image = new Image();
-            image.src = svgUrl;
-            await image.decode();
-
-            const canvas = document.createElement("canvas");
-            canvas.width = 3360;
-            canvas.height = 2376;
-            const context = canvas.getContext("2d");
-            context.fillStyle = "#f7f6f2";
-            context.fillRect(0, 0, canvas.width, canvas.height);
-            context.drawImage(image, 0, 0, canvas.width, canvas.height);
-            URL.revokeObjectURL(svgUrl);
-
-            const png = await new Promise((resolve, reject) => {
-              canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error("PNG encoding failed.")), "image/png");
-            });
-            saveBlob(png, "degradation-pipeline-architecture.png");
-            status.textContent = "PNG downloaded.";
-          } catch (error) {
-            console.error(error);
-            status.textContent = "Export failed; see the browser console.";
-          } finally {
-            button.disabled = false;
-          }
-        }
-
-        button.addEventListener("click", exportPng);
-      })();
-    </script>
   </body>
 </html>

@@ -11,8 +11,8 @@
       --paper: #f7f6f2;
       --surface: #ffffff;
       --ink: #1f2933;
-      --muted: #52606d;
-      --soft: #7b8794;
+      --muted: #3f4c59;
+      --soft: #52606d;
       --rule: rgba(31, 41, 51, 0.14);
       --accent: #1d6f8a;
       --accent-tint: #e8f3f6;
@@ -74,7 +74,7 @@
     }
     .node-title {
       fill: var(--ink);
-      font: 600 16px/1.15 Geist, Inter, system-ui, sans-serif;
+      font: 600 20px/1.15 Geist, Inter, system-ui, sans-serif;
     }
     .node-subtitle {
       fill: var(--muted);
@@ -134,7 +134,7 @@
 
       <!-- Connectors: drawn before nodes -->
       <line x1="196" y1="336" x2="196" y2="440" stroke="#52606d" stroke-width="1.2" marker-end="url(#long-audio-data-pipeline-arrow)"/>
-      <path d="M 316 496 H 356 Q 364 496 364 488 V 264 Q 364 256 372 256 H 424" fill="none" stroke="#52606d" stroke-width="1.2" marker-end="url(#long-audio-data-pipeline-arrow)"/>
+      <path d="M 328 496 H 356 Q 364 496 364 488 V 264 Q 364 256 372 256 H 424" fill="none" stroke="#52606d" stroke-width="1.2" marker-end="url(#long-audio-data-pipeline-arrow)"/>
       <line x1="544" y1="304" x2="544" y2="328" stroke="#52606d" stroke-width="1.2" marker-end="url(#long-audio-data-pipeline-arrow)"/>
       <line x1="544" y1="424" x2="544" y2="448" stroke="#52606d" stroke-width="1.2" marker-end="url(#long-audio-data-pipeline-arrow)"/>
       <line x1="544" y1="544" x2="544" y2="568" stroke="#52606d" stroke-width="1.2" marker-end="url(#long-audio-data-pipeline-arrow)"/>
@@ -143,8 +143,8 @@
       <text class="arrow-label" x="788" y="496" text-anchor="middle">TRAINING DATA</text>
 
       <!-- 01: source collection and validation -->
-      <rect x="76" y="224" width="240" height="112" rx="8" fill="#f7f6f2"/>
-      <rect x="76" y="224" width="240" height="112" rx="8" fill="#edf1f3" stroke="#7b8794" stroke-width="1"/>
+      <rect x="64" y="224" width="264" height="112" rx="8" fill="#f7f6f2"/>
+      <rect x="64" y="224" width="264" height="112" rx="8" fill="#edf1f3" stroke="#7b8794" stroke-width="1"/>
       <rect x="88" y="236" width="40" height="20" rx="4" fill="none" stroke="rgba(82,96,109,0.45)" stroke-width="0.8"/>
       <text class="step-number" x="108" y="252" text-anchor="middle">01</text>
       <text class="node-title" x="196" y="284" text-anchor="middle">Source collection</text>
@@ -152,8 +152,8 @@
       <text class="node-subtitle" x="196" y="328" text-anchor="middle">Manifest + checksum checks</text>
 
       <!-- 02: segmentation -->
-      <rect x="76" y="440" width="240" height="112" rx="8" fill="#f7f6f2"/>
-      <rect x="76" y="440" width="240" height="112" rx="8" fill="#ffffff" stroke="#1f2933" stroke-width="1"/>
+      <rect x="64" y="440" width="264" height="112" rx="8" fill="#f7f6f2"/>
+      <rect x="64" y="440" width="264" height="112" rx="8" fill="#ffffff" stroke="#1f2933" stroke-width="1"/>
       <rect x="88" y="452" width="40" height="20" rx="4" fill="none" stroke="rgba(31,41,51,0.35)" stroke-width="0.8"/>
       <text class="step-number" x="108" y="468" text-anchor="middle">02</text>
       <text class="node-title" x="196" y="504" text-anchor="middle">VAD-based segmentation</text>
