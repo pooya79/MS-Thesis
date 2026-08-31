@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#111812">
+  <title>Sign in · Speech Lab</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body class="auth-page">
+  <main class="auth-main">
+    <section class="auth-card">
+      <span class="brand-mark auth-mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+      <p class="eyebrow">Private research tool</p>
+      <h1>Speech Lab</h1>
+      <p>Enter the server password to continue.</p>
+      <form method="post" action="/login" class="auth-form">
+        <input type="hidden" name="next" value="{{ next }}">
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" required autofocus>
+        {% if error %}<p class="auth-error" role="alert">{{ error }}</p>{% endif %}
+        <button type="submit">Sign in <span>→</span></button>
+      </form>
+    </section>
+  </main>
+</body>
+</html>

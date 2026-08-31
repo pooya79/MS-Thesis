@@ -45,7 +45,8 @@ This repository is my research archive for my MS thesis.
 
 ## Server and Static Rules
 - Static assets must remain mounted at `/static` from `server/app/static`.
-- The server is a local experiment UI and has no account or database layer.
+- The server has no account or database layer; access uses the shared `APP_PASSWORD` environment variable and a signed HTTP-only session cookie.
+- Keep `/login` and `/static/*` public; all application pages and APIs must require authentication.
 - Audio uploads must be bounded, decoded into a temporary mono WAV, and removed after each request.
 - Models must load lazily and remain cached across requests.
 

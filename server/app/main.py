@@ -1,15 +1,24 @@
 from __future__ import annotations
 
+import hmac
 import subprocess
 import tempfile
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
+from server.app.core.auth import (
+    SESSION_COOKIE,
+    SESSION_TTL_SECONDS,
+    PasswordAuthMiddleware,
+    make_session_token,
+    require_app_password,
+    safe_next_path,
+)
 from server.app.core.config import get_settings
 from server.app.services.transcription import get_registry
 
@@ -21,7 +30,47 @@ templates = Environment(
 )
 
 app = FastAPI(title=settings.title)
+app.add_middleware(PasswordAuthMiddleware, password=require_app_password())
 app.mount("/static", StaticFiles(directory=app_dir / "static"), name="static")
+
+
+@app.get("/login", response_class=HTMLResponse)
+def login_page(next: str = "/") -> str:
+    return templates.get_template("login.html").render(error=None, next=safe_next_path(next))
+
+
+@app.post("/login")
+def login(request: Request, password: str = Form(...), next: str = Form("/")) -> Response:
+    app_password = require_app_password()
+    destination = safe_next_path(next)
+    if not hmac.compare_digest(password.encode(), app_password.encode()):
+        content = templates.get_template("login.html").render(
+            error="Incorrect password.",
+            next=destination,
+        )
+        return HTMLResponse(content, status_code=401)
+    response = RedirectResponse(destination, status_code=303)
+    response.set_cookie(
+        SESSION_COOKIE,
+        make_session_token(app_password),
+        max_age=SESSION_TTL_SECONDS,
+        httponly=True,
+        secure=request.url.scheme == "https",
+        samesite="lax",
+    )
+    return response
+
+
+@app.post("/logout")
+def logout(request: Request) -> Response:
+    response = RedirectResponse("/login", status_code=303)
+    response.delete_cookie(
+        SESSION_COOKIE,
+        httponly=True,
+        secure=request.url.scheme == "https",
+        samesite="lax",
+    )
+    return response
 
 
 @app.get("/", response_class=HTMLResponse)

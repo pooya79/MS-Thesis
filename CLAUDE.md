@@ -27,7 +27,7 @@ Two largely independent halves share one repo and one `uv` environment:
 - `configs/server.yaml` is the source of truth for available models, checkpoint/processor paths, device choice, and upload limits. Set `ASR_SERVER_CONFIG` to use another config file.
 - `server/app/services/transcription.py` lazily loads and caches Whisper, Fusion, and FastConformer backends. Per-model locks prevent concurrent GPU use of the same model.
 - Uploaded or browser-recorded audio is bounded, converted by FFmpeg to mono 16 kHz WAV in a temporary directory, and deleted after inference.
-- The app has no authentication, database, or migration layer; it is intended to be run as a local research tool.
+- The app has no account, database, or migration layer. A shared password from `APP_PASSWORD` protects pages and APIs through a signed HTTP-only session cookie.
 
 ### 2. `ml/` — reproducible thesis ML pipelines
 All run as modules: `uv run python -m ml.<...>`. Determinism is a hard requirement (seeds + augmentation metadata recorded in JSONL manifests).

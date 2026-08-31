@@ -29,8 +29,64 @@ def wav_bytes(seconds: float = 1.0) -> bytes:
     return buffer.getvalue()
 
 
+def authenticate(client: TestClient) -> None:
+    response = client.post(
+        "/login",
+        data={"password": "test-password", "next": "/"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+
+
+def test_unauthenticated_page_redirects_to_login() -> None:
+    with TestClient(main.app) as client:
+        response = client.get("/", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/login?next=%2F"
+
+
+def test_unauthenticated_api_returns_401() -> None:
+    with TestClient(main.app) as client:
+        response = client.get("/api/models")
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "Authentication required"}
+
+
+def test_login_page_and_invalid_password() -> None:
+    with TestClient(main.app) as client:
+        page = client.get("/login")
+        rejected = client.post("/login", data={"password": "wrong", "next": "/"})
+
+    assert page.status_code == 200
+    assert "Enter the server password" in page.text
+    assert rejected.status_code == 401
+    assert "Incorrect password" in rejected.text
+
+
+def test_static_assets_remain_public() -> None:
+    with TestClient(main.app) as client:
+        response = client.get("/static/css/app.css")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/css")
+
+
+def test_logout_invalidates_session() -> None:
+    with TestClient(main.app) as client:
+        authenticate(client)
+        logout = client.post("/logout", follow_redirects=False)
+        page = client.get("/", follow_redirects=False)
+
+    assert logout.status_code == 303
+    assert logout.headers["location"] == "/login"
+    assert page.status_code == 303
+
+
 def test_homepage_exposes_model_picker_and_audio_sources() -> None:
     with TestClient(main.app) as client:
+        authenticate(client)
         response = client.get("/")
 
     assert response.status_code == 200
@@ -42,10 +98,12 @@ def test_homepage_exposes_model_picker_and_audio_sources() -> None:
     assert "/static/js/app.js" in response.text
     assert 'id="loading-panel"' in response.text
     assert "loading-spinner" in response.text
+    assert "Log out" in response.text
 
 
 def test_models_endpoint_returns_safe_public_metadata() -> None:
     with TestClient(main.app) as client:
+        authenticate(client)
         response = client.get("/api/models")
 
     assert response.status_code == 200
@@ -59,6 +117,7 @@ def test_transcription_endpoint_returns_result(monkeypatch) -> None:
     monkeypatch.setattr(main, "get_registry", lambda: FakeRegistry())
     monkeypatch.setattr(main, "_convert_to_wav", lambda source, destination: shutil.copyfile(source, destination))
     with TestClient(main.app) as client:
+        authenticate(client)
         response = client.post(
             "/api/transcriptions",
             data={"model_id": "whisper-small"},
@@ -78,6 +137,7 @@ def test_transcription_endpoint_returns_result(monkeypatch) -> None:
 def test_model_status_endpoint_reports_runtime_device(monkeypatch) -> None:
     monkeypatch.setattr(main, "get_registry", lambda: FakeRegistry())
     with TestClient(main.app) as client:
+        authenticate(client)
         response = client.get("/api/models/whisper-small/status")
 
     assert response.status_code == 200
@@ -92,6 +152,7 @@ def test_model_status_endpoint_reports_runtime_device(monkeypatch) -> None:
 def test_transcription_endpoint_rejects_oversized_upload(monkeypatch) -> None:
     monkeypatch.setattr(main, "settings", replace(main.settings, max_upload_mb=0))
     with TestClient(main.app) as client:
+        authenticate(client)
         response = client.post(
             "/api/transcriptions",
             data={"model_id": "whisper-small"},

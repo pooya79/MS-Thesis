@@ -253,6 +253,13 @@ upload limits, or generation limits. Models load lazily on first use and remain
 cached. Each upload is decoded by `ffmpeg` into a temporary mono 16 kHz WAV and
 removed when the request finishes.
 
+Set the shared access password before starting the server:
+
+```bash
+export APP_PASSWORD='replace-this-with-a-long-random-password'
+```
+
+The login session lasts seven days and is invalidated when the password changes.
 To use a different configuration file, set `ASR_SERVER_CONFIG` to its path.
 
 Run the development server:
@@ -261,9 +268,8 @@ Run the development server:
 make run
 ```
 
-Open `http://localhost:8001`. This app has no authentication and is intended for
-local research use; add network-level access controls before exposing it beyond
-your machine.
+Open `http://localhost:8001` and enter the configured password. HTTPS is still
+recommended whenever the server is exposed beyond your local machine.
 
 ## Tests
 
