@@ -1,0 +1,46 @@
+app:
+  title: Persian Speech Lab
+  max_upload_mb: 25
+  max_audio_seconds: 30
+  sample_rate: 16000
+
+# Checkpoints are loaded lazily on first use. Local paths are resolved from the
+# directory where the server is started (normally the repository root).
+models:
+  - id: whisper-small
+    label: Whisper Small
+    backend: whisper
+    checkpoint: models/asr/whisper-small/runs/whisper-small-fa/final
+    processor: openai/whisper-small
+    description: Fine-tuned Persian baseline
+    language: Persian
+    task: transcribe
+    device: auto
+
+  - id: whisper-medium
+    label: Whisper Medium
+    backend: whisper
+    checkpoint: models/asr/whisper-medium/runs/whisper-medium-fa/final
+    processor: openai/whisper-medium
+    description: Larger Whisper baseline
+    language: Persian
+    task: transcribe
+    device: auto
+
+  - id: fusion
+    label: Fusion
+    backend: fusion
+    checkpoint: artifacts/speech_enhancement/fusion/run_001/checkpoints/stage2_joint/fusion_model.pt
+    base_asr_checkpoint: openai/whisper-small
+    model_name: openai/whisper-small
+    description: Enhanced dual-view model
+    language: Persian
+    task: transcribe
+    device: auto
+
+  - id: fastconformer
+    label: FastConformer
+    backend: fastconformer
+    checkpoint: models/stt_fa_fastconformer_ctc.pt
+    description: Fast CTC decoding
+    device: auto

@@ -10,7 +10,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - `make run` — start the FastAPI dev server (`uvicorn server.app.main:app --reload` on `:8001`).
 - `make test` — full pytest suite (`uv run pytest -q`).
-- `make migrate-up` / `make migrate-down` — apply / revert one Alembic migration. DB is SQLite at `server/data/app.db`.
 - `uv sync` — install/refresh dependencies from `pyproject.toml` + `uv.lock`.
 - Run one test file: `uv run pytest server/tests/test_degradation_pipeline.py -q`
 - Run one test: `uv run pytest server/tests/test_health.py::<name> -q`
@@ -23,12 +22,12 @@ For every data/training/inspection script and its exact CLI flags, see `docs/scr
 
 Two largely independent halves share one repo and one `uv` environment:
 
-### 1. `server/` — FastAPI web app
-- Entry point `server/app/main.py` wires three layers of middleware in order: `PasswordAuthMiddleware` → `SessionMiddleware` → static mount + `web` router.
-- **Auth is global-by-default**: `PasswordAuthMiddleware` (`server/app/core/auth.py`) protects every route. Only `is_public_path` exceptions pass through unauthenticated — `GET/POST /login` and `GET/HEAD /static/*`. Single shared password from `APP_PASSWORD` (`secrets.compare_digest`), session-cookie backed. HTML requests get a redirect to `/login?next=`; non-HTML requests get `401`. Don't add public routes without going through `is_public_path`.
-- Settings come from `server/app/core/config.py` (`pydantic-settings`, `.env`-backed, `lru_cache`d `get_settings()`). `APP_PASSWORD` and `APP_AUTH_SECRET` are required env vars.
-- Persistence: SQLModel + SQLite, sessions via `server/app/db/session.py`, models under `server/app/models/`, migrations via Alembic (`alembic.ini`, `sqlite:///server/data/app.db`).
-- Templates/CSS/JS follow a strict layering convention — see AGENTS.md before touching `templates/` or `static/css/`.
+### 1. `server/` — FastAPI ASR playground
+- Entry point `server/app/main.py` serves the model picker and `POST /api/transcriptions`.
+- `configs/server.yaml` is the source of truth for available models, checkpoint/processor paths, device choice, and upload limits. Set `ASR_SERVER_CONFIG` to use another config file.
+- `server/app/services/transcription.py` lazily loads and caches Whisper, Fusion, and FastConformer backends. Per-model locks prevent concurrent GPU use of the same model.
+- Uploaded or browser-recorded audio is bounded, converted by FFmpeg to mono 16 kHz WAV in a temporary directory, and deleted after inference.
+- The app has no authentication, database, or migration layer; it is intended to be run as a local research tool.
 
 ### 2. `ml/` — reproducible thesis ML pipelines
 All run as modules: `uv run python -m ml.<...>`. Determinism is a hard requirement (seeds + augmentation metadata recorded in JSONL manifests).
@@ -40,7 +39,7 @@ All run as modules: `uv run python -m ml.<...>`. Determinism is a hard requireme
 **ASR dataset contract** (used across `ml/` and tests): a dataset dir has split TSVs (`train.tsv`/`dev.tsv`/`test.tsv`) with at least `path` + `sentence` columns; audio resolves as `<dataset>/clips/<path>` then `<dataset>/<path>`. See AGENTS.md "ASR Dataset Layout".
 
 ### Tests
-`server/tests/` covers both halves: web (auth redirect, login flow, static accessibility, protected `/health`) and ML (script `--help` text, dataset prep, degradation determinism/codec round-trips/manifest fields). Template or style changes must validate both HTML content and asset links.
+`server/tests/` covers both halves: the ASR web UI/API (model listing, uploads, limits, responses) and ML utilities (script `--help` text, dataset prep, degradation determinism/codec round-trips/manifest fields). Template or style changes must validate both HTML content and asset links.
 
 ## Data & artifacts
 

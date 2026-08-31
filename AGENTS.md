@@ -4,7 +4,7 @@
 This repository is my research archive for my MS thesis.
 
 ## Project Structure
-- `server/`: FastAPI application, templates, database setup, and server-side tests.
+- `server/`: FastAPI ASR playground, model adapters, templates, static assets, and tests.
 - `server/app/`: application package (`core`, `db`, `models`, `routers`, `templates`).
 - `server/app/static/`: frontend assets (`css/`, `js/`) served at `/static`.
 - `server/tests/`: automated tests for API and page behavior.
@@ -33,32 +33,25 @@ This repository is my research archive for my MS thesis.
 - Audio paths in TSV rows are resolved first as `<dataset>/clips/<path>`, then as `<dataset>/<path>`.
 
 ## Frontend and Template Conventions
-- Use `server/app/templates/base.html` as the global document skeleton.
-- Use `server/app/templates/shell.html` for authenticated app pages that need top nav + left sidebar + right sidebar.
-- Keep page templates thin: extend base/shell and place page-specific markup in blocks.
-- Keep shared styles in tokenized CSS under `server/app/static/css/`.
-- CSS layering: `tokens.css` for design variables.
-- CSS layering: `base.css` for reset and global primitives.
-- CSS layering: `shell.css` for app shell layout and responsive behavior.
-- CSS layering: `home.css` for home/dashboard-specific styles.
-- Keep shell interaction JS in `server/app/static/js/shell.js` (mobile sidebar toggle and TOC highlighting).
+- Keep the single-page ASR UI in `server/app/templates/index.html`.
+- Keep its styles in `server/app/static/css/app.css` and browser recording/upload behavior in `server/app/static/js/app.js`.
+- Model choices and checkpoint paths belong in `configs/server.yaml`, not in templates or JavaScript.
+- Keep templates thin and keep model inference behind `server/app/services/transcription.py`.
 
 ## Diagram Conventions
 - Use `docs/diagram-style-guide.md` as the visual design system for thesis and research diagrams.
 - Prefer one self-contained HTML file with inline SVG and CSS for each new diagram.
 - Keep source diagrams intact when producing redesigns; add the new artifact beside the original.
 
-## Auth and Static Rules
+## Server and Static Rules
 - Static assets must remain mounted at `/static` from `server/app/static`.
-- Unauthenticated users must be allowed to read `/static/*` with `GET/HEAD`.
-- Keep `/login` public for `GET/POST`; all other routes remain protected by password session middleware unless explicitly designed otherwise.
+- The server is a local experiment UI and has no account or database layer.
+- Audio uploads must be bounded, decoded into a temporary mono WAV, and removed after each request.
+- Models must load lazily and remain cached across requests.
 
 ## Test Expectations
 - For template/style changes, validate both content and asset links in HTML responses.
-- Keep coverage for unauthenticated redirect to `/login`.
-- Keep coverage for successful login + authenticated homepage render.
-- Keep coverage for static asset public accessibility.
-- Keep coverage for protected non-HTML endpoint behavior (e.g. `/health` returns `401` when unauthenticated).
+- Keep coverage for model metadata, upload validation, API transcription results, and duration limits.
 - For speech degradation changes, keep coverage for deterministic seeds, audio shape/range safety, codec round-trips, generated manifest fields, and clean/degraded length alignment.
 
 

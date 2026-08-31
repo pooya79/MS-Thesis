@@ -3,10 +3,9 @@
 Research code and experiment archive for Persian automatic speech recognition
 (ASR), speech degradation, speech enhancement, and noisy/clean feature fusion.
 
-The useful parts of this repository currently live in the command-line tools
-under `ml/`. The FastAPI server is an early experimental interface: most of its
-dashboard content is placeholder material, and it should not be treated as a
-finished research application.
+The repository includes reproducible command-line experiments under `ml/` and a
+small FastAPI playground for running the trained ASR models on uploaded or
+browser-recorded speech.
 
 ## What Is Implemented
 
@@ -18,7 +17,7 @@ finished research application.
 - Train and evaluate Whisper-small and a standalone FastConformer-CTC model.
 - Train and evaluate an enhancement plus dual-view fusion pipeline.
 - Diagnose whether a trained enhancer improves over the identity baseline.
-- Run a password-protected web demo for generating and comparing degraded speech.
+- Compare Whisper, Fusion, and FastConformer transcripts in a local web UI.
 
 ## Repository Layout
 
@@ -26,7 +25,7 @@ finished research application.
 configs/        YAML configurations for data generation, training, and evaluation
 docs/           Script reference, pipeline notes, and experiment decisions
 ml/             Dataset, degradation, ASR, enhancement, and fusion code
-server/         Experimental FastAPI UI and automated tests
+server/         FastAPI ASR playground and automated tests
 data/           Local datasets and generated audio (not committed)
 artifacts/      Local checkpoints, metrics, and reports (not committed)
 Thesis/         Thesis documents and research notes
@@ -242,32 +241,19 @@ uv run python -m ml.enhancement.diagnose_enhancement \
 
 ## FastAPI Server
 
-The server is currently a development scaffold, not a finished thesis product.
-The home dashboard contains placeholder metrics and inactive links. Its only
-meaningful experiment interface is the speech-degradation demo, which reuses
-the real degradation pipeline to:
+The local playground lets a user:
 
-- accept an audio upload;
-- apply selected channel, codec, noise, level, and network effects;
-- return the input, bandwidth-aligned clean target, and degraded WAV;
-- display the generated metadata.
+- choose a configured Whisper, Fusion, or FastConformer checkpoint;
+- upload an audio file or record from the browser microphone;
+- preview the audio and receive a copyable transcript;
+- see the audio duration and inference time.
 
-The app also includes password/session middleware, templates, static assets,
-and a protected health endpoint. Generated demo files are temporary local
-artifacts under `server/data/`.
+Edit `configs/server.yaml` to change labels, backends, checkpoint paths, devices,
+upload limits, or generation limits. Models load lazily on first use and remain
+cached. Each upload is decoded by `ffmpeg` into a temporary mono 16 kHz WAV and
+removed when the request finishes.
 
-Configure the server:
-
-```bash
-cp .env.example .env
-```
-
-At minimum, replace these values in `.env`:
-
-```dotenv
-APP_PASSWORD=change-me
-APP_AUTH_SECRET=change-this-secret
-```
+To use a different configuration file, set `ASR_SERVER_CONFIG` to its path.
 
 Run the development server:
 
@@ -275,10 +261,9 @@ Run the development server:
 make run
 ```
 
-Open `http://localhost:8001`, sign in, and navigate to
-`/experiments/speech-degradation`. Noise generation requires the DEMAND index
-created during degradation asset preparation. Codec options depend on the local
-`ffmpeg` build.
+Open `http://localhost:8001`. This app has no authentication and is intended for
+local research use; add network-level access controls before exposing it beyond
+your machine.
 
 ## Tests
 

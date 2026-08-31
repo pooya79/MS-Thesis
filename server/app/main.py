@@ -1,29 +1,110 @@
+from __future__ import annotations
+
+import subprocess
+import tempfile
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
-from starlette.middleware.sessions import SessionMiddleware
+from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from server.app.core.auth import PasswordAuthMiddleware
 from server.app.core.config import get_settings
-from server.app.routers.web import router as web_router
+from server.app.services.transcription import get_registry
 
 settings = get_settings()
-static_dir = Path(__file__).resolve().parent / "static"
-
-app = FastAPI(title=settings.app_name)
-app.add_middleware(PasswordAuthMiddleware)
-app.add_middleware(
-    SessionMiddleware,
-    secret_key=settings.app_auth_secret,
-    max_age=settings.session_max_age_seconds,
-    same_site="lax",
-    https_only=settings.environment == "prod",
+app_dir = Path(__file__).resolve().parent
+templates = Environment(
+    loader=FileSystemLoader(app_dir / "templates"),
+    autoescape=select_autoescape(["html", "xml"]),
 )
 
-app.mount(
-    "/static",
-    StaticFiles(directory=str(static_dir)),
-    name="static",
-)
-app.include_router(web_router)
+app = FastAPI(title=settings.title)
+app.mount("/static", StaticFiles(directory=app_dir / "static"), name="static")
+
+
+@app.get("/", response_class=HTMLResponse)
+def index() -> str:
+    return templates.get_template("index.html").render(settings=settings)
+
+
+@app.get("/api/models")
+def list_models() -> dict[str, object]:
+    return {
+        "models": [
+            {
+                "id": model.id,
+                "label": model.label,
+                "description": model.description,
+                "backend": model.backend,
+            }
+            for model in settings.models
+        ]
+    }
+
+
+@app.get("/api/models/{model_id}/status")
+def model_status(model_id: str) -> dict[str, object]:
+    try:
+        status = get_registry().status(model_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {
+        "model_id": status.model_id,
+        "label": status.label,
+        "state": status.state,
+        "device": status.device,
+    }
+
+
+def _convert_to_wav(source: Path, destination: Path) -> None:
+    try:
+        subprocess.run(
+            [
+                "ffmpeg", "-v", "error", "-nostdin", "-y", "-i", str(source),
+                "-ac", "1", "-ar", str(settings.sample_rate), str(destination),
+            ],
+            check=True,
+            capture_output=True,
+            timeout=60,
+        )
+    except FileNotFoundError as exc:
+        raise ValueError("ffmpeg is required to decode uploaded audio") from exc
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        raise ValueError("the uploaded file is not a readable audio recording") from exc
+
+
+@app.post("/api/transcriptions")
+async def transcribe(model_id: str = Form(...), audio: UploadFile = File(...)) -> dict[str, object]:
+    if not audio.filename:
+        raise HTTPException(status_code=400, detail="Choose or record an audio file")
+    max_bytes = settings.max_upload_mb * 1024 * 1024
+    with tempfile.TemporaryDirectory(prefix="asr-upload-") as temp_dir:
+        source = Path(temp_dir) / "upload"
+        size = 0
+        with source.open("wb") as handle:
+            while chunk := await audio.read(1024 * 1024):
+                size += len(chunk)
+                if size > max_bytes:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"Audio must be smaller than {settings.max_upload_mb} MB",
+                    )
+                handle.write(chunk)
+        await audio.close()
+        wav_path = Path(temp_dir) / "audio.wav"
+        try:
+            await run_in_threadpool(_convert_to_wav, source, wav_path)
+            result = await run_in_threadpool(get_registry().transcribe, model_id, wav_path)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except (FileNotFoundError, RuntimeError, OSError, ImportError) as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return {
+        "text": result.text,
+        "model_id": result.model_id,
+        "device": result.device,
+        "duration_seconds": result.duration_seconds,
+        "processing_seconds": result.processing_seconds,
+    }

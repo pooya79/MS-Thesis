@@ -1,123 +1,104 @@
-{% extends "shell.html" %}
-
-{% block title %}Home | {{ app_name }}{% endblock %}
-
-{% block shell_page_css %}
-  <link rel="stylesheet" href="{{ url_for('static', path='css/home.css') }}" />
-{% endblock %}
-
-{% block shell_main %}
-  <header class="dashboard-hero" id="overview">
-    <p class="eyebrow">Research command center</p>
-    <h1>{{ app_name }}</h1>
-    <p class="subtitle">{{ subtitle }}</p>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#111812">
+  <title>{{ settings.title }}</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/css/app.css">
+  <script src="/static/js/app.js" defer></script>
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="/" aria-label="Speech Lab home">
+      <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+      <span>Speech Lab</span>
+    </a>
+    <span class="status"><i></i> Local inference</span>
   </header>
 
-  <section class="dashboard-section" id="summary">
-    <div class="section-heading">
-      <h2>Snapshot</h2>
-      <p>Quick metrics across experiments, archive assets, and publication flow.</p>
-    </div>
-    <div class="metric-grid">
-      <article class="metric-card">
-        <p class="metric-label">Active experiments</p>
-        <p class="metric-value">12</p>
-        <p class="metric-trend">+2 from last week</p>
-      </article>
-      <article class="metric-card">
-        <p class="metric-label">Tracked trajectories</p>
-        <p class="metric-value">48,290</p>
-        <p class="metric-trend">95.2% clean sequences</p>
-      </article>
-      <article class="metric-card">
-        <p class="metric-label">Paper drafts</p>
-        <p class="metric-value">3</p>
-        <p class="metric-trend">1 ready for review</p>
-      </article>
-      <article class="metric-card">
-        <p class="metric-label">Demo builds</p>
-        <p class="metric-value">7</p>
-        <p class="metric-trend">2 awaiting validation</p>
-      </article>
-    </div>
-  </section>
+  <main>
+    <section class="intro">
+      <p class="eyebrow">Persian automatic speech recognition</p>
+      <h1>Turn speech into text.</h1>
+      <p class="lede">Choose an experiment, add a recording, and compare what your ASR models hear.</p>
+    </section>
 
-  <section class="dashboard-section" id="recent">
-    <div class="section-heading">
-      <h2>Recent research activity</h2>
-      <p>Latest experiment notes and archival updates.</p>
-    </div>
-    <div class="table-wrap">
-      <table class="activity-table">
-        <thead>
-          <tr>
-            <th>Item</th>
-            <th>Type</th>
-            <th>Owner</th>
-            <th>Status</th>
-            <th>Updated</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td>transformer-long-horizon-v5</td>
-            <td>Experiment</td>
-            <td>Core team</td>
-            <td><span class="status-tag">Running</span></td>
-            <td>2h ago</td>
-          </tr>
-          <tr>
-            <td>nuScenes alignment pass</td>
-            <td>Data QA</td>
-            <td>Data ops</td>
-            <td><span class="status-tag complete">Completed</span></td>
-            <td>5h ago</td>
-          </tr>
-          <tr>
-            <td>conference-submission-outline</td>
-            <td>Paper</td>
-            <td>Research lead</td>
-            <td><span class="status-tag review">In review</span></td>
-            <td>Yesterday</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-  </section>
+    <form id="transcription-form" class="workspace" data-max-audio-seconds="{{ settings.max_audio_seconds }}">
+      <section class="panel model-panel" aria-labelledby="model-heading">
+        <div class="step-heading">
+          <span>01</span>
+          <div><h2 id="model-heading">Choose a model</h2><p>Models load on first use and remain warm.</p></div>
+        </div>
+        <div class="model-grid">
+          {% for model in settings.models %}
+          <label class="model-card">
+            <input type="radio" name="model_id" value="{{ model.id }}" {% if loop.first %}checked{% endif %}>
+            <span class="model-check" aria-hidden="true"></span>
+            <span class="model-name">{{ model.label }}</span>
+            <span class="model-backend">{{ model.backend }}</span>
+            <span class="model-description">{{ model.description }}</span>
+          </label>
+          {% endfor %}
+        </div>
+      </section>
 
-  <section class="dashboard-section" id="actions">
-    <div class="section-heading">
-      <h2>Quick actions</h2>
-      <p>Jump into the most common workflows.</p>
-    </div>
-    <div class="action-list">
-      <a href="#" class="action-card">
-        <h3>Start an experiment log</h3>
-        <p>Create a new run entry with metadata, checkpoints, and hypothesis notes.</p>
-      </a>
-      <a href="#" class="action-card">
-        <h3>Draft a research blog post</h3>
-        <p>Generate a reproducible outline from the latest archived findings.</p>
-      </a>
-      <a href="#" class="action-card">
-        <h3>Prepare publication package</h3>
-        <p>Collect plots, references, and appendix assets for manuscript export.</p>
-      </a>
-    </div>
-  </section>
-{% endblock %}
+      <section class="panel audio-panel" aria-labelledby="audio-heading">
+        <div class="step-heading">
+          <span>02</span>
+          <div><h2 id="audio-heading">Add audio</h2><p>Upload a file or record directly in your browser.</p></div>
+        </div>
 
-{% block shell_right_sidebar %}
-  <div class="panel-title">On this page</div>
-  <ul class="toc-list">
-    <li><a href="#overview" data-toc-link>Overview</a></li>
-    <li><a href="#summary" data-toc-link>Snapshot</a></li>
-    <li><a href="#recent" data-toc-link>Recent activity</a></li>
-    <li><a href="#actions" data-toc-link>Quick actions</a></li>
-  </ul>
+        <div class="source-tabs" role="tablist" aria-label="Audio source">
+          <button type="button" class="source-tab active" data-tab="upload" role="tab" aria-selected="true">Upload file</button>
+          <button type="button" class="source-tab" data-tab="record" role="tab" aria-selected="false">Record voice</button>
+        </div>
 
-  <div class="panel-title panel-title-spaced">Session</div>
-  <p class="panel-copy">
-    Authenticated access is active. Your session keeps docs and app routes protected.
-  </p>
-{% endblock %}
+        <div id="upload-panel" class="source-panel">
+          <label id="drop-zone" class="drop-zone">
+            <input id="audio-file" name="audio" type="file" accept="audio/*,.wav,.mp3,.flac,.m4a,.ogg,.webm">
+            <span class="upload-icon" aria-hidden="true">↥</span>
+            <strong>Drop an audio file here</strong>
+            <span>or click to browse · up to {{ settings.max_upload_mb }} MB / {{ settings.max_audio_seconds|int }} sec</span>
+          </label>
+        </div>
+
+        <div id="record-panel" class="source-panel hidden">
+          <div class="recorder">
+            <div class="record-state"><span id="record-dot"></span><strong id="record-label">Ready to record</strong><time id="record-time">00:00</time></div>
+            <canvas id="visualizer" width="720" height="96" aria-hidden="true"></canvas>
+            <button id="record-button" type="button" class="record-button"><span></span> Start recording</button>
+          </div>
+        </div>
+
+        <div id="audio-preview" class="audio-preview hidden">
+          <div><strong id="audio-name"></strong><span id="audio-meta"></span></div>
+          <audio id="audio-player" controls></audio>
+          <button id="remove-audio" type="button" aria-label="Remove audio">×</button>
+        </div>
+      </section>
+
+      <button id="submit-button" class="submit-button" type="submit" disabled>
+        <span class="button-label">Transcribe audio</span><span class="button-arrow">→</span>
+      </button>
+      <div id="loading-panel" class="loading-panel hidden" role="status" aria-live="polite">
+        <span class="loading-spinner" aria-hidden="true"></span>
+        <span><strong id="loading-title">Preparing model</strong><small id="loading-detail">This can take a moment on first use.</small></span>
+      </div>
+      <p id="form-error" class="error-message" role="alert"></p>
+    </form>
+
+    <section id="result" class="result panel hidden" aria-live="polite">
+      <div class="result-head">
+        <div><p class="eyebrow">Transcription</p><h2>What the model heard</h2></div>
+        <button id="copy-button" type="button">Copy text</button>
+      </div>
+      <p id="result-text" class="result-text" dir="auto"></p>
+      <div id="result-meta" class="result-meta"></div>
+    </section>
+  </main>
+
+  <footer><span>MS Thesis · ASR model playground</span><span>Audio stays on this machine</span></footer>
+</body>
+</html>
