@@ -1,0 +1,52 @@
+{
+  "cer": 0.09588520661640072,
+  "checkpoint": "/home/user01/MS-Thesis/models/asr/whisper-small-noise-only/runs/whisper-small-fa/best",
+  "config_path": "configs/small/whisper_small_eval_noise_only.yaml",
+  "created_at": "2026-09-01T12:50:48.732527+00:00",
+  "dataset_metrics": [
+    {
+      "cer": 0.17487980982454895,
+      "dataset": "/home/user01/MS-Thesis/data/AGFarsdat_test_normalized",
+      "examples": 10044,
+      "wer": 0.326658554242849
+    },
+    {
+      "cer": 0.0317270313485602,
+      "dataset": "/home/user01/MS-Thesis/data/cv-corpus-25.0",
+      "examples": 10518,
+      "wer": 0.07864245327688495
+    },
+    {
+      "cer": 0.05720217151879611,
+      "dataset": "/home/user01/MS-Thesis/data/fleurs-normalized",
+      "examples": 871,
+      "wer": 0.19259924197087572
+    },
+    {
+      "cer": 0.14642082429501085,
+      "dataset": "/home/user01/MS-Thesis/data/PersianSpeech_test",
+      "examples": 24,
+      "wer": 0.33573141486810554
+    },
+    {
+      "cer": 0.15399388767347483,
+      "dataset": "/home/user01/MS-Thesis/data/persian-speech-corpus-test",
+      "examples": 391,
+      "wer": 0.3047464016449623
+    }
+  ],
+  "datasets": [
+    "data/AGFarsdat_test_normalized",
+    "data/cv-corpus-25.0",
+    "data/fleurs-normalized",
+    "data/PersianSpeech_test",
+    "data/persian-speech-corpus-test"
+  ],
+  "effective_config_path": "models/asr/whisper-small-noise-only/evals/best/whisper-small-noise-only/config/eval.yaml",
+  "examples": 21848,
+  "max_label_tokens": 448,
+  "processor": "openai/whisper-small",
+  "skipped_examples": 6,
+  "split": "test",
+  "wer": 0.20378638936921145
+}
