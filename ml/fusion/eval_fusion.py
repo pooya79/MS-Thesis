@@ -538,6 +538,11 @@ def run_evaluation(
         "examples": len(examples),
         "view_mode": view_mode,
         "gate_override": gate_override,
+        "gate_interpretation": (
+            "utterance-level residual correction strength; not enhanced information fraction"
+            if type(model.fusion).__name__ == "ResidualCrossAttentionFusion"
+            else "post-fusion blend weight; not causal enhanced information fraction"
+        ),
         **aggregate_metrics,
         "view_usage": view_usage,
         "dataset_metrics": dataset_error_metrics(examples, references, hypotheses),

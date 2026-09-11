@@ -1,0 +1,45 @@
+# Final reporting only. Never use these test scores to choose checkpoints or variants.
+data:
+  root_dir: data
+  datasets:
+  - cv-corpus-25.0
+  - AGFarsdat_test_normalized
+  split: test
+asr_checkpoint: models/asr/cv25-tiny/baseline/best
+processor: openai/whisper-tiny
+max_new_tokens: 225
+bridge_enhanced_root: artifacts/cv25-tiny/bridge-test-enhanced
+bridge_enhancer_id: FRCRN_CHECKPOINT_REVISION
+methods:
+  baseline:
+    kind: asr
+  cross_attention:
+    kind: fusion
+    checkpoint: models/asr/cv25-tiny/cross_attention/checkpoints/stage2_joint/best.pt
+    view_mode: fusion
+  gated:
+    kind: fusion
+    checkpoint: models/asr/cv25-tiny/gated/checkpoints/stage2_joint/best.pt
+    view_mode: fusion
+  residual_cross_attention:
+    kind: fusion
+    checkpoint: models/asr/cv25-tiny/residual_cross_attention/checkpoints/stage2_joint/best.pt
+    view_mode: fusion
+  cross_attention_noisy:
+    kind: fusion
+    checkpoint: models/asr/cv25-tiny/cross_attention/checkpoints/stage2_joint/best.pt
+    view_mode: noisy
+  cross_attention_enhanced:
+    kind: fusion
+    checkpoint: models/asr/cv25-tiny/cross_attention/checkpoints/stage2_joint/best.pt
+    view_mode: enhanced
+  bridge:
+    kind: bridge
+    checkpoint: models/asr/cv25-tiny/bridge/best.pt
+  bridge_pq:
+    kind: bridge
+    checkpoint: models/asr/cv25-tiny/bridge-pq/best.pt
+  bridge_enhanced_only:
+    kind: bridge
+    checkpoint: models/asr/cv25-tiny/bridge/best.pt
+    omega: 0.0

@@ -161,6 +161,10 @@ def load_fusion_config(config_path: Path) -> dict[str, Any]:
     if not isinstance(loaded, dict):
         raise ValueError(f"{config_path} must contain a YAML mapping")
     config = deep_merge(DEFAULT_CONFIG, loaded)
+    # Do not pass cross-attention defaults to another architecture's constructor.
+    requested_fusion = loaded.get("fusion", {})
+    if requested_fusion.get("type", DEFAULT_CONFIG["fusion"]["type"]) != DEFAULT_CONFIG["fusion"]["type"]:
+        config["fusion"] = deepcopy(requested_fusion)
     validate_fusion_config(config)
     return config
 

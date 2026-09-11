@@ -220,9 +220,53 @@ class CrossAttentionFusion(nn.Module):
         return self.combine(noisy_h, enhanced_h, gate_override=gate_override)
 
 
+class _ResidualCombine(_GatedCombine):
+    def gate(self, noisy_h: torch.Tensor, correction_h: torch.Tensor) -> torch.Tensor:
+        return super().gate(noisy_h.mean(1, keepdim=True), correction_h.mean(1, keepdim=True)).mean(-1, keepdim=True)
+
+    def forward(self, noisy_h: torch.Tensor, correction_h: torch.Tensor,
+                gate_override: float | None = None) -> torch.Tensor:
+        if gate_override == 0:
+            return noisy_h
+        gate = self.gate(noisy_h, correction_h)
+        if gate_override is not None:
+            gate = torch.full_like(gate, gate_override)
+        return noisy_h + gate * (correction_h - noisy_h)
+
+
+class ResidualCrossAttentionFusion(nn.Module):
+    """Experimental one-way correction; gate=0 is an exact original-path bypass.
+
+    Shares the existing layer building blocks, but gates *all* changes to the
+    original encoding. The gate is per-utterance, pooling original and refined views.
+    This is an ablation candidate, not an established improvement.
+    """
+
+    def __init__(self, d_model: int, num_layers: int = 2, num_heads: int = 8,
+                 ffn_ratio: float = 2.0, dropout: float = 0.0):
+        super().__init__()
+        heads = _valid_head_count(d_model, num_heads)
+        self.layers = nn.ModuleList(_CrossAttnLayer(d_model, heads, ffn_ratio, dropout)
+                                    for _ in range(num_layers))
+        self.combine = _ResidualCombine(d_model)
+
+    def forward(self, noisy_h: torch.Tensor, enhanced_h: torch.Tensor,
+                gate_override: float | None = None) -> torch.Tensor:
+        if gate_override is not None and not 0 <= gate_override <= 1:
+            raise ValueError("gate_override must be in [0, 1]")
+        # A true bypass, including when the enhanced path contains invalid values.
+        if gate_override == 0:
+            return self.combine(noisy_h, noisy_h, gate_override=0)
+        refined = noisy_h
+        for layer in self.layers:
+            refined = layer(refined, enhanced_h)
+        return self.combine(noisy_h, refined, gate_override=gate_override)
+
+
 _FUSIONS: dict[str, type[nn.Module]] = {
     "gated": GatedFusion,
     "cross_attention": CrossAttentionFusion,
+    "residual_cross_attention": ResidualCrossAttentionFusion,
 }
 
 

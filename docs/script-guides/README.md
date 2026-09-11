@@ -4,6 +4,8 @@ Every maintained Python script exposes `--help`. Use the help output before runn
 
 ## Guide index
 
+- [Bridging baseline and Tiny fusion experiments](bridging-baseline.md): run order, dev-only checkpoint selection, shared original CV25 + AGFarsdat final tests, paper reconstruction, and waveform cache contract.
+
 - [External ASR evaluation](external-asr-evaluation.md): OpenRouter, ElevenLabs Scribe v2, and Ivira Avanegar evaluation and rescoring.
 - [Dataset management](dataset-management.md): mixed test datasets, duration summaries, FLAC conversion, Hugging Face publication, transcript normalization, and long-audio concatenation.
 - [IranSeda scripts](iranseda-scripts.md): audiobook discovery, inspection, downloading, verification, radio archive discovery, and metadata utilities.

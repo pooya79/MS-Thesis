@@ -1,0 +1,66 @@
+# Tiny pilot: full CV25 dev validation; held-out tests are in final_tests.yaml.
+run_dir: models/asr/cv25-tiny/residual_cross_attention
+base_asr_checkpoint: models/asr/cv25-tiny/baseline/best
+datasets:
+- data/cv-corpus-25.0-degraded-v2
+- data/cv-corpus-25.0
+sample_rate: 16000
+train_split: train
+valid_split: dev
+clean_target: bandwidth_aligned
+model_name: openai/whisper-tiny
+language: Persian
+task: transcribe
+generation_max_length: 225
+mixed_precision: auto
+device: auto
+seed: 1337
+resume_from_stage: null
+enhancer:
+  type: residual_unet
+  base_channels: 32
+  depth: 3
+  bottleneck: none
+fusion:
+  type: residual_cross_attention
+  num_layers: 1
+  num_heads: 4
+  ffn_ratio: 2.0
+stages:
+  warmup:
+    max_steps: 1000
+    batch_size: 8
+    segment_seconds: 4.0
+    lr_enhancer: 0.0002
+    lr_scheduler: cosine
+    warmup_steps: 100
+    lambda: 0.5
+    feature_match_weight: 0.5
+    num_workers: 4
+    log_every: 50
+    eval_every: 250
+    save_every: 500
+    eval_max_batches: null
+  fusion:
+    max_steps: 2000
+    batch_size: 8
+    lr_frontend: 0.0002
+    lr_scheduler: cosine
+    warmup_steps: 100
+    lambda: 0.3
+    eval_every: 250
+    save_every: 500
+    eval_max_batches: null
+    grad_clip: 1.0
+  joint:
+    max_steps: 4000
+    batch_size: 4
+    lr_frontend: 0.0001
+    lr_whisper: 1.0e-05
+    lr_scheduler: cosine
+    warmup_steps: 100
+    lambda: 0.1
+    eval_every: 250
+    save_every: 500
+    eval_max_batches: null
+    grad_clip: 1.0
