@@ -122,9 +122,14 @@ def test_prepare_and_evaluate_waveform_workflow(tmp_path, monkeypatch):
             for i, split in enumerate(("train", "dev"))]
     manifest = tmp_path / "pairs.jsonl"
     manifest.write_text("\n".join(json.dumps(r) for r in rows))
+    import hashlib
+    manifest.with_suffix(".provenance.json").write_text(json.dumps({
+        "manifest_sha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
+        "enhancer_id": "automatic-frcrn", "dnsmos_id": "automatic-dnsmos"}))
     cache = tmp_path / "cache"
     main(["prepare", "--manifest", str(manifest), "--output", str(cache),
-          "--asr-checkpoint", "offline", "--enhancer-id", "test", "--dnsmos-id", "test"])
+          "--asr-checkpoint", "offline"])
+    assert json.loads((cache / "provenance.json").read_text())["enhancer_id"] == "automatic-frcrn"
     assert len(calls) == 22
     assert calls[0].abs().sum() > 0 and calls[10].abs().sum() == 0
     item = torch.load(cache / "00000000.pt", weights_only=True)

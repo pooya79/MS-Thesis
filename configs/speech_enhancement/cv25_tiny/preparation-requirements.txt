@@ -1,0 +1,6 @@
+# Install with uv pip install --python .venv/bin/python --no-deps -r THIS_FILE.
+# We import only ClearVoice's FRCRN model, not its full multi-task pipelines.
+# Core numerical/audio dependencies already exist in this project's environment.
+clearvoice==0.1.2
+yamlargparse==1.31.1
+onnxruntime==1.30.0

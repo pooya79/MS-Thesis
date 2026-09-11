@@ -1,5 +1,9 @@
 # CV25 / Whisper Tiny bridging baseline and fusion experiments
 
+For one complete ordered command sequence, use
+[Run all Tiny experiments](cv25-tiny-run-all.md). It includes input preparation,
+the PQ-only run, shared warm-up initialization, and final scoring of all methods.
+
 ## Status and scope
 
 Independent reconstruction of Cui et al., ICASSP 2025,
@@ -13,11 +17,77 @@ SE/Whisper, and learns from DNSMOS and precomputed WER profiles. Our Mel enhance
 cannot supply its waveform input. Do not invert its Mels or silently substitute
 Mel mixing and label that the paper's method.
 
-The first data preparation prerequisite is aligned enhanced WAVs produced by a
-named, frozen waveform SE checkpoint (prefer the paper's FRCRN or DCCRN), plus
-DNSMOS SIG/BAK from a named scorer. These external models/weights and their
-execution are not bundled here. The scripts consume their cached outputs.
-Local CUDA is unavailable; real CV25 runtime and results remain unmeasured.
+The missing waveform/DNSMOS stage is implemented in
+`ml.fusion.prepare_bridge_inputs`. It downloads the authors' FRCRN checkpoint
+and Microsoft's DNSMOS P.835 model, then generates aligned float WAVs, scores,
+manifest files and provenance. No hand-built manifest or model-ID placeholders
+are needed. Model weights remain generated artifacts outside Git.
+
+### Prepare the inputs (can run before Tiny training)
+
+Use the project's existing `.venv`. Install only the optional modules needed by
+our direct FRCRN adapter; this intentionally does not install ClearVoice's full
+multi-task pipeline dependencies, which conflict with the project's NumPy 2
+stack. The actual adapters have been smoke-tested with the project runtime.
+
+```bash
+cd ~/MS-Thesis
+uv pip install --python .venv/bin/python --no-deps \
+  -r configs/speech_enhancement/cv25_tiny/preparation-requirements.txt
+
+# Validate metadata and report counts without loading models or changing data.
+.venv/bin/python -m ml.fusion.prepare_bridge_inputs --dry-run
+
+# Download models once, then prepare all train/dev inputs and original test views.
+.venv/bin/python -m ml.fusion.prepare_bridge_inputs --device cuda
+```
+
+Default sources: degraded CV25 train/dev mapping and original CV25 + AGFarsdat
+`test.tsv` files. No new degradation is generated and clean reference audio is
+never used as the enhanced view. DNSMOS is computed on original noisy train/dev
+inputs only. Test receives enhancement, but no DNSMOS or recognition targets.
+`--scope train-dev` or `--scope test` prepares only that phase. Train/dev source
+identities are audited even in test scope. CV25 client IDs, when present, are
+used to reject cross-split speaker leakage. Metadata problems fail explicitly.
+
+For a small environment pilot, use a separate output directory:
+
+```bash
+.venv/bin/python -m ml.fusion.prepare_bridge_inputs \
+  --scope train-dev --max-per-split 10 \
+  --output artifacts/cv25-tiny/bridge-inputs-pilot --device cuda
+```
+
+Rerun the same command to resume: completed records are verified against source
+and output hashes and the model identities, then reused. Do not change the
+selection limit/seed in an existing output directory. Final manifests are written
+only after the selected scope completes. Keep pilot manifests out of full runs.
+
+The default output is `artifacts/cv25-tiny/bridge-inputs/`:
+- `bridge_train_dev.jsonl` and `bridge_dev.jsonl`, with scored waveform pairs;
+- matching `.provenance.json` sidecars with automatic model IDs;
+- `bridge_test.jsonl` and `test-enhanced/` for the two original test sets;
+- `final_tests.yaml`, prefilled with the correct enhanced root and enhancer ID;
+- `completed/` records for resume, and per-scope completion reports.
+
+Only trailing model-input padding is removed; no shifts or gain normalization
+are applied. Equal length is checked. An actual CPU adapter smoke test and a
+synthetic four-clip preparation/resume test verify mechanics, not speech quality
+or research performance. FRCRN may learn intrinsic processing effects that need
+examining on real speech; equal lengths alone do not prove phonetic alignment.
+
+Pretrained sources:
+[FRCRN authors](https://github.com/alibabasglab/FRCRN),
+[ClearVoice model code](https://github.com/modelscope/ClearerVoice-Studio/tree/main/clearvoice),
+[FRCRN weights](https://huggingface.co/alibabasglab/FRCRN_SE_16K), and
+[Microsoft DNSMOS](https://github.com/microsoft/DNS-Challenge/blob/master/DNSMOS/dnsmos_local.py).
+FRCRN revision and DNSMOS checksum are pinned in `bridge_pretrained.py`.
+The ClearVoice FRCRN release is identified explicitly; its identity is not proof
+that it is the exact checkpoint used in the bridging paper. DNSMOS uses the
+non-personalized P.835 model, repetition for clips under 9.01 seconds, 1-second
+hops and Microsoft's polynomial calibration. Calibrated scores outside [1,5]
+are clipped for supervision with unclipped values also retained in the manifest.
+This bounding is a declared implementation choice. P.808 is not computed.
 
 ## Where to start: fixed training / dev / test protocol
 
@@ -43,9 +113,8 @@ uv run python -m ml.asr.train_whisper_small \
 
 Despite its historical script name, this config trains **Whisper Tiny**. It
 produces `models/asr/cv25-tiny/baseline/best`, which initializes the other runs.
-Next run the three fusion commands in the Commands section below. The paper
-baseline can be prepared/trained after the same baseline exists and waveform
-SE/DNSMOS outputs have been prepared. To train its PQ-only ablation:
+Next run the three fusion commands in the Commands section below. The bridge WER cache and training require the same ASR baseline. Its waveform
+inputs can be prepared beforehand using the commands above. To train its PQ-only ablation:
 
 ```bash
 uv run python -m ml.fusion.bridging_experiment train \
@@ -77,7 +146,7 @@ uv run python -m ml.fusion.evaluate_ablation \
 
 # Once both bridge checkpoints and enhanced test waveforms exist: all methods.
 uv run python -m ml.fusion.evaluate_ablation \
-  --config configs/speech_enhancement/cv25_tiny/final_tests.yaml \
+  --config artifacts/cv25-tiny/bridge-inputs/final_tests.yaml \
   --output artifacts/cv25-tiny/final-tests-all --device cuda
 ```
 
@@ -88,21 +157,11 @@ Select subsets with `--methods` to avoid repeating completed inference; use a
 new output directory for every invocation. This is sequential offline evaluation,
 one utterance at a time; no training or test-based model selection happens here.
 
-For bridge tests, `noisy` means the **original test waveform**, not an artificially
-degraded copy. Pass that original audio through the same frozen waveform enhancer
-used in bridge training. Store its aligned outputs under:
-
-```text
-artifacts/cv25-tiny/bridge-test-enhanced/cv-corpus-25.0/<TSV path with .wav suffix>
-artifacts/cv25-tiny/bridge-test-enhanced/AGFarsdat_test_normalized/<TSV path with .wav suffix>
-```
-
-The path is relative to `clips/`; a leading `clips/` in the TSV is stripped.
-Set `bridge_enhancer_id` in `final_tests.yaml` to the exact ID recorded when
-preparing the bridge cache. The runner verifies it and the ASR checkpoint
-against the bridge checkpoint provenance. DNSMOS and test WER targets are
-**not** needed for final inference. Generating enhanced audio does not change
-which original dataset is under evaluation.
+For bridge tests, `noisy` means the original test waveform. Use the generated
+`artifacts/cv25-tiny/bridge-inputs/final_tests.yaml` after input preparation,
+which supplies the enhanced paths and verified model ID automatically. There
+are no DNSMOS or WER training targets for test clips. Generating enhanced audio
+does not change which original dataset is under evaluation.
 
 Outputs: `test_manifest.jsonl`, effective config, `<method>.predictions.jsonl`,
 `<method>.metrics.json`, and `summary.json` with **separate WER/CER for each
@@ -163,8 +222,8 @@ delay upstream. No automatic normalization changes the waveform mixing ratio.
 ## Commands
 
 Run from the repository root. Every subcommand supports `--help` with defaults.
-Output directories must be new; an existing directory is refused to prevent
-accidental replacement. This initial baseline trainer does not automatically
+The bridge WER-cache/training/evaluation output directories must be new.
+The separate waveform preparation command is resumable in its existing output. This initial baseline trainer does not automatically
 resume a partial run. Preserve completed caches to avoid repeated ASR inference.
 
 ```bash
@@ -175,9 +234,8 @@ uv run python -m ml.fusion.bridging_experiment evaluate --help
 uv run python -m ml.asr.train_whisper_small --config configs/speech_enhancement/cv25_tiny/baseline.yaml
 
 uv run python -m ml.fusion.bridging_experiment prepare \
-  --manifest data/speech_enhancement/bridge_train_dev.jsonl \
+  --manifest artifacts/cv25-tiny/bridge-inputs/bridge_train_dev.jsonl \
   --asr-checkpoint models/asr/cv25-tiny/baseline/best \
-  --enhancer-id FRCRN_CHECKPOINT_REVISION --dnsmos-id DNSMOS_SCORER_REVISION \
   --output artifacts/cv25-tiny/bridge-cache --device cuda
 
 uv run python -m ml.fusion.bridging_experiment train \
@@ -185,7 +243,7 @@ uv run python -m ml.fusion.bridging_experiment train \
   --output models/asr/cv25-tiny/bridge --device cuda
 
 uv run python -m ml.fusion.bridging_experiment evaluate \
-  --manifest data/speech_enhancement/bridge_dev.jsonl \
+  --manifest artifacts/cv25-tiny/bridge-inputs/bridge_dev.jsonl \
   --checkpoint models/asr/cv25-tiny/bridge/best.pt \
   --output artifacts/cv25-tiny/bridge-dev --split dev --device cuda
 

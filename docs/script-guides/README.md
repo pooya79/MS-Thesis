@@ -4,7 +4,9 @@ Every maintained Python script exposes `--help`. Use the help output before runn
 
 ## Guide index
 
-- [Bridging baseline and Tiny fusion experiments](bridging-baseline.md): run order, dev-only checkpoint selection, shared original CV25 + AGFarsdat final tests, paper reconstruction, and waveform cache contract.
+- [Complete Tiny experiment command sequence](cv25-tiny-run-all.md): start-to-finish commands for input preparation, ASR, paper baseline, PQ-only ablation, three fusion variants with shared warm-up, dev decoding, and all nine final-test methods.
+
+- [Bridging baseline and Tiny fusion experiments](bridging-baseline.md): automatic FRCRN/DNSMOS input preparation, run order, dev-only checkpoint selection, shared original CV25 + AGFarsdat final tests, and paper reconstruction.
 
 - [External ASR evaluation](external-asr-evaluation.md): OpenRouter, ElevenLabs Scribe v2, and Ivira Avanegar evaluation and rescoring.
 - [Dataset management](dataset-management.md): mixed test datasets, duration summaries, FLAC conversion, Hugging Face publication, transcript normalization, and long-audio concatenation.

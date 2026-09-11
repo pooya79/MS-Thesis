@@ -79,13 +79,25 @@ def prepare(args: argparse.Namespace) -> None:
     check_splits(rows)
     if any(row["split"] == "test" for row in rows):
         raise ValueError("prepare accepts train/dev only; test references must not generate supervision")
+    sidecar = args.manifest.with_suffix(".provenance.json")
+    identity = json.loads(sidecar.read_text()) if sidecar.is_file() else {}
+    manifest_hash = hashlib.sha256(args.manifest.read_bytes()).hexdigest()
+    if identity and identity.get("manifest_sha256") != manifest_hash:
+        raise ValueError("input manifest changed after preparation; regenerate its provenance")
+    for name in ("enhancer_id", "dnsmos_id"):
+        explicit = getattr(args, name)
+        if explicit and identity.get(name) and explicit != identity[name]:
+            raise ValueError(f"--{name.replace('_', '-')} conflicts with generated provenance")
+        identity[name] = explicit or identity.get(name)
+        if not identity[name]:
+            raise ValueError(f"missing {name}; run ml.fusion.prepare_bridge_inputs first or supply an explicit ID")
     output = args.output
     output.mkdir(parents=True, exist_ok=False)
     asr = Recognizer(args.asr_checkpoint, args.device, args.max_tokens)
     meta = {"paper": "2501.02452v1", "asr_checkpoint": args.asr_checkpoint,
-            "enhancer_id": args.enhancer_id, "dnsmos_id": args.dnsmos_id,
+            "enhancer_id": identity["enhancer_id"], "dnsmos_id": identity["dnsmos_id"],
             "coefficients": OA_COEFFICIENTS, "max_tokens": args.max_tokens,
-            "manifest_sha256": hashlib.sha256(args.manifest.read_bytes()).hexdigest(),
+            "manifest_sha256": manifest_hash,
             "text_policy": "strip_only; normalize all input references upstream identically",
             "implementation": "independent reconstruction; see docs/script-guides/bridging-baseline.md"}
     (output / "provenance.json").write_text(json.dumps(meta, indent=2))
@@ -224,8 +236,8 @@ def main(argv: list[str] | None = None) -> int:
     p = subs.add_parser("prepare", help="cache paired filterbanks and eleven decoded WER targets", formatter_class=fmt)
     p.add_argument("--manifest", type=Path, required=True, help="train/dev paired-waveform JSONL")
     p.add_argument("--asr-checkpoint", required=True, help="frozen Whisper checkpoint with processor files")
-    p.add_argument("--enhancer-id", required=True, help="name/revision or hash of frozen waveform enhancer")
-    p.add_argument("--dnsmos-id", required=True, help="name/revision or hash of scorer used for supplied SIG/BAK")
+    p.add_argument("--enhancer-id", default=None, help="frozen enhancer ID; default generated manifest provenance")
+    p.add_argument("--dnsmos-id", default=None, help="SIG/BAK scorer ID; default generated manifest provenance")
     p.add_argument("--max-tokens", type=int, default=225, help="maximum generated new tokens")
     p.set_defaults(func=prepare)
     t = subs.add_parser("train", help="train only the bridging module from cached supervision", formatter_class=fmt)
