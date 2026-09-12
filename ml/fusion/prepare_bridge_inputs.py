@@ -25,6 +25,16 @@ from ml.fusion.evaluate_ablation import TEST_DATASETS, read_wave, test_rows
 from ml.utils.progress import ProgressReporter
 
 
+def cv25_clip_id(path: str | Path, dataset_root: Path | None = None) -> str:
+    """Return a stable CV25 identity that does not depend on the audio suffix."""
+    value = Path(path)
+    if dataset_root is not None:
+        value = value.resolve().relative_to(dataset_root.resolve())
+    if value.parts and value.parts[0] == "clips":
+        value = Path(*value.parts[1:])
+    return value.with_suffix("").as_posix()
+
+
 def atomic_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
@@ -46,9 +56,10 @@ def collect_rows(data_root: Path, scope: str, skipped: list[dict] | None = None)
                 if not path:
                     skipped.append(skipped_record({"split": split}, "empty_original_path"))
                     continue
-                source = str(resolve_audio_path(original, path).resolve())
-                source_splits.setdefault(source, set()).add(split)
-                speakers[source] = f"cv25/{row['client_id']}" if row.get("client_id") else None
+                source = resolve_audio_path(original, path).resolve()
+                clip_id = cv25_clip_id(source, original)
+                source_splits.setdefault(clip_id, set()).add(split)
+                speakers[clip_id] = f"cv25/{row['client_id']}" if row.get("client_id") else None
     rows = []
     # Audit train/dev sources even for a test-only request. Never load clean audio
     # as the enhanced view: clean_path supplies identity/leakage metadata only.
@@ -59,12 +70,13 @@ def collect_rows(data_root: Path, scope: str, skipped: list[dict] | None = None)
                 skipped.append(skipped_record({"id": pair.pair_id, "split": split},
                                               "non_cv25_source", str(source)))
                 continue
-            if source_splits.get(str(source)) != {split}:
+            clip_id = cv25_clip_id(source, original)
+            if source_splits.get(clip_id) != {split}:
                 skipped.append(skipped_record({"id": pair.pair_id, "split": split},
                                               "source_missing_or_wrong_split", str(source)))
                 continue
-            candidate = {"id": f"cv25-degraded/{pair.pair_id}", "source_id": str(source),
-                         "speaker_id": speakers.get(str(source)), "split": split,
+            candidate = {"id": f"cv25-degraded/{pair.pair_id}", "source_id": f"cv25/{clip_id}",
+                         "speaker_id": speakers.get(clip_id), "split": split,
                          "sentence": pair.transcript, "noisy_path": str(pair.degraded_path.resolve()),
                          "dataset": "cv-corpus-25.0-degraded-v2", "degradation": pair.degradation}
             if not pair.degraded_path.is_file():
@@ -73,8 +85,15 @@ def collect_rows(data_root: Path, scope: str, skipped: list[dict] | None = None)
             rows.append(candidate)
     if scope in {"all", "test"}:
         for row in test_rows({"data": {"root_dir": str(data_root), "datasets": list(TEST_DATASETS), "split": "test"}}, skipped):
-            rows.append({"id": row["id"], "source_id": row["audio_path"],
-                         "speaker_id": speakers.get(row["audio_path"]), "split": "test",
+            if row["dataset"] == "cv-corpus-25.0":
+                clip_id = cv25_clip_id(row["relative_path"])
+                source_id = f"cv25/{clip_id}"
+                speaker_id = speakers.get(clip_id)
+            else:
+                source_id = f"{row['dataset']}/{Path(row['relative_path']).with_suffix('').as_posix()}"
+                speaker_id = None
+            rows.append({"id": row["id"], "source_id": source_id,
+                         "speaker_id": speaker_id, "split": "test",
                          "sentence": row["reference"], "noisy_path": row["audio_path"],
                          "dataset": row["dataset"], "relative_path": row["relative_path"]})
     id_counts = Counter(row["id"] for row in rows)
@@ -161,6 +180,12 @@ def run(args: argparse.Namespace) -> None:
             continue
         usable.append(row)
     rows = usable
+    counts = {s: sum(r["split"] == s for r in rows) for s in ("train", "dev", "test")}
+    print(f"Selected inputs: {counts}", flush=True)
+    if skipped:
+        reasons = {reason: sum(row["reason"] == reason for row in skipped)
+                   for reason in sorted({row["reason"] for row in skipped})}
+        print(f"Skipped inputs: {reasons}", flush=True)
     if not rows:
         raise ValueError("no selected inputs")
     required_splits = ({"test"} if args.scope == "test" else
@@ -179,12 +204,6 @@ def run(args: argparse.Namespace) -> None:
                for r in rows if r["split"] == "test"]
     if len(targets) != len(set(targets)):
         raise ValueError("test filenames collide after replacing suffix with .wav")
-    counts = {s: sum(r["split"] == s for r in rows) for s in ("train", "dev", "test")}
-    print(f"Selected inputs: {counts}", flush=True)
-    if skipped:
-        reasons = {reason: sum(row["reason"] == reason for row in skipped)
-                   for reason in sorted({row["reason"] for row in skipped})}
-        print(f"Skipped inputs: {reasons}", flush=True)
     if args.dry_run:
         return
     output.mkdir(parents=True, exist_ok=True)

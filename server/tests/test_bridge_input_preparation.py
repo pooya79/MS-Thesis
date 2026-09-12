@@ -116,6 +116,28 @@ def test_preparation_skips_degraded_rows_missing_from_original_split(tmp_path, c
     assert "Skipped inputs: {'source_missing_or_wrong_split': 1}" in capsys.readouterr().out
 
 
+def test_preparation_matches_legacy_wav_mapping_to_current_flac_clips(tmp_path):
+    data = tmp_path / "data"
+    make_dataset(data)
+    clean = data / "cv-corpus-25.0"
+    for split in ("train", "dev", "test"):
+        wav = clean / "clips" / f"{split}.wav"
+        wave, rate = sf.read(wav, dtype="float32")
+        sf.write(wav.with_suffix(".flac"), wave, rate)
+        wav.unlink()
+        (clean / f"{split}.tsv").write_text(
+            f"path\tsentence\tclient_id\n{split}.flac\thello\t{split}-speaker\n"
+        )
+
+    rows = prep.collect_rows(data, "all", skipped := [])
+
+    assert skipped == []
+    assert {row["split"] for row in rows} == {"train", "dev", "test"}
+    assert {row["source_id"] for row in rows if row["dataset"].startswith("cv-corpus")} == {
+        "cv25/train", "cv25/dev", "cv25/test"
+    }
+
+
 def test_preparation_help():
     result = subprocess.run([sys.executable, "-m", "ml.fusion.prepare_bridge_inputs", "--help"], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
