@@ -1,7 +1,7 @@
 """Dataset over a degraded-dataset directory for log-Mel enhancement/fusion.
 
 Consumes the output of ``ml.speech_data.generate_degraded_dataset``: a directory
-containing degraded WAV clips plus a ``degraded_to_clean.jsonl`` mapping with one
+containing degraded audio clips plus a ``degraded_to_clean.jsonl`` mapping with one
 row per degraded variant. Each row carries the degraded clip path, the *original*
 (full-band) clean source path, the transcript, and the full per-variant
 degradation metadata.
@@ -114,7 +114,7 @@ def read_mapping(dataset_dir: Path, split: str | None = None) -> list[DegradedPa
 
 def _resolve(dataset_dir: Path, value: str) -> Path:
     """Resolve a manifest path, tolerating both relative-to-dataset-dir and
-    repo-root-relative forms.
+    repo-root-relative forms and a lossless WAV/FLAC conversion.
 
     generate_degraded_dataset records ``degraded_path``/``clean_path`` as the
     path it constructed at generation time (repo-root-relative, already
@@ -124,14 +124,17 @@ def _resolve(dataset_dir: Path, value: str) -> Path:
     value as-is when that does not exist.
     """
     path = Path(value)
-    if path.is_absolute():
-        return path
-    joined = dataset_dir / path
-    if joined.exists():
-        return joined
-    if path.exists():
-        return path
-    return joined
+    candidates = [path] if path.is_absolute() else [dataset_dir / path, path]
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    if path.suffix.lower() in {".wav", ".flac"}:
+        alternate_suffix = ".flac" if path.suffix.lower() == ".wav" else ".wav"
+        for candidate in candidates:
+            alternate = candidate.with_suffix(alternate_suffix)
+            if alternate.is_file():
+                return alternate
+    return candidates[0]
 
 
 def reconstruct_clean_target(

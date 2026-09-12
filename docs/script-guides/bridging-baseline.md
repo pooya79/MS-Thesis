@@ -50,9 +50,10 @@ identities are audited even in test scope. CV25 client IDs, when present, are
 used to detect cross-split speaker leakage. Inconsistent clip rows are skipped
 before selection and reported by reason; structural dataset errors or a required
 split with no usable clips still stop the command.
-Legacy degraded manifests that name a clean source with `.wav` are matched to
-current CV25 `.flac` files by their extension-independent relative clip ID. The
-same stable ID is used for cross-split leakage detection.
+Legacy degraded manifests that name clean or degraded audio with `.wav` are
+matched to current `.flac` files. CV25 source identity uses the
+extension-independent relative clip ID, which is also used for cross-split
+leakage detection. A clip absent under both suffixes is still skipped.
 
 For a small environment pilot, use a separate output directory:
 

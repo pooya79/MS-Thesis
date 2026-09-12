@@ -128,6 +128,11 @@ def test_preparation_matches_legacy_wav_mapping_to_current_flac_clips(tmp_path):
         (clean / f"{split}.tsv").write_text(
             f"path\tsentence\tclient_id\n{split}.flac\thello\t{split}-speaker\n"
         )
+        if split != "test":
+            degraded_wav = data / "cv-corpus-25.0-degraded-v2/clips" / f"{split}.wav"
+            degraded_wave, degraded_rate = sf.read(degraded_wav, dtype="float32")
+            sf.write(degraded_wav.with_suffix(".flac"), degraded_wave, degraded_rate)
+            degraded_wav.unlink()
 
     rows = prep.collect_rows(data, "all", skipped := [])
 
@@ -136,6 +141,7 @@ def test_preparation_matches_legacy_wav_mapping_to_current_flac_clips(tmp_path):
     assert {row["source_id"] for row in rows if row["dataset"].startswith("cv-corpus")} == {
         "cv25/train", "cv25/dev", "cv25/test"
     }
+    assert all(Path(row["noisy_path"]).suffix == ".flac" for row in rows[:2])
 
 
 def test_preparation_help():
