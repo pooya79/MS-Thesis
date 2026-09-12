@@ -56,20 +56,41 @@ def test_all_methods_receive_identical_original_cohort(tmp_path, monkeypatch):
     assert set(summary["baseline"]["dataset_metrics"]) == set(evaluation.TEST_DATASETS)
 
 
-def test_missing_bridge_audio_fails_before_model_loading(tmp_path, monkeypatch):
+def test_all_missing_bridge_audio_fails_before_model_loading(tmp_path, monkeypatch):
     config = make_data(tmp_path)
     monkeypatch.setattr(evaluation, "build_decoder", lambda *a: pytest.fail("loaded model before preflight"))
-    with pytest.raises(FileNotFoundError):
+    with pytest.raises(ValueError, match="no usable common-cohort"):
         evaluation.run(config, tmp_path / "results", ["bridge"], "cpu")
     assert not (tmp_path / "results").exists()
 
 
-def test_refuses_empty_or_duplicate_test_rows(tmp_path):
+def test_skips_duplicate_test_rows_but_requires_each_dataset(tmp_path):
     config = make_data(tmp_path)
     path = tmp_path / evaluation.TEST_DATASETS[0] / "test.tsv"
     path.write_text("path\tsentence\nclip.wav\tx\nclip.wav\ty\n")
-    with pytest.raises(ValueError, match="duplicate"):
-        evaluation.test_rows(config)
+    skipped = []
+    with pytest.raises(ValueError, match="no usable test clips"):
+        evaluation.test_rows(config, skipped)
+    assert len(skipped) == 2
+    assert {row["reason"] for row in skipped} == {"duplicate_test_path"}
+
+
+def test_final_evaluation_skips_invalid_clips_from_common_cohort(tmp_path, monkeypatch):
+    config = make_data(tmp_path)
+    for dataset in evaluation.TEST_DATASETS:
+        source = tmp_path / dataset / "test.tsv"
+        source.write_text(source.read_text() + "missing.wav\tbad row\n")
+        enhanced = tmp_path / "enhanced" / dataset
+        enhanced.mkdir(parents=True)
+        sf.write(enhanced / "clip.wav", np.ones(1600) * .1, 16000)
+    monkeypatch.setattr(evaluation, "build_decoder", lambda *_: lambda _wave, _enhanced: "hello world")
+    output = tmp_path / "results"
+    evaluation.run(config, output, None, "cpu")
+    summary = json.loads((output / "summary.json").read_text())
+    assert all(item["examples"] == 2 for item in summary.values())
+    skipped = [json.loads(line) for line in (output / "skipped_inputs.jsonl").read_text().splitlines()]
+    assert len(skipped) == 2
+    assert {row["reason"] for row in skipped} == {"missing_test_audio"}
 
 
 def test_cli_help():

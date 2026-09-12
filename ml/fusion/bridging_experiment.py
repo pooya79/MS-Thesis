@@ -1,10 +1,11 @@
-"""Prepare, train and evaluate the waveform bridging baseline; --help for workflow."""
+"""Run the waveform bridge baseline, reporting and skipping invalid clip rows."""
 from __future__ import annotations
 
 import argparse
 import hashlib
 import json
 import random
+from collections import Counter
 from pathlib import Path
 
 import numpy as np
@@ -14,14 +15,42 @@ from ml.fusion.bridging import BridgingModule, OA_COEFFICIENTS, bridge_loss, obs
 from ml.utils.audio import load_audio, resample_audio
 
 
-def read_rows(path: Path) -> list[dict]:
-    rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
-    ids = [r["id"] for r in rows]
-    if not rows or len(ids) != len(set(ids)):
-        raise ValueError("manifest must be nonempty with unique IDs")
-    for row in rows:
-        if row["split"] not in {"train", "dev", "test"} or not row["source_id"]:
-            raise ValueError("every row needs split=train/dev/test and original source_id")
+def skipped_record(row: dict, reason: str, detail: str | None = None) -> dict:
+    return {"id": str(row.get("id", "")), "split": str(row.get("split", "")),
+            "reason": reason, **({"detail": detail} if detail else {})}
+
+
+def write_skipped(path: Path, skipped: list[dict]) -> None:
+    path.write_text("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in skipped))
+
+
+def read_rows(path: Path, skipped: list[dict] | None = None) -> list[dict]:
+    skipped = skipped if skipped is not None else []
+    rows = []
+    for line_number, line in enumerate(path.read_text().splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except (json.JSONDecodeError, TypeError) as exc:
+            skipped.append(skipped_record({"id": f"line-{line_number}"}, "invalid_json", str(exc)))
+            continue
+        if not isinstance(row, dict) or not row.get("id") or row.get("split") not in {"train", "dev", "test"} or not row.get("source_id"):
+            skipped.append(skipped_record(row if isinstance(row, dict) else {"id": f"line-{line_number}"},
+                                          "invalid_manifest_row"))
+            continue
+        rows.append(row)
+    duplicates = {key for key, count in Counter(str(row["id"]) for row in rows).items() if count > 1}
+    if duplicates:
+        kept = []
+        for row in rows:
+            if str(row["id"]) in duplicates:
+                skipped.append(skipped_record(row, "duplicate_id"))
+            else:
+                kept.append(row)
+        rows = kept
+    if not rows:
+        raise ValueError(f"manifest has no usable rows: {path}")
     return rows
 
 
@@ -35,6 +64,43 @@ def check_splits(rows: list[dict]) -> None:
                 if identity in seen and seen[identity] != row["split"]:
                     raise ValueError(f"cross-split leakage: {identity}")
                 seen[identity] = row["split"]
+
+
+def filter_split_conflicts(rows: list[dict], skipped: list[dict]) -> list[dict]:
+    identity_splits: dict[tuple[str, str], set[str]] = {}
+    for row in rows:
+        for key in ("source_id", "speaker_id"):
+            if row.get(key):
+                identity_splits.setdefault((key, str(row[key])), set()).add(str(row["split"]))
+    conflicts = {identity for identity, splits in identity_splits.items() if len(splits) > 1}
+    kept = []
+    for row in rows:
+        row_conflicts = [(key, str(row[key])) for key in ("source_id", "speaker_id")
+                         if row.get(key) and (key, str(row[key])) in conflicts]
+        if row_conflicts:
+            skipped.append(skipped_record(row, "cross_split_identity", repr(row_conflicts)))
+        else:
+            kept.append(row)
+    return kept
+
+
+def filter_paired_rows(rows: list[dict], root: Path, skipped: list[dict], *, require_scores: bool = False) -> list[dict]:
+    kept = []
+    for row in rows:
+        if not str(row.get("sentence", "")).strip():
+            skipped.append(skipped_record(row, "empty_transcript"))
+            continue
+        try:
+            paired_audio(row, root)
+            if require_scores:
+                from ml.fusion.bridging import perceptual_target
+                perceptual_target(torch.tensor(float(row["dnsmos_sig"])),
+                                  torch.tensor(float(row["dnsmos_bak"])))
+        except (KeyError, TypeError, OSError, RuntimeError, ValueError) as exc:
+            skipped.append(skipped_record(row, "invalid_paired_audio", str(exc)))
+            continue
+        kept.append(row)
+    return kept
 
 
 def paired_audio(row: dict, root: Path) -> tuple[torch.Tensor, torch.Tensor]:
@@ -75,10 +141,12 @@ class Recognizer:
 
 def prepare(args: argparse.Namespace) -> None:
     from jiwer import wer
-    rows = read_rows(args.manifest)
-    check_splits(rows)
+    skipped: list[dict] = []
+    rows = read_rows(args.manifest, skipped)
     if any(row["split"] == "test" for row in rows):
         raise ValueError("prepare accepts train/dev only; test references must not generate supervision")
+    rows = filter_split_conflicts(rows, skipped)
+    check_splits(rows)
     sidecar = args.manifest.with_suffix(".provenance.json")
     identity = json.loads(sidecar.read_text()) if sidecar.is_file() else {}
     manifest_hash = hashlib.sha256(args.manifest.read_bytes()).hexdigest()
@@ -91,26 +159,26 @@ def prepare(args: argparse.Namespace) -> None:
         identity[name] = explicit or identity.get(name)
         if not identity[name]:
             raise ValueError(f"missing {name}; run ml.fusion.prepare_bridge_inputs first or supply an explicit ID")
+    rows = filter_paired_rows(rows, args.manifest.parent, skipped, require_scores=True)
+    if not rows or not {"train", "dev"}.issubset({str(row["split"]) for row in rows}):
+        raise ValueError("usable paired audio is required in both train and dev splits")
     output = args.output
     output.mkdir(parents=True, exist_ok=False)
+    write_skipped(output / "skipped_inputs.jsonl", skipped)
     asr = Recognizer(args.asr_checkpoint, args.device, args.max_tokens)
     meta = {"paper": "2501.02452v1", "asr_checkpoint": args.asr_checkpoint,
             "enhancer_id": identity["enhancer_id"], "dnsmos_id": identity["dnsmos_id"],
             "coefficients": OA_COEFFICIENTS, "max_tokens": args.max_tokens,
             "manifest_sha256": manifest_hash,
+            "skipped_inputs": len(skipped),
             "text_policy": "strip_only; normalize all input references upstream identically",
             "implementation": "independent reconstruction; see docs/script-guides/bridging-baseline.md"}
     (output / "provenance.json").write_text(json.dumps(meta, indent=2))
     with (output / "index.jsonl").open("w") as index:
         for number, row in enumerate(rows):
-            if not row["sentence"].strip():
-                raise ValueError("empty reference transcript")
             noisy, enhanced = paired_audio(row, args.manifest.parent)
             hypotheses = [asr(observation_addition(noisy, enhanced, torch.tensor(w))) for w in OA_COEFFICIENTS]
             wers = [wer(row["sentence"].strip(), h) for h in hypotheses]
-            # DNSMOS comes from a named frozen scorer, not reconstruction error or invented labels.
-            from ml.fusion.bridging import perceptual_target
-            perceptual_target(torch.tensor(row["dnsmos_sig"]), torch.tensor(row["dnsmos_bak"]))
             cache = {"noisy": filterbank(noisy), "enhanced": filterbank(enhanced),
                      "wers": torch.tensor(wers), "sig": torch.tensor(float(row["dnsmos_sig"])),
                      "bak": torch.tensor(float(row["dnsmos_bak"]))}
@@ -137,15 +205,37 @@ def train(args: argparse.Namespace) -> None:
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
-    rows = read_rows(args.cache / "index.jsonl")
-    check_splits(rows)
+    skipped: list[dict] = []
+    rows = read_rows(args.cache / "index.jsonl", skipped)
     if any(r["split"] == "test" for r in rows):
         raise ValueError("test cache cannot be used in training")
-    train_rows = [r for r in rows if r["split"] == "train"]
-    dev_rows = [r for r in rows if r["split"] == "dev"]
+    rows = filter_split_conflicts(rows, skipped)
+    check_splits(rows)
+    usable_rows = []
+    for row in rows:
+        cache_path = args.cache / str(row.get("cache", ""))
+        try:
+            item = torch.load(cache_path, weights_only=True, map_location="cpu")
+            required = {"noisy", "enhanced", "wers", "sig", "bak"}
+            if not isinstance(item, dict) or not required.issubset(item):
+                raise ValueError("cache lacks required tensors")
+            if item["noisy"].ndim != 2 or item["enhanced"].shape != item["noisy"].shape:
+                raise ValueError("cache filterbanks are missing or unaligned")
+            if item["wers"].numel() != len(OA_COEFFICIENTS):
+                raise ValueError("cache has the wrong number of WER targets")
+            if not all(torch.is_tensor(item[key]) and torch.isfinite(item[key]).all()
+                       for key in required):
+                raise ValueError("cache contains nonfinite or non-tensor values")
+        except (EOFError, KeyError, OSError, RuntimeError, ValueError) as exc:
+            skipped.append(skipped_record(row, "invalid_cache", str(exc)))
+            continue
+        usable_rows.append(row)
+    train_rows = [r for r in usable_rows if r["split"] == "train"]
+    dev_rows = [r for r in usable_rows if r["split"] == "dev"]
     if not train_rows or not dev_rows:
         raise ValueError("both train and dev caches are required")
     args.output.mkdir(parents=True, exist_ok=False)
+    write_skipped(args.output / "skipped_inputs.jsonl", skipped)
     model_config = {"channels": args.channels}
     model = BridgingModule(**model_config).to(args.device)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
@@ -197,16 +287,22 @@ def train(args: argparse.Namespace) -> None:
 
 def evaluate(args: argparse.Namespace) -> None:
     from jiwer import wer, cer
-    rows = read_rows(args.manifest)
-    check_splits(rows)
+    skipped: list[dict] = []
+    rows = read_rows(args.manifest, skipped)
     if any(row["split"] != args.split for row in rows):
         raise ValueError("evaluation manifest must contain exactly the requested split")
+    rows = filter_split_conflicts(rows, skipped)
+    check_splits(rows)
+    rows = filter_paired_rows(rows, args.manifest.parent, skipped)
+    if not rows:
+        raise ValueError("evaluation manifest has no usable paired audio")
     checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=True)
     model = BridgingModule(**checkpoint["model_config"]).to(args.device).eval()
     model.load_state_dict(checkpoint["state_dict"])
     provenance = checkpoint["provenance"]
     asr = Recognizer(provenance["asr_checkpoint"], args.device, provenance["max_tokens"])
     args.output.mkdir(parents=True, exist_ok=False)
+    write_skipped(args.output / "skipped_inputs.jsonl", skipped)
     references, hypotheses = [], []
     with (args.output / "predictions.jsonl").open("w") as stream, torch.inference_mode():
         for row in rows:
@@ -224,6 +320,7 @@ def evaluate(args: argparse.Namespace) -> None:
                                      "omega": omega.item()}, ensure_ascii=False) + "\n")
     (args.output / "metrics.json").write_text(json.dumps({"wer": wer(references, hypotheses),
         "cer": cer(references, hypotheses), "examples": len(rows), "split": args.split,
+        "skipped_inputs": len(skipped),
         "omega_override": args.omega, "provenance": provenance,
         "checkpoint": str(args.checkpoint),
         "manifest_sha256": hashlib.sha256(args.manifest.read_bytes()).hexdigest()}, indent=2))

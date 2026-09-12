@@ -1,4 +1,4 @@
-"""Evaluate frozen experiment choices on original CV25 and AGFarsdat test audio."""
+"""Evaluate frozen choices on one reported, consistently filtered test cohort."""
 from __future__ import annotations
 
 import argparse
@@ -6,6 +6,7 @@ import csv
 import gc
 import hashlib
 import json
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -14,7 +15,7 @@ import yaml
 from jiwer import cer, wer
 
 from ml.fusion.bridging import BridgingModule, observation_addition
-from ml.fusion.bridging_experiment import Recognizer, filterbank
+from ml.fusion.bridging_experiment import Recognizer, filterbank, skipped_record, write_skipped
 from ml.utils.audio import load_audio, resample_audio
 
 TEST_DATASETS = ("cv-corpus-25.0", "AGFarsdat_test_normalized")
@@ -29,9 +30,10 @@ def load_config(path: Path) -> dict[str, Any]:
     return config
 
 
-def test_rows(config: dict[str, Any]) -> list[dict[str, str]]:
-    """No reference-length filtering, audio truncation, or method-specific cohort."""
+def test_rows(config: dict[str, Any], skipped: list[dict] | None = None) -> list[dict[str, str]]:
+    """Build one cohort while recording and omitting inconsistent clip rows."""
     from ml.asr.train_whisper_small import resolve_audio_path
+    skipped = skipped if skipped is not None else []
     rows = []
     for dataset in config["data"]["datasets"]:
         directory = Path(config["data"]["root_dir"]) / dataset
@@ -39,26 +41,40 @@ def test_rows(config: dict[str, Any]) -> list[dict[str, str]]:
             reader = csv.DictReader(stream, delimiter="\t")
             if not {"path", "sentence"}.issubset(reader.fieldnames or []):
                 raise ValueError(f"{directory}/test.tsv needs path and sentence columns")
-            seen = set()
-            for row in reader:
-                path, sentence = row["path"].strip(), row["sentence"].strip()
-                if not path or not sentence or path in seen:
-                    raise ValueError(f"{directory}: empty or duplicate test row: {path!r}")
-                seen.add(path)
+            raw_rows = list(reader)
+            path_counts = Counter(str(row.get("path", "")).strip() for row in raw_rows)
+            usable_in_dataset = 0
+            for line_number, row in enumerate(raw_rows, start=2):
+                path = str(row.get("path") or "").strip()
+                sentence = str(row.get("sentence") or "").strip()
+                identity = {"id": f"{dataset}/{path or f'line-{line_number}'}", "split": "test"}
+                if not path or not sentence:
+                    skipped.append(skipped_record(identity, "empty_test_field", f"{directory}/test.tsv:{line_number}"))
+                    continue
+                if path_counts[path] > 1:
+                    skipped.append(skipped_record(identity, "duplicate_test_path", f"{directory}/test.tsv:{line_number}"))
+                    continue
                 audio = resolve_audio_path(directory, path).resolve()
                 if not audio.is_file():
-                    raise FileNotFoundError(audio)
-                relative = Path(path)
-                if relative.is_absolute():
-                    relative = audio.relative_to(directory.resolve())
-                if relative.parts[0] == "clips":
+                    skipped.append(skipped_record(identity, "missing_test_audio", str(audio)))
+                    continue
+                try:
+                    relative = Path(path)
+                    if relative.is_absolute():
+                        relative = audio.relative_to(directory.resolve())
+                except ValueError as exc:
+                    skipped.append(skipped_record(identity, "test_path_outside_dataset", str(exc)))
+                    continue
+                if relative.parts and relative.parts[0] == "clips":
                     relative = Path(*relative.parts[1:])
                 if ".." in relative.parts:
-                    raise ValueError("test audio paths cannot escape their dataset")
+                    skipped.append(skipped_record(identity, "test_path_outside_dataset", path))
+                    continue
                 rows.append({"id": f"{dataset}/{path}", "dataset": dataset, "audio_path": str(audio),
                              "relative_path": str(relative), "reference": sentence})
-        if not seen:
-            raise ValueError(f"empty test split: {directory}")
+                usable_in_dataset += 1
+        if not usable_in_dataset:
+            raise ValueError(f"no usable test clips remain in: {directory}")
     return rows
 
 
@@ -74,6 +90,26 @@ def read_wave(path: str | Path) -> torch.Tensor:
 
 def enhanced_path(config: dict[str, Any], row: dict[str, str]) -> Path:
     return Path(config["bridge_enhanced_root"]) / row["dataset"] / Path(row["relative_path"]).with_suffix(".wav")
+
+
+def preflight_rows(config: dict[str, Any], rows: list[dict[str, str]], needs_enhanced: bool,
+                   skipped: list[dict]) -> list[dict[str, str]]:
+    usable = []
+    for row in rows:
+        try:
+            original = read_wave(row["audio_path"])
+            if needs_enhanced:
+                enhanced = read_wave(enhanced_path(config, row))
+                if enhanced.shape != original.shape:
+                    raise ValueError("enhanced waveform length differs from original")
+        except (OSError, RuntimeError, ValueError) as exc:
+            skipped.append(skipped_record(row, "invalid_test_audio", str(exc)))
+            continue
+        usable.append(row)
+    for dataset in config["data"]["datasets"]:
+        if not any(row["dataset"] == dataset for row in usable):
+            raise ValueError(f"no usable common-cohort clips remain for: {dataset}")
+    return usable
 
 
 def build_decoder(spec: dict[str, Any], config: dict[str, Any], device: str):
@@ -123,14 +159,13 @@ def run(config: dict[str, Any], output: Path, methods: list[str] | None, device:
     selected = methods or list(config["methods"])
     if len(selected) != len(set(selected)) or not set(selected).issubset(config["methods"]):
         raise ValueError("select unique method names from the config")
-    rows = test_rows(config)
+    skipped: list[dict] = []
+    rows = test_rows(config, skipped)
     needs_enhanced = any(config["methods"][m]["kind"] == "bridge" for m in selected)
     # Preflight the common cohort before loading models or writing scores.
-    for row in rows:
-        original = read_wave(row["audio_path"])
-        if needs_enhanced and read_wave(enhanced_path(config, row)).shape != original.shape:
-            raise ValueError(f"unaligned enhanced audio: {row['id']}")
+    rows = preflight_rows(config, rows, needs_enhanced, skipped)
     output.mkdir(parents=True, exist_ok=False)
+    write_skipped(output / "skipped_inputs.jsonl", skipped)
     manifest = "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows)
     (output / "test_manifest.jsonl").write_text(manifest)
     digest = hashlib.sha256(manifest.encode()).hexdigest()
@@ -155,7 +190,8 @@ def run(config: dict[str, Any], output: Path, methods: list[str] | None, device:
         def score(items):
             refs, hyps = [x["reference"] for x in items], [x["hypothesis"] for x in items]
             return {"examples": len(items), "wer": wer(refs, hyps), "cer": cer(refs, hyps)}
-        metrics = {**score(predictions), "test_manifest_sha256": digest, "method": spec,
+        metrics = {**score(predictions), "skipped_inputs": len(skipped),
+                   "test_manifest_sha256": digest, "method": spec,
                    "dataset_metrics": {d: score([x for x in predictions if x["dataset"] == d])
                                        for d in config["data"]["datasets"]}}
         summary[name] = metrics

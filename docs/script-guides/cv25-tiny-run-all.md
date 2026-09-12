@@ -37,8 +37,8 @@ uv run python -c 'import torch; assert torch.cuda.is_available(), "CUDA is unava
 uv run python -m ml.fusion.prepare_bridge_inputs --dry-run
 ```
 
-Resolve any missing files or split-overlap errors reported by preflight before
-proceeding. Do not disable the split checks to make the experiment run.
+Review the printed skip counts before proceeding. Row-level mismatches are
+omitted; structural errors and required splits with no usable clips still fail.
 
 ## 2. Generate the paper baseline's waveform inputs and DNSMOS scores
 
@@ -200,7 +200,8 @@ Omitting `--methods` runs all registered methods in sequence:
 Bridge omega = 1 is already represented by `baseline`. View bypass ablations
 require no extra training. The runner scores the same original utterances for
 every method, with separate CV25 and AGFarsdat WER/CER. Its preflight refuses
-invalid or over-30-second audio instead of silently varying the evaluation cohort.
+empty datasets and writes invalid or over-30-second clip omissions to
+`skipped_inputs.jsonl`; every method uses the same filtered cohort.
 
 Results are in `artifacts/cv25-tiny/final-tests-all/summary.json`, with per-method
 metrics/predictions and the common `test_manifest.jsonl`. This output directory

@@ -91,6 +91,7 @@ def test_cached_training_and_checkpoint_reload(tmp_path):
         torch.save({"noisy": torch.randn(80, 12), "enhanced": torch.randn(80, 12),
                     "wers": torch.rand(11), "sig": torch.tensor(3.), "bak": torch.tensor(2.)}, cache / f"{i}.pt")
         rows.append({"id": str(i), "source_id": str(i), "split": split, "cache": f"{i}.pt"})
+    rows.append({"id": "missing", "source_id": "missing", "split": "train", "cache": "missing.pt"})
     (cache / "index.jsonl").write_text("\n".join(json.dumps(r) for r in rows))
     output = tmp_path / "run"
     assert main(["train", "--cache", str(cache), "--output", str(output), "--epochs", "1"]) == 0
@@ -98,6 +99,19 @@ def test_cached_training_and_checkpoint_reload(tmp_path):
     model = BridgingModule(**saved["model_config"])
     model.load_state_dict(saved["state_dict"])
     assert saved["epoch"] == 1
+    skipped = [json.loads(line) for line in (output / "skipped_inputs.jsonl").read_text().splitlines()]
+    assert [(row["id"], row["reason"]) for row in skipped] == [("missing", "invalid_cache")]
+
+
+def test_manifest_reader_skips_malformed_and_duplicate_rows(tmp_path):
+    from ml.fusion.bridging_experiment import read_rows
+    path = tmp_path / "rows.jsonl"
+    row = {"id": "duplicate", "source_id": "source", "split": "train"}
+    valid = {"id": "valid", "source_id": "other", "split": "dev"}
+    path.write_text("not-json\n" + json.dumps(row) + "\n" + json.dumps(row) + "\n" + json.dumps(valid))
+    skipped = []
+    assert read_rows(path, skipped) == [valid]
+    assert [item["reason"] for item in skipped] == ["invalid_json", "duplicate_id", "duplicate_id"]
 
 
 def test_prepare_and_evaluate_waveform_workflow(tmp_path, monkeypatch):
@@ -120,6 +134,9 @@ def test_prepare_and_evaluate_waveform_workflow(tmp_path, monkeypatch):
     rows = [{"id": str(i), "source_id": str(i), "split": split, "sentence": "hello",
              "noisy_path": "noisy.wav", "enhanced_path": "enhanced.wav", "dnsmos_sig": 3., "dnsmos_bak": 2.}
             for i, split in enumerate(("train", "dev"))]
+    rows.append({"id": "missing", "source_id": "missing", "split": "train", "sentence": "hello",
+                 "noisy_path": "missing-noisy.wav", "enhanced_path": "missing-enhanced.wav",
+                 "dnsmos_sig": 3., "dnsmos_bak": 2.})
     manifest = tmp_path / "pairs.jsonl"
     manifest.write_text("\n".join(json.dumps(r) for r in rows))
     import hashlib
@@ -130,6 +147,9 @@ def test_prepare_and_evaluate_waveform_workflow(tmp_path, monkeypatch):
     main(["prepare", "--manifest", str(manifest), "--output", str(cache),
           "--asr-checkpoint", "offline"])
     assert json.loads((cache / "provenance.json").read_text())["enhancer_id"] == "automatic-frcrn"
+    skipped = [json.loads(line) for line in (cache / "skipped_inputs.jsonl").read_text().splitlines()]
+    assert [row["id"] for row in skipped] == ["missing"]
+    assert skipped[0]["reason"] == "invalid_paired_audio"
     assert len(calls) == 22
     assert calls[0].abs().sum() > 0 and calls[10].abs().sum() == 0
     item = torch.load(cache / "00000000.pt", weights_only=True)

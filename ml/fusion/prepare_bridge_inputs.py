@@ -1,10 +1,11 @@
-"""Generate FRCRN waveforms, DNSMOS supervision and manifests from existing CV25 data."""
+"""Generate bridge inputs while reporting and skipping inconsistent clip rows."""
 from __future__ import annotations
 
 import argparse
 import csv
 import hashlib
 import json
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -14,7 +15,12 @@ import torch
 import yaml
 
 from ml.fusion.bridge_pretrained import DNSMOS, FRCRN, sha256
-from ml.fusion.bridging_experiment import check_splits
+from ml.fusion.bridging_experiment import (
+    check_splits,
+    filter_split_conflicts,
+    skipped_record,
+    write_skipped,
+)
 from ml.fusion.evaluate_ablation import TEST_DATASETS, read_wave, test_rows
 
 
@@ -25,19 +31,22 @@ def atomic_json(path: Path, payload: Any) -> None:
     temporary.replace(path)
 
 
-def collect_rows(data_root: Path, scope: str) -> list[dict[str, Any]]:
+def collect_rows(data_root: Path, scope: str, skipped: list[dict] | None = None) -> list[dict[str, Any]]:
     from ml.enhancement.dataset import read_mapping
     from ml.asr.train_whisper_small import resolve_audio_path
+    skipped = skipped if skipped is not None else []
     original = (data_root / "cv-corpus-25.0").resolve()
     speakers = {}
-    source_splits = {}
+    source_splits: dict[str, set[str]] = {}
     for split in ("train", "dev", "test"):
         with (original / f"{split}.tsv").open(encoding="utf-8", newline="") as stream:
             for row in csv.DictReader(stream, delimiter="\t"):
-                source = str(resolve_audio_path(original, row["path"]).resolve())
-                if source in source_splits and source_splits[source] != split:
-                    raise ValueError(f"original CV25 source crosses splits: {source}")
-                source_splits[source] = split
+                path = str(row.get("path", "")).strip()
+                if not path:
+                    skipped.append(skipped_record({"split": split}, "empty_original_path"))
+                    continue
+                source = str(resolve_audio_path(original, path).resolve())
+                source_splits.setdefault(source, set()).add(split)
                 speakers[source] = f"cv25/{row['client_id']}" if row.get("client_id") else None
     rows = []
     # Audit train/dev sources even for a test-only request. Never load clean audio
@@ -46,23 +55,37 @@ def collect_rows(data_root: Path, scope: str) -> list[dict[str, Any]]:
         for pair in read_mapping(data_root / "cv-corpus-25.0-degraded-v2", split):
             source = pair.clean_path.resolve()
             if not source.is_relative_to(original):
-                raise ValueError(f"non-CV25 source in degraded mapping: {source}")
-            if source_splits.get(str(source)) != split:
-                raise ValueError(f"degraded source is missing or in a different original CV25 split: {source}")
-            rows.append({"id": f"cv25-degraded/{pair.pair_id}", "source_id": str(source),
+                skipped.append(skipped_record({"id": pair.pair_id, "split": split},
+                                              "non_cv25_source", str(source)))
+                continue
+            if source_splits.get(str(source)) != {split}:
+                skipped.append(skipped_record({"id": pair.pair_id, "split": split},
+                                              "source_missing_or_wrong_split", str(source)))
+                continue
+            candidate = {"id": f"cv25-degraded/{pair.pair_id}", "source_id": str(source),
                          "speaker_id": speakers.get(str(source)), "split": split,
                          "sentence": pair.transcript, "noisy_path": str(pair.degraded_path.resolve()),
-                         "dataset": "cv-corpus-25.0-degraded-v2", "degradation": pair.degradation})
+                         "dataset": "cv-corpus-25.0-degraded-v2", "degradation": pair.degradation}
+            if not pair.degraded_path.is_file():
+                skipped.append(skipped_record(candidate, "missing_noisy_audio", str(pair.degraded_path)))
+                continue
+            rows.append(candidate)
     if scope in {"all", "test"}:
-        for row in test_rows({"data": {"root_dir": str(data_root), "datasets": list(TEST_DATASETS), "split": "test"}}):
+        for row in test_rows({"data": {"root_dir": str(data_root), "datasets": list(TEST_DATASETS), "split": "test"}}, skipped):
             rows.append({"id": row["id"], "source_id": row["audio_path"],
                          "speaker_id": speakers.get(row["audio_path"]), "split": "test",
                          "sentence": row["reference"], "noisy_path": row["audio_path"],
                          "dataset": row["dataset"], "relative_path": row["relative_path"]})
-    if len({r["id"] for r in rows}) != len(rows):
-        raise ValueError("duplicate input IDs")
-    if any(not row["sentence"].strip() for row in rows):
-        raise ValueError("empty transcript in input metadata")
+    id_counts = Counter(row["id"] for row in rows)
+    kept = []
+    for row in rows:
+        if id_counts[row["id"]] > 1:
+            skipped.append(skipped_record(row, "duplicate_id"))
+        elif not row["sentence"].strip():
+            skipped.append(skipped_record(row, "empty_transcript"))
+        else:
+            kept.append(row)
+    rows = filter_split_conflicts(kept, skipped)
     check_splits(rows)
     if scope == "test":
         rows = [r for r in rows if r["split"] == "test"]
@@ -126,15 +149,41 @@ def write_manifests(root: Path, rows: list[dict], identity: dict) -> None:
 
 def run(args: argparse.Namespace) -> None:
     data_root, output = args.data_root.resolve(), args.output.resolve()
-    rows = select_rows(collect_rows(data_root, args.scope), args.max_per_split, args.seed)
+    skipped: list[dict] = []
+    rows = select_rows(collect_rows(data_root, args.scope, skipped), args.max_per_split, args.seed)
+    usable = []
+    for row in rows:
+        try:
+            read_wave(row["noisy_path"])
+        except (OSError, RuntimeError, ValueError) as exc:
+            skipped.append(skipped_record(row, "unreadable_or_invalid_audio", str(exc)))
+            continue
+        usable.append(row)
+    rows = usable
     if not rows:
         raise ValueError("no selected inputs")
+    required_splits = ({"test"} if args.scope == "test" else
+                       {"train", "dev"} if args.scope == "train-dev" else
+                       {"train", "dev", "test"})
+    available_splits = {str(row["split"]) for row in rows}
+    if not required_splits.issubset(available_splits):
+        missing = sorted(required_splits - available_splits)
+        raise ValueError(f"no usable clips remain in required splits: {missing}")
+    if "test" in required_splits:
+        missing_datasets = [name for name in TEST_DATASETS
+                            if not any(row["split"] == "test" and row["dataset"] == name for row in rows)]
+        if missing_datasets:
+            raise ValueError(f"no usable test clips remain in required datasets: {missing_datasets}")
     targets = [str(Path(r["dataset"]) / Path(r["relative_path"]).with_suffix(".wav"))
                for r in rows if r["split"] == "test"]
     if len(targets) != len(set(targets)):
         raise ValueError("test filenames collide after replacing suffix with .wav")
     counts = {s: sum(r["split"] == s for r in rows) for s in ("train", "dev", "test")}
     print(f"Selected inputs: {counts}", flush=True)
+    if skipped:
+        reasons = {reason: sum(row["reason"] == reason for row in skipped)
+                   for reason in sorted({row["reason"] for row in skipped})}
+        print(f"Skipped inputs: {reasons}", flush=True)
     if args.dry_run:
         return
     output.mkdir(parents=True, exist_ok=True)
@@ -143,6 +192,7 @@ def run(args: argparse.Namespace) -> None:
     if request_path.exists() and json.loads(request_path.read_text()) != request:
         raise ValueError("selection changed; use a new output directory (keep pilots separate)")
     atomic_json(request_path, request)
+    write_skipped(output / "skipped_inputs.jsonl", skipped)
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
     enhancer = FRCRN(args.model_root.resolve() / "frcrn", args.device)
@@ -163,7 +213,10 @@ def run(args: argparse.Namespace) -> None:
         config["bridge_enhanced_root"] = str(output / "test-enhanced")
         config["bridge_enhancer_id"] = enhancer.identity
         (output / "final_tests.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
+    skip_counts = {reason: sum(row["reason"] == reason for row in skipped)
+                   for reason in sorted({row["reason"] for row in skipped})}
     atomic_json(output / f"{args.scope}-status.json", {"complete": True, "counts": counts,
+                 "skipped": len(skipped), "skip_counts": skip_counts,
                  "pilot": args.max_per_split is not None, "identity": identity})
     print(f"Preparation complete: {output}", flush=True)
 
@@ -177,7 +230,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--device", default="cpu", help="FRCRN torch device, e.g. cuda:0; DNSMOS runs on CPU")
     parser.add_argument("--max-per-split", type=int, default=None, help="deterministic pilot limit; default all, use a separate pilot output")
     parser.add_argument("--seed", type=int, default=1337, help="deterministic selection/model seed")
-    parser.add_argument("--dry-run", action="store_true", help="validate metadata/split identities and report counts without downloading or enhancing")
+    parser.add_argument("--dry-run", action="store_true", help="report usable/skipped counts without downloading or enhancing")
     parser.add_argument("--test-config", type=Path, default=Path("configs/speech_enhancement/cv25_tiny/final_tests.yaml"), help="template for generated final-test config with automatic enhancer identity")
     args = parser.parse_args(argv)
     if args.max_per_split is not None and args.max_per_split < 1:

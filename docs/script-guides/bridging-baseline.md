@@ -47,7 +47,9 @@ never used as the enhanced view. DNSMOS is computed on original noisy train/dev
 inputs only. Test receives enhancement, but no DNSMOS or recognition targets.
 `--scope train-dev` or `--scope test` prepares only that phase. Train/dev source
 identities are audited even in test scope. CV25 client IDs, when present, are
-used to reject cross-split speaker leakage. Metadata problems fail explicitly.
+used to detect cross-split speaker leakage. Inconsistent clip rows are skipped
+before selection and reported by reason; structural dataset errors or a required
+split with no usable clips still stop the command.
 
 For a small environment pilot, use a separate output directory:
 
@@ -67,6 +69,7 @@ The default output is `artifacts/cv25-tiny/bridge-inputs/`:
 - matching `.provenance.json` sidecars with automatic model IDs;
 - `bridge_test.jsonl` and `test-enhanced/` for the two original test sets;
 - `final_tests.yaml`, prefilled with the correct enhanced root and enhancer ID;
+- `skipped_inputs.jsonl`, containing every omitted clip and its reason;
 - `completed/` records for resume, and per-scope completion reports.
 
 Only trailing model-input padding is removed; no shifts or gain normalization
@@ -129,9 +132,10 @@ references, 225-new-token greedy decoding, and FP32 inference for all methods.
 No reference-token-length filtering is applied. This avoids the older ASR
 evaluator's reference filtering and tokenizer round-trip mismatch with fusion.
 Results therefore need not numerically match historical evaluation files.
-Preflight refuses missing audio, empty/duplicate rows, nonfinite audio, or
-clips outside 35 ms–30 s; it never silently drops different clips per method.
-If any duration fails, define a common segmentation policy before proceeding.
+Preflight omits missing, malformed, duplicate, nonfinite, unaligned, or
+out-of-duration clips before loading models. The omissions are written to
+`skipped_inputs.jsonl`, and every method receives the same filtered cohort.
+An empty required dataset still stops evaluation.
 
 ```bash
 uv run python -m ml.fusion.evaluate_ablation --help
@@ -162,7 +166,7 @@ which supplies the enhanced paths and verified model ID automatically. There
 are no DNSMOS or WER training targets for test clips. Generating enhanced audio
 does not change which original dataset is under evaluation.
 
-Outputs: `test_manifest.jsonl`, effective config, `<method>.predictions.jsonl`,
+Outputs: `test_manifest.jsonl`, `skipped_inputs.jsonl`, effective config, `<method>.predictions.jsonl`,
 `<method>.metrics.json`, and `summary.json` with **separate WER/CER for each
 dataset**, aggregate scores, and a common test-manifest hash. When running methods
 separately, compare the hashes to verify the cohort is identical. These original
@@ -208,14 +212,14 @@ UTF-8 JSONL, unique `id`, paths absolute or relative to the manifest directory:
 ```
 
 `source_id` identifies the original CV25 clip, shared across all its variants.
-Include `speaker_id` wherever available. Train/dev preparation rejects source
-or supplied-speaker overlap and rejects all test rows. Evaluation needs the
+Include `speaker_id` wherever available. Train/dev preparation omits every row
+involved in source or supplied-speaker overlap and rejects all test rows. Evaluation needs the
 same fields except DNSMOS; only the requested dev/test split is accepted.
 Audit test IDs against training IDs separately before final evaluation.
 Normalize the reference transcripts identically for baseline and fusion.
 Audio must be aligned, finite, mono after channel averaging, and no longer than
-30 seconds. Resampling is to 16 kHz; unequal lengths are refused rather than
-silently repaired. Equal lengths alone do not establish alignment: verify SE
+30 seconds. Resampling is to 16 kHz; invalid or unequal pairs are omitted and
+reported rather than repaired. Equal lengths alone do not establish alignment: verify SE
 delay upstream. No automatic normalization changes the waveform mixing ratio.
 
 ## Commands

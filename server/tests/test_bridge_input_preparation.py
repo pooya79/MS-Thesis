@@ -101,6 +101,21 @@ def test_dry_run_does_not_load_models(tmp_path, monkeypatch):
     assert not output.exists()
 
 
+def test_preparation_skips_degraded_rows_missing_from_original_split(tmp_path, capsys):
+    data = tmp_path / "data"
+    make_dataset(data)
+    mapping = data / "cv-corpus-25.0-degraded-v2/degraded_to_clean.jsonl"
+    stale = {"degraded_id": "stale", "split": "train", "sentence": "hello",
+             "degraded_path": "clips/train.wav",
+             "clean_path": str(data / "cv-corpus-25.0/clips/test.wav")}
+    mapping.write_text(mapping.read_text() + "\n" + json.dumps(stale))
+    rows = prep.collect_rows(data, "all", skipped := [])
+    assert len(rows) == 4
+    assert [row["reason"] for row in skipped] == ["source_missing_or_wrong_split"]
+    prep.main(["--data-root", str(data), "--output", str(tmp_path / "output"), "--dry-run"])
+    assert "Skipped inputs: {'source_missing_or_wrong_split': 1}" in capsys.readouterr().out
+
+
 def test_preparation_help():
     result = subprocess.run([sys.executable, "-m", "ml.fusion.prepare_bridge_inputs", "--help"], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
