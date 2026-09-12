@@ -35,10 +35,10 @@ cd ~/MS-Thesis
 uv sync
 
 # Validate metadata and report counts without loading models or changing data.
-.venv/bin/python -m ml.fusion.prepare_bridge_inputs --dry-run
+uv run python -m ml.fusion.prepare_bridge_inputs --dry-run
 
 # Download models once, then prepare all train/dev inputs and original test views.
-.venv/bin/python -m ml.fusion.prepare_bridge_inputs --device cuda
+uv run python -m ml.fusion.prepare_bridge_inputs --device cuda
 ```
 
 Default sources: degraded CV25 train/dev mapping and original CV25 + AGFarsdat
@@ -52,7 +52,7 @@ used to reject cross-split speaker leakage. Metadata problems fail explicitly.
 For a small environment pilot, use a separate output directory:
 
 ```bash
-.venv/bin/python -m ml.fusion.prepare_bridge_inputs \
+uv run python -m ml.fusion.prepare_bridge_inputs \
   --scope train-dev --max-per-split 10 \
   --output artifacts/cv25-tiny/bridge-inputs-pilot --device cuda
 ```

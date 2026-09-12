@@ -21,8 +21,8 @@ and these prepared datasets under `data/`:
 - `AGFarsdat_test_normalized`: test TSV and audio.
 
 No new degradation is generated. Model downloads require internet access.
-Use the existing project environment throughout; direct `.venv/bin/python`
-invocations use the same locked project environment.
+Use `uv run python` throughout so every command uses the locked project
+environment.
 
 ```bash
 cd ~/MS-Thesis
@@ -30,11 +30,11 @@ cd ~/MS-Thesis
 # Stop a pasted block at the first failed command.
 set -euo pipefail
 
-.venv/bin/python -c 'import torch; assert torch.cuda.is_available(), "CUDA is unavailable"; print(torch.cuda.get_device_name(0))'
-
 uv sync
 
-.venv/bin/python -m ml.fusion.prepare_bridge_inputs --dry-run
+uv run python -c 'import torch; assert torch.cuda.is_available(), "CUDA is unavailable"; print(torch.cuda.get_device_name(0))'
+
+uv run python -m ml.fusion.prepare_bridge_inputs --dry-run
 ```
 
 Resolve any missing files or split-overlap errors reported by preflight before
@@ -43,7 +43,7 @@ proceeding. Do not disable the split checks to make the experiment run.
 ## 2. Generate the paper baseline's waveform inputs and DNSMOS scores
 
 ```bash
-.venv/bin/python -m ml.fusion.prepare_bridge_inputs --device cuda
+uv run python -m ml.fusion.prepare_bridge_inputs --device cuda
 ```
 
 This downloads frozen FRCRN and DNSMOS models, enhances degraded CV25 train/dev
@@ -55,7 +55,7 @@ Rerun this same command to resume completed-clip preparation.
 ## 3. Train the shared Whisper Tiny ASR baseline
 
 ```bash
-.venv/bin/python -m ml.asr.train_whisper_small \
+uv run python -m ml.asr.train_whisper_small \
   --config configs/speech_enhancement/cv25_tiny/baseline.yaml
 ```
 
@@ -66,7 +66,7 @@ Keep this checkpoint fixed once you create the bridge cache or start fusion.
 ## 4. Cache recognition targets for the published-method reconstruction
 
 ```bash
-.venv/bin/python -m ml.fusion.bridging_experiment prepare \
+uv run python -m ml.fusion.bridging_experiment prepare \
   --manifest artifacts/cv25-tiny/bridge-inputs/bridge_train_dev.jsonl \
   --asr-checkpoint models/asr/cv25-tiny/baseline/best \
   --output artifacts/cv25-tiny/bridge-cache \
@@ -82,13 +82,13 @@ and does not resume a partial cache.
 
 ```bash
 # Paper baseline reconstruction: perceptual quality + recognition information.
-.venv/bin/python -m ml.fusion.bridging_experiment train \
+uv run python -m ml.fusion.bridging_experiment train \
   --cache artifacts/cv25-tiny/bridge-cache \
   --output models/asr/cv25-tiny/bridge \
   --device cuda
 
 # Loss ablation: perceptual quality only, with the same cached inputs.
-.venv/bin/python -m ml.fusion.bridging_experiment train \
+uv run python -m ml.fusion.bridging_experiment train \
   --cache artifacts/cv25-tiny/bridge-cache \
   --output models/asr/cv25-tiny/bridge-pq \
   --pq-only --device cuda
@@ -103,7 +103,7 @@ and do not resume interrupted training.
 First run the existing cross-attention architecture through all three stages:
 
 ```bash
-.venv/bin/python -m ml.fusion.train_fusion \
+uv run python -m ml.fusion.train_fusion \
   --config configs/speech_enhancement/cv25_tiny/cross_attention.yaml
 ```
 
@@ -118,7 +118,7 @@ mkdir -p models/asr/cv25-tiny/gated/checkpoints/stage0_warmup
 cp -n models/asr/cv25-tiny/cross_attention/checkpoints/stage0_warmup/enhancer.pt \
   models/asr/cv25-tiny/gated/checkpoints/stage0_warmup/enhancer.pt
 
-.venv/bin/python -m ml.fusion.train_fusion \
+uv run python -m ml.fusion.train_fusion \
   --config configs/speech_enhancement/cv25_tiny/gated.yaml \
   --resume-from-stage fusion
 
@@ -126,7 +126,7 @@ mkdir -p models/asr/cv25-tiny/residual_cross_attention/checkpoints/stage0_warmup
 cp -n models/asr/cv25-tiny/cross_attention/checkpoints/stage0_warmup/enhancer.pt \
   models/asr/cv25-tiny/residual_cross_attention/checkpoints/stage0_warmup/enhancer.pt
 
-.venv/bin/python -m ml.fusion.train_fusion \
+uv run python -m ml.fusion.train_fusion \
   --config configs/speech_enhancement/cv25_tiny/residual_cross_attention.yaml \
   --resume-from-stage fusion
 ```
@@ -144,23 +144,23 @@ provide decoded dev WER/CER for both learned bridge variants and its two endpoin
 Each output directory must be new.
 
 ```bash
-.venv/bin/python -m ml.fusion.bridging_experiment evaluate \
+uv run python -m ml.fusion.bridging_experiment evaluate \
   --manifest artifacts/cv25-tiny/bridge-inputs/bridge_dev.jsonl \
   --checkpoint models/asr/cv25-tiny/bridge/best.pt \
   --output artifacts/cv25-tiny/bridge-dev --split dev --device cuda
 
-.venv/bin/python -m ml.fusion.bridging_experiment evaluate \
+uv run python -m ml.fusion.bridging_experiment evaluate \
   --manifest artifacts/cv25-tiny/bridge-inputs/bridge_dev.jsonl \
   --checkpoint models/asr/cv25-tiny/bridge-pq/best.pt \
   --output artifacts/cv25-tiny/bridge-pq-dev --split dev --device cuda
 
-.venv/bin/python -m ml.fusion.bridging_experiment evaluate \
+uv run python -m ml.fusion.bridging_experiment evaluate \
   --manifest artifacts/cv25-tiny/bridge-inputs/bridge_dev.jsonl \
   --checkpoint models/asr/cv25-tiny/bridge/best.pt \
   --omega 1 --output artifacts/cv25-tiny/bridge-original-dev \
   --split dev --device cuda
 
-.venv/bin/python -m ml.fusion.bridging_experiment evaluate \
+uv run python -m ml.fusion.bridging_experiment evaluate \
   --manifest artifacts/cv25-tiny/bridge-inputs/bridge_dev.jsonl \
   --checkpoint models/asr/cv25-tiny/bridge/best.pt \
   --omega 0 --output artifacts/cv25-tiny/bridge-enhanced-dev \
@@ -177,7 +177,7 @@ Run this **once the designs and checkpoints are fixed**. Use the generated confi
 which has real enhancer identities and paths; the static template has placeholders.
 
 ```bash
-.venv/bin/python -m ml.fusion.evaluate_ablation \
+uv run python -m ml.fusion.evaluate_ablation \
   --config artifacts/cv25-tiny/bridge-inputs/final_tests.yaml \
   --output artifacts/cv25-tiny/final-tests-all \
   --device cuda
