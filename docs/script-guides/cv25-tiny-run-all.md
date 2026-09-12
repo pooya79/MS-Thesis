@@ -24,6 +24,10 @@ No new degradation is generated. Model downloads require internet access.
 Use `uv run python` throughout so every command uses the locked project
 environment.
 
+Long-running bridge commands print elapsed time and ETA and atomically maintain
+`progress.json` in their output directory. This remains available under
+`nohup`; `estimated_finish_at` is a throughput-based estimate, not a deadline.
+
 ```bash
 cd ~/MS-Thesis
 

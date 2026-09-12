@@ -226,6 +226,18 @@ delay upstream. No automatic normalization changes the waveform mixing ratio.
 
 Run from the repository root. Every subcommand supports `--help` with defaults.
 The bridge WER-cache/training/evaluation output directories must be new.
+
+Long-running preparation, cache, bridge-training, bridge-evaluation, and final
+evaluation commands print elapsed time, an ETA, and an estimated finish timestamp
+after the first item, at least every 30 seconds, and at completion. Each command
+also atomically updates `<output>/progress.json`, so redirected or `nohup` runs
+can be monitored without parsing terminal output. The timestamp is an estimate
+based on average throughput and becomes more reliable after the initial model
+loading and several processed items.
+
+```bash
+watch -n 15 cat artifacts/cv25-tiny/bridge-inputs/progress.json
+```
 The separate waveform preparation command is resumable in its existing output. This initial baseline trainer does not automatically
 resume a partial run. Preserve completed caches to avoid repeated ASR inference.
 

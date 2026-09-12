@@ -22,6 +22,7 @@ from ml.fusion.bridging_experiment import (
     write_skipped,
 )
 from ml.fusion.evaluate_ablation import TEST_DATASETS, read_wave, test_rows
+from ml.utils.progress import ProgressReporter
 
 
 def atomic_json(path: Path, payload: Any) -> None:
@@ -193,19 +194,20 @@ def run(args: argparse.Namespace) -> None:
         raise ValueError("selection changed; use a new output directory (keep pilots separate)")
     atomic_json(request_path, request)
     write_skipped(output / "skipped_inputs.jsonl", skipped)
-    torch.manual_seed(args.seed)
-    np.random.seed(args.seed)
-    enhancer = FRCRN(args.model_root.resolve() / "frcrn", args.device)
-    scorer = DNSMOS(args.model_root.resolve() / "dnsmos") if counts["train"] + counts["dev"] else None
-    identity = {"enhancer_id": enhancer.identity, "dnsmos_id": scorer.identity if scorer else None,
-                "preparation_version": 1}
-    prepared = []
-    for i, row in enumerate(rows, start=1):
-        # Test records do not depend on the DNSMOS model, so train-dev/test/all
-        # commands can reuse the same completed test files.
-        row_identity = {**identity, "dnsmos_id": None} if row["split"] == "test" else identity
-        prepared.append(process_row(row, output, enhancer, scorer, row_identity))
-        print(f"[{i}/{len(rows)}] ready: {row['id']}", flush=True)
+    with ProgressReporter("bridge-inputs", len(rows), output / "progress.json") as progress:
+        torch.manual_seed(args.seed)
+        np.random.seed(args.seed)
+        enhancer = FRCRN(args.model_root.resolve() / "frcrn", args.device)
+        scorer = DNSMOS(args.model_root.resolve() / "dnsmos") if counts["train"] + counts["dev"] else None
+        identity = {"enhancer_id": enhancer.identity, "dnsmos_id": scorer.identity if scorer else None,
+                    "preparation_version": 1}
+        prepared = []
+        for i, row in enumerate(rows, start=1):
+            # Test records do not depend on the DNSMOS model, so train-dev/test/all
+            # commands can reuse the same completed test files.
+            row_identity = {**identity, "dnsmos_id": None} if row["split"] == "test" else identity
+            prepared.append(process_row(row, output, enhancer, scorer, row_identity))
+            progress.update(i, row["id"])
     write_manifests(output, prepared, identity)
     if counts["test"]:
         config = yaml.safe_load(args.test_config.read_text())

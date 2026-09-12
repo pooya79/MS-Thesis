@@ -17,6 +17,7 @@ from jiwer import cer, wer
 from ml.fusion.bridging import BridgingModule, observation_addition
 from ml.fusion.bridging_experiment import Recognizer, filterbank, skipped_record, write_skipped
 from ml.utils.audio import load_audio, resample_audio
+from ml.utils.progress import ProgressReporter
 
 TEST_DATASETS = ("cv-corpus-25.0", "AGFarsdat_test_normalized")
 
@@ -171,6 +172,8 @@ def run(config: dict[str, Any], output: Path, methods: list[str] | None, device:
     digest = hashlib.sha256(manifest.encode()).hexdigest()
     (output / "config.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
     summary = {}
+    progress = ProgressReporter("final-evaluation", len(selected) * len(rows), output / "progress.json")
+    completed = 0
     for name in selected:
         print(f"evaluating {name}: {len(rows)} original test clips", flush=True)
         spec = config["methods"][name]
@@ -183,6 +186,8 @@ def run(config: dict[str, Any], output: Path, methods: list[str] | None, device:
                 result = {**row, "hypothesis": decode(wave, enhanced)}
                 predictions.append(result)
                 stream.write(json.dumps(result, ensure_ascii=False) + "\n")
+                completed += 1
+                progress.update(completed, f"method={name} clip={row['id']}")
         del decode
         gc.collect()
         if torch.cuda.is_available():

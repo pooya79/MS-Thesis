@@ -13,6 +13,7 @@ import torch
 
 from ml.fusion.bridging import BridgingModule, OA_COEFFICIENTS, bridge_loss, observation_addition
 from ml.utils.audio import load_audio, resample_audio
+from ml.utils.progress import ProgressReporter
 
 
 def skipped_record(row: dict, reason: str, detail: str | None = None) -> dict:
@@ -165,7 +166,6 @@ def prepare(args: argparse.Namespace) -> None:
     output = args.output
     output.mkdir(parents=True, exist_ok=False)
     write_skipped(output / "skipped_inputs.jsonl", skipped)
-    asr = Recognizer(args.asr_checkpoint, args.device, args.max_tokens)
     meta = {"paper": "2501.02452v1", "asr_checkpoint": args.asr_checkpoint,
             "enhancer_id": identity["enhancer_id"], "dnsmos_id": identity["dnsmos_id"],
             "coefficients": OA_COEFFICIENTS, "max_tokens": args.max_tokens,
@@ -174,20 +174,22 @@ def prepare(args: argparse.Namespace) -> None:
             "text_policy": "strip_only; normalize all input references upstream identically",
             "implementation": "independent reconstruction; see docs/script-guides/bridging-baseline.md"}
     (output / "provenance.json").write_text(json.dumps(meta, indent=2))
-    with (output / "index.jsonl").open("w") as index:
-        for number, row in enumerate(rows):
-            noisy, enhanced = paired_audio(row, args.manifest.parent)
-            hypotheses = [asr(observation_addition(noisy, enhanced, torch.tensor(w))) for w in OA_COEFFICIENTS]
-            wers = [wer(row["sentence"].strip(), h) for h in hypotheses]
-            cache = {"noisy": filterbank(noisy), "enhanced": filterbank(enhanced),
-                     "wers": torch.tensor(wers), "sig": torch.tensor(float(row["dnsmos_sig"])),
-                     "bak": torch.tensor(float(row["dnsmos_bak"]))}
-            name = f"{number:08d}.pt"
-            torch.save(cache, output / name)
-            record = {**row, "cache": name, "wers": wers, "hypotheses": hypotheses}
-            index.write(json.dumps(record, ensure_ascii=False) + "\n")
-            index.flush()
-            print(f"prepared {number + 1}/{len(rows)}: {row['id']}", flush=True)
+    with ProgressReporter("bridge-cache", len(rows), output / "progress.json") as progress:
+        asr = Recognizer(args.asr_checkpoint, args.device, args.max_tokens)
+        with (output / "index.jsonl").open("w") as index:
+            for number, row in enumerate(rows):
+                noisy, enhanced = paired_audio(row, args.manifest.parent)
+                hypotheses = [asr(observation_addition(noisy, enhanced, torch.tensor(w))) for w in OA_COEFFICIENTS]
+                wers = [wer(row["sentence"].strip(), h) for h in hypotheses]
+                cache = {"noisy": filterbank(noisy), "enhanced": filterbank(enhanced),
+                         "wers": torch.tensor(wers), "sig": torch.tensor(float(row["dnsmos_sig"])),
+                         "bak": torch.tensor(float(row["dnsmos_bak"]))}
+                name = f"{number:08d}.pt"
+                torch.save(cache, output / name)
+                record = {**row, "cache": name, "wers": wers, "hypotheses": hypotheses}
+                index.write(json.dumps(record, ensure_ascii=False) + "\n")
+                index.flush()
+                progress.update(number + 1, row["id"])
 
 
 def augment(x: torch.Tensor) -> torch.Tensor:
@@ -241,6 +243,9 @@ def train(args: argparse.Namespace) -> None:
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     provenance = json.loads((args.cache / "provenance.json").read_text())
     best = float("inf")
+    total_work = args.epochs * (len(train_rows) + len(dev_rows))
+    progress = ProgressReporter("bridge-train", total_work, args.output / "progress.json")
+    completed_work = 0
     for epoch in range(args.epochs):
         model.train()
         random.shuffle(train_rows)
@@ -261,6 +266,8 @@ def train(args: argparse.Namespace) -> None:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 10.0)
                 optimizer.step()
                 optimizer.zero_grad()
+            completed_work += 1
+            progress.update(completed_work, f"epoch={epoch + 1}/{args.epochs} train")
         model.eval()
         dev_loss = 0.0
         with torch.inference_mode():
@@ -269,6 +276,8 @@ def train(args: argparse.Namespace) -> None:
                 out = model(item["noisy"][None], item["enhanced"][None])
                 dev_loss += bridge_loss(out, item["wers"][None], item["sig"][None], item["bak"][None],
                                         recognition=not args.pq_only).item()
+                completed_work += 1
+                progress.update(completed_work, f"epoch={epoch + 1}/{args.epochs} dev")
         dev_loss /= len(dev_rows)
         payload = {"state_dict": model.state_dict(), "model_config": model_config,
                    "provenance": provenance, "epoch": epoch + 1, "seed": args.seed,
@@ -304,8 +313,9 @@ def evaluate(args: argparse.Namespace) -> None:
     args.output.mkdir(parents=True, exist_ok=False)
     write_skipped(args.output / "skipped_inputs.jsonl", skipped)
     references, hypotheses = [], []
-    with (args.output / "predictions.jsonl").open("w") as stream, torch.inference_mode():
-        for row in rows:
+    with ProgressReporter("bridge-evaluate", len(rows), args.output / "progress.json") as progress, \
+            (args.output / "predictions.jsonl").open("w") as stream, torch.inference_mode():
+        for number, row in enumerate(rows, start=1):
             noisy, enhanced = paired_audio(row, args.manifest.parent)
             if args.omega is None:
                 omega = model(filterbank(noisy)[None].to(args.device),
@@ -318,6 +328,7 @@ def evaluate(args: argparse.Namespace) -> None:
             stream.write(json.dumps({"id": row["id"], "source_id": row["source_id"],
                                      "reference": references[-1], "hypothesis": hypothesis,
                                      "omega": omega.item()}, ensure_ascii=False) + "\n")
+            progress.update(number, row["id"])
     (args.output / "metrics.json").write_text(json.dumps({"wer": wer(references, hypotheses),
         "cer": cer(references, hypotheses), "examples": len(rows), "split": args.split,
         "skipped_inputs": len(skipped),
