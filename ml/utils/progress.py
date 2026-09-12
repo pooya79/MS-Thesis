@@ -22,9 +22,9 @@ def _duration(seconds: float | None) -> str:
 
 
 class ProgressReporter:
-    """Track average throughput, ETA, and completion in an atomic JSON file."""
+    """Track throughput and ETA, optionally persisting them in an atomic JSON file."""
 
-    def __init__(self, label: str, total: int, path: Path, *, initial: int = 0,
+    def __init__(self, label: str, total: int, path: Path | None, *, initial: int = 0,
                  report_every_seconds: float = 30.0) -> None:
         if total < 1 or not 0 <= initial <= total:
             raise ValueError("progress requires total >= 1 and 0 <= initial <= total")
@@ -64,10 +64,11 @@ class ProgressReporter:
 
     def _write(self, state: str, *, error: str | None = None) -> dict[str, Any]:
         payload = self._payload(state, error=error)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self.path.with_suffix(self.path.suffix + ".tmp")
-        temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-        temporary.replace(self.path)
+        if self.path is not None:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = self.path.with_suffix(self.path.suffix + ".tmp")
+            temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+            temporary.replace(self.path)
         return payload
 
     def update(self, completed: int, message: str | None = None) -> None:

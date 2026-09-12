@@ -54,7 +54,9 @@ This downloads frozen FRCRN and DNSMOS models, enhances degraded CV25 train/dev
 inputs, scores train/dev inputs, and enhances both original test sets. It creates
 `artifacts/cv25-tiny/bridge-inputs/bridge_train_dev.jsonl`, `bridge_dev.jsonl`,
 provenance, and a ready-to-use `final_tests.yaml`. No test supervision is created.
-Rerun this same command to resume completed-clip preparation.
+Rerun this same command to resume completed-clip preparation. Preparation defaults
+to `--batch-size 4 --workers 4`; tune those options as described in the bridging
+baseline script guide, using a new output directory if the batch size changes.
 
 ## 3. Train the shared Whisper Tiny ASR baseline
 

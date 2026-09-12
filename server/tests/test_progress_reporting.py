@@ -32,3 +32,9 @@ def test_progress_reporter_persists_failure(tmp_path):
     assert payload["state"] == "failed"
     assert payload["completed"] == 1
     assert payload["error"] == "RuntimeError: broken"
+
+
+def test_progress_reporter_can_report_to_console_without_a_file(capsys):
+    with ProgressReporter("dry-run", 1, None) as progress:
+        progress.update(1)
+    assert "[dry-run] 1/1" in capsys.readouterr().out

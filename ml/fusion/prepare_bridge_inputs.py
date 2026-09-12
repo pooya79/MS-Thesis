@@ -6,6 +6,7 @@ import csv
 import hashlib
 import json
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -14,7 +15,7 @@ import soundfile as sf
 import torch
 import yaml
 
-from ml.fusion.bridge_pretrained import DNSMOS, FRCRN, sha256
+from ml.fusion.bridge_pretrained import DNSMOS, FRCRN, frcrn_padded_length, sha256
 from ml.fusion.bridging_experiment import (
     check_splits,
     filter_split_conflicts,
@@ -121,7 +122,7 @@ def select_rows(rows: list[dict], maximum: int | None, seed: int) -> list[dict]:
     return selected
 
 
-def process_row(row: dict, root: Path, enhancer: Any, scorer: Any, identity: dict) -> dict:
+def _cached_or_wave(row: dict, root: Path, identity: dict) -> tuple[dict | None, str, np.ndarray | None]:
     key = hashlib.sha256(row["id"].encode()).hexdigest()
     record = root / "completed" / f"{key}.json"
     source_hash = sha256(Path(row["noisy_path"]))
@@ -132,11 +133,14 @@ def process_row(row: dict, root: Path, enhancer: Any, scorer: Any, identity: dic
         output = Path(saved["result"]["enhanced_path"])
         if not output.is_file() or sha256(output) != saved["enhanced_sha256"]:
             raise ValueError(f"missing/changed cached enhancement: {output}")
-        return saved["result"]
-    wave = read_wave(row["noisy_path"]).numpy()
-    enhanced = np.asarray(enhancer(wave), dtype=np.float32)
-    if enhanced.shape != wave.shape or not np.isfinite(enhanced).all():
-        raise ValueError(f"unaligned/nonfinite enhancement: {row['id']}")
+        return saved["result"], source_hash, None
+    return None, source_hash, read_wave(row["noisy_path"]).numpy()
+
+
+def _write_result(row: dict, root: Path, wave: np.ndarray, enhanced: np.ndarray,
+                  scores: dict[str, float], source_hash: str, identity: dict) -> dict:
+    key = hashlib.sha256(row["id"].encode()).hexdigest()
+    record = root / "completed" / f"{key}.json"
     if row["split"] == "test":
         relative = Path(row["relative_path"]).with_suffix(".wav")
         target = root / "test-enhanced" / row["dataset"] / relative
@@ -147,12 +151,55 @@ def process_row(row: dict, root: Path, enhancer: Any, scorer: Any, identity: dic
     sf.write(temporary, enhanced, 16000, subtype="FLOAT")
     temporary.replace(target)
     result = {**row, "enhanced_path": str(target.resolve()), "source_sha256": source_hash,
-              "sample_rate": 16000, "num_samples": len(wave)}
-    if row["split"] != "test":
-        result.update(scorer(wave))  # noisy signal, never clean reference or test scores
+              "sample_rate": 16000, "num_samples": len(wave), **scores}
     atomic_json(record, {"input_row": row, "identity": identity, "source_sha256": source_hash,
                          "enhanced_sha256": sha256(target), "result": result})
     return result
+
+
+def process_batch(rows: list[dict], root: Path, enhancer: Any, scorer: Any,
+                  identity: dict, executor: ThreadPoolExecutor, target_length: int) -> list[dict]:
+    identities = [{**identity, "dnsmos_id": None} if row["split"] == "test" else identity for row in rows]
+    loaded = list(executor.map(
+        lambda pair: _cached_or_wave(pair[0], root, pair[1]),
+        zip(rows, identities, strict=True),
+    ))
+    pending = [index for index, (cached, _, _) in enumerate(loaded) if cached is None]
+    waves = [loaded[index][2] for index in pending]
+    if hasattr(enhancer, "enhance_batch"):
+        enhanced = enhancer.enhance_batch(waves, target_length=target_length)
+    else:  # Small test doubles and third-party adapters may expose only scalar inference.
+        enhanced = [enhancer(wave) for wave in waves]
+    if len(enhanced) != len(waves):
+        raise ValueError("enhancer returned the wrong batch size")
+    enhanced = [np.asarray(item, dtype=np.float32) for item in enhanced]
+    for index, item in zip(pending, enhanced, strict=True):
+        wave = loaded[index][2]
+        if item.shape != wave.shape or not np.isfinite(item).all():
+            raise ValueError(f"unaligned/nonfinite enhancement: {rows[index]['id']}")
+    score_indexes = [index for index in pending if rows[index]["split"] != "test"]
+    score_values = list(executor.map(
+        scorer, (loaded[index][2] for index in score_indexes)
+    )) if score_indexes else []
+    scores = {index: value for index, value in zip(score_indexes, score_values, strict=True)}
+    results = []
+    enhanced_by_index = {index: item for index, item in zip(pending, enhanced, strict=True)}
+    for index, row in enumerate(rows):
+        cached, source_hash, wave = loaded[index]
+        if cached is not None:
+            results.append(cached)
+        else:
+            results.append(_write_result(row, root, wave, enhanced_by_index[index],
+                                         scores.get(index, {}), source_hash, identities[index]))
+    return results
+
+
+def _validate_row(row: dict) -> tuple[dict, int | None, str | None]:
+    try:
+        length = read_wave(row["noisy_path"]).numel()
+    except (OSError, RuntimeError, ValueError) as exc:
+        return row, None, str(exc)
+    return row, length, None
 
 
 def write_manifests(root: Path, rows: list[dict], identity: dict) -> None:
@@ -171,14 +218,21 @@ def run(args: argparse.Namespace) -> None:
     data_root, output = args.data_root.resolve(), args.output.resolve()
     skipped: list[dict] = []
     rows = select_rows(collect_rows(data_root, args.scope, skipped), args.max_per_split, args.seed)
+    if not rows:
+        raise ValueError("no selected inputs")
+    print(f"Collected {len(rows)} inputs; validating with {args.workers} workers", flush=True)
+    progress_path = None if args.dry_run else output / "progress.json"
     usable = []
-    for row in rows:
-        try:
-            read_wave(row["noisy_path"])
-        except (OSError, RuntimeError, ValueError) as exc:
-            skipped.append(skipped_record(row, "unreadable_or_invalid_audio", str(exc)))
-            continue
-        usable.append(row)
+    lengths: dict[str, int] = {}
+    with ProgressReporter("bridge-preflight", len(rows), progress_path) as progress:
+        with ThreadPoolExecutor(max_workers=args.workers, thread_name_prefix="bridge-preflight") as executor:
+            for index, (row, length, error) in enumerate(executor.map(_validate_row, rows), start=1):
+                if error is not None:
+                    skipped.append(skipped_record(row, "unreadable_or_invalid_audio", error))
+                else:
+                    usable.append(row)
+                    lengths[row["id"]] = int(length)
+                progress.update(index, row["id"])
     rows = usable
     counts = {s: sum(r["split"] == s for r in rows) for s in ("train", "dev", "test")}
     print(f"Selected inputs: {counts}", flush=True)
@@ -207,32 +261,44 @@ def run(args: argparse.Namespace) -> None:
     if args.dry_run:
         return
     output.mkdir(parents=True, exist_ok=True)
-    request = {"data_root": str(data_root), "seed": args.seed, "max_per_split": args.max_per_split}
+    request = {"data_root": str(data_root), "seed": args.seed, "max_per_split": args.max_per_split,
+               "batch_size": args.batch_size, "preparation_version": 2}
     request_path = output / "request.json"
     if request_path.exists() and json.loads(request_path.read_text()) != request:
-        raise ValueError("selection changed; use a new output directory (keep pilots separate)")
+        raise ValueError("selection or batching changed; use a new output directory (keep pilots separate)")
     atomic_json(request_path, request)
     write_skipped(output / "skipped_inputs.jsonl", skipped)
-    with ProgressReporter("bridge-inputs", len(rows), output / "progress.json") as progress:
+    with ProgressReporter("bridge-models", 2, output / "progress.json") as progress:
         torch.manual_seed(args.seed)
         np.random.seed(args.seed)
+        print("Loading/downloading FRCRN...", flush=True)
         enhancer = FRCRN(args.model_root.resolve() / "frcrn", args.device)
+        progress.update(1, "FRCRN ready")
+        print("Loading/downloading DNSMOS...", flush=True)
         scorer = DNSMOS(args.model_root.resolve() / "dnsmos") if counts["train"] + counts["dev"] else None
-        identity = {"enhancer_id": enhancer.identity, "dnsmos_id": scorer.identity if scorer else None,
-                    "preparation_version": 1}
+        progress.update(2, "DNSMOS ready" if scorer else "DNSMOS not required")
+    enhancer_id = f"{enhancer.identity}:batch-pad-v1:size-{args.batch_size}"
+    identity = {"enhancer_id": enhancer_id, "dnsmos_id": scorer.identity if scorer else None,
+                "preparation_version": 2, "batch_size": args.batch_size}
+    order = {row["id"]: index for index, row in enumerate(rows)}
+    ordered_rows = sorted(rows, key=lambda row: lengths[row["id"]], reverse=True)
+    with ProgressReporter("bridge-inputs", len(rows), output / "progress.json") as progress:
         prepared = []
-        for i, row in enumerate(rows, start=1):
-            # Test records do not depend on the DNSMOS model, so train-dev/test/all
-            # commands can reuse the same completed test files.
-            row_identity = {**identity, "dnsmos_id": None} if row["split"] == "test" else identity
-            prepared.append(process_row(row, output, enhancer, scorer, row_identity))
-            progress.update(i, row["id"])
+        with ThreadPoolExecutor(max_workers=args.workers, thread_name_prefix="bridge-input") as executor:
+            for start in range(0, len(ordered_rows), args.batch_size):
+                batch = ordered_rows[start:start + args.batch_size]
+                batch_target = max(frcrn_padded_length(lengths[row["id"]]) for row in batch)
+                prepared.extend(process_batch(batch, output, enhancer, scorer, identity,
+                                              executor, batch_target))
+                for offset, row in enumerate(batch, start=1):
+                    progress.update(start + offset, row["id"])
+    prepared.sort(key=lambda row: order[row["id"]])
     write_manifests(output, prepared, identity)
     if counts["test"]:
         config = yaml.safe_load(args.test_config.read_text())
         config["data"]["root_dir"] = str(data_root)
         config["bridge_enhanced_root"] = str(output / "test-enhanced")
-        config["bridge_enhancer_id"] = enhancer.identity
+        config["bridge_enhancer_id"] = enhancer_id
         (output / "final_tests.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
     skip_counts = {reason: sum(row["reason"] == reason for row in skipped)
                    for reason in sorted({row["reason"] for row in skipped})}
@@ -249,6 +315,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--model-root", type=Path, default=Path("artifacts/pretrained/bridge"), help="frozen-model identity cache; weights download automatically")
     parser.add_argument("--scope", choices=("all", "train-dev", "test"), default="all", help="which inputs to prepare; test never gets DNSMOS targets")
     parser.add_argument("--device", default="cpu", help="FRCRN torch device, e.g. cuda:0; DNSMOS runs on CPU")
+    parser.add_argument("--batch-size", type=int, default=4, help="FRCRN inference batch size; reduce if GPU memory is insufficient")
+    parser.add_argument("--workers", type=int, default=4, help="parallel audio I/O, validation, and DNSMOS worker threads")
     parser.add_argument("--max-per-split", type=int, default=None, help="deterministic pilot limit; default all, use a separate pilot output")
     parser.add_argument("--seed", type=int, default=1337, help="deterministic selection/model seed")
     parser.add_argument("--dry-run", action="store_true", help="report usable/skipped counts without downloading or enhancing")
@@ -256,6 +324,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.max_per_split is not None and args.max_per_split < 1:
         parser.error("--max-per-split must be positive")
+    if args.batch_size < 1:
+        parser.error("--batch-size must be positive")
+    if args.workers < 1:
+        parser.error("--workers must be positive")
     run(args)
     return 0
 

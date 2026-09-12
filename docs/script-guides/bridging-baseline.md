@@ -38,6 +38,7 @@ uv sync
 uv run python -m ml.fusion.prepare_bridge_inputs --dry-run
 
 # Download models once, then prepare all train/dev inputs and original test views.
+# Defaults: FRCRN batches of 4 and 4 audio/DNSMOS worker threads.
 uv run python -m ml.fusion.prepare_bridge_inputs --device cuda
 ```
 
@@ -67,6 +68,26 @@ Rerun the same command to resume: completed records are verified against source
 and output hashes and the model identities, then reused. Do not change the
 selection limit/seed in an existing output directory. Final manifests are written
 only after the selected scope completes. Keep pilot manifests out of full runs.
+
+`--batch-size` controls how many length-sorted waveforms FRCRN sends to the GPU
+in one inference call. `--workers` controls concurrent audio validation/loading
+and DNSMOS scoring; workers share one frozen DNSMOS session and do not create
+extra GPU models. The defaults are `--batch-size 4 --workers 4`. Increase the
+batch size gradually when GPU memory permits, or reduce it to 1 after a CUDA
+out-of-memory error. Because batch padding is part of waveform inference, the
+chosen batch size is included in provenance and the generated enhancer ID; use
+a new output directory when changing it. A typical higher-throughput invocation is:
+
+```bash
+uv run python -m ml.fusion.prepare_bridge_inputs \
+  --device cuda --batch-size 8 --workers 8
+```
+
+Preparation now reports three phases through the same `<output>/progress.json`:
+`bridge-preflight` for parallel audio validation, `bridge-models` for FRCRN and
+DNSMOS download/loading, and `bridge-inputs` for batched enhancement and scoring.
+The file is created when non-dry-run validation begins. Dry runs print preflight
+progress to the terminal without creating an output directory.
 
 The default output is `artifacts/cv25-tiny/bridge-inputs/`:
 - `bridge_train_dev.jsonl` and `bridge_dev.jsonl`, with scored waveform pairs;
@@ -233,7 +254,8 @@ The bridge WER-cache/training/evaluation output directories must be new.
 
 Long-running preparation, cache, bridge-training, bridge-evaluation, and final
 evaluation commands print elapsed time, an ETA, and an estimated finish timestamp
-after the first item, at least every 30 seconds, and at completion. Each command
+after the first item, at least every 30 seconds, and at completion. Preparation
+also prints explicit model download/loading transitions. Each command
 also atomically updates `<output>/progress.json`, so redirected or `nohup` runs
 can be monitored without parsing terminal output. The timestamp is an estimate
 based on average throughput and becomes more reliable after the initial model

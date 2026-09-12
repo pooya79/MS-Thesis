@@ -8,7 +8,7 @@ import pytest
 import soundfile as sf
 
 from ml.fusion import prepare_bridge_inputs as prep
-from ml.fusion.bridge_pretrained import dnsmos_segments
+from ml.fusion.bridge_pretrained import FRCRN, dnsmos_segments
 
 
 def make_dataset(root):
@@ -45,6 +45,28 @@ def test_dns_short_clip_repetition_matches_reference():
         dnsmos_segments(np.array([]))
 
 
+def test_frcrn_batches_variable_length_waves_and_restores_lengths():
+    class Model:
+        def __init__(self):
+            self.shapes = []
+
+        def inference_batch(self, inputs):
+            self.shapes.append(tuple(inputs.shape))
+            return inputs * .5
+
+    enhancer = FRCRN.__new__(FRCRN)
+    enhancer.model = Model()
+    enhancer.device = "cpu"
+    waves = [np.ones(1600, dtype=np.float32), np.ones(18000, dtype=np.float32)]
+
+    outputs = enhancer.enhance_batch(waves)
+
+    assert enhancer.model.shapes == [(2, 28000)]
+    assert [len(output) for output in outputs] == [1600, 18000]
+    np.testing.assert_allclose(outputs[0], .5)
+    np.testing.assert_allclose(outputs[1], .5)
+
+
 def test_preparation_generates_all_inputs_and_resumes(tmp_path, monkeypatch):
     data = tmp_path / "data"
     make_dataset(data)
@@ -76,12 +98,49 @@ def test_preparation_generates_all_inputs_and_resumes(tmp_path, monkeypatch):
     assert (output / "test-enhanced/AGFarsdat_test_normalized/a.wav").is_file()
     import yaml
     config = yaml.safe_load((output / "final_tests.yaml").read_text())
-    assert config["bridge_enhancer_id"] == Enhancer.identity
+    assert config["bridge_enhancer_id"] == f"{Enhancer.identity}:batch-pad-v1:size-4"
     prep.main(command)
     assert len(enhanced_calls) == 4 and len(score_calls) == 2
     sf.write(data / "cv-corpus-25.0-degraded-v2/clips/train.wav", np.zeros(1600), 16000)
     with pytest.raises(ValueError, match="changed"):
         prep.main(command)
+
+
+def test_preparation_uses_configured_batches_and_workers(tmp_path, monkeypatch, capsys):
+    data = tmp_path / "data"
+    make_dataset(data)
+    batch_sizes = []
+
+    class Enhancer:
+        identity = "batch-frcrn"
+
+        def __init__(self, *args): pass
+
+        def enhance_batch(self, waves, *, target_length):
+            batch_sizes.append(len(waves))
+            assert target_length == 16000
+            return [wave * .5 for wave in waves]
+
+    class Scorer:
+        identity = "threaded-dnsmos"
+
+        def __init__(self, *args): pass
+
+        def __call__(self, wave):
+            return {"dnsmos_sig": 3., "dnsmos_bak": 2.}
+
+    monkeypatch.setattr(prep, "FRCRN", Enhancer)
+    monkeypatch.setattr(prep, "DNSMOS", Scorer)
+    output = tmp_path / "prepared"
+
+    prep.main(["--data-root", str(data), "--output", str(output),
+               "--batch-size", "2", "--workers", "2"])
+
+    assert batch_sizes == [2, 2]
+    assert json.loads((output / "progress.json").read_text())["state"] == "completed"
+    console = capsys.readouterr().out
+    assert "validating with 2 workers" in console
+    assert "Loading/downloading FRCRN" in console
 
 
 def test_selection_reproducible_and_no_clean_reference_leakage(tmp_path):
@@ -148,3 +207,4 @@ def test_preparation_help():
     result = subprocess.run([sys.executable, "-m", "ml.fusion.prepare_bridge_inputs", "--help"], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     assert "--scope" in result.stdout and "--dry-run" in result.stdout
+    assert "--batch-size" in result.stdout and "--workers" in result.stdout

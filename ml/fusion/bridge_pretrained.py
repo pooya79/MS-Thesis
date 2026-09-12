@@ -28,6 +28,19 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def frcrn_padded_length(length: int) -> int:
+    """Return the ClearVoice full-input padding length for one waveform."""
+    window, stride = 16000, 12000
+    target = length
+    if length < window:
+        target = window
+    elif length < window + stride:
+        target = window + stride
+    elif (length - window) % stride:
+        target += length - ((length - window) // stride) * stride
+    return target
+
+
 def dnsmos_segments(wave: np.ndarray) -> list[np.ndarray]:
     """Match dnsmos_local.py: double short clips, 9.01 s windows, 1 s hop."""
     wave = np.asarray(wave, dtype=np.float32)
@@ -108,21 +121,32 @@ class FRCRN:
         self.identity = f"{repo}@{metadata['revision']}:sha256:{metadata['sha256']}:clearvoice-{version}:direct-v1"
 
     @torch.inference_mode()
+    def enhance_batch(self, waves: list[np.ndarray], *, target_length: int | None = None) -> list[np.ndarray]:
+        """Enhance a variable-length batch while preserving input order and lengths."""
+        if not waves:
+            return []
+        lengths = [len(wave) for wave in waves]
+        required = max(frcrn_padded_length(length) for length in lengths)
+        target = required if target_length is None else target_length
+        if target < required:
+            raise ValueError("FRCRN batch target is shorter than a padded input")
+        padded = np.stack([
+            np.pad(np.asarray(wave, dtype=np.float32), (0, target - length))
+            for wave, length in zip(waves, lengths, strict=True)
+        ])
+        result = self.model.inference_batch(torch.from_numpy(padded).to(self.device))
+        result = result.detach().cpu().numpy()
+        if result.ndim == 1:
+            result = result[None]
+        if result.shape[0] != len(waves):
+            raise ValueError("FRCRN returned the wrong batch size")
+        outputs = []
+        for item, length in zip(result, lengths, strict=True):
+            item = np.asarray(item).reshape(-1)[:length]
+            if len(item) < length or not np.isfinite(item).all():
+                raise ValueError("FRCRN returned invalid/short audio")
+            outputs.append(item)
+        return outputs
+
     def __call__(self, wave: np.ndarray) -> np.ndarray:
-        # Match the authors' unnormalized array-input padding recipe. All task
-        # clips are <=30 s, so their >120 s segmentation branch is unnecessary.
-        length = len(wave)
-        window, stride = 16000, 12000
-        target = length
-        if length < window:
-            target = window
-        elif length < window + stride:
-            target = window + stride
-        elif (length - window) % stride:
-            target += length - ((length - window) // stride) * stride
-        padded = np.pad(wave, (0, target - length)).astype(np.float32)
-        result = self.model.inference_batch(torch.from_numpy(padded)[None].to(self.device))
-        result = result.detach().cpu().numpy().reshape(-1)
-        if len(result) < length or not np.isfinite(result).all():
-            raise ValueError("FRCRN returned invalid/short audio")
-        return result[:length]  # remove only our right padding, never shift audio
+        return self.enhance_batch([wave])[0]
