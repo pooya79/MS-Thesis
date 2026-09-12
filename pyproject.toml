@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "clearvoice==0.1.2",
     "datasets>=4.8.5",
     "fastapi>=0.129.0",
     "huggingface-hub>=1.16.1",
@@ -15,6 +16,7 @@ dependencies = [
     "librosa>=0.11.0",
     "mutagen>=1.47.0",
     "numpy>=2.4.6",
+    "onnxruntime==1.30.0",
     "pytest>=9.0.2",
     "python-multipart>=0.0.22",
     "pyyaml>=6.0.3",
@@ -29,10 +31,42 @@ dependencies = [
     "tqdm>=4.67.3",
     "transformers[torch]>=5.9.0",
     "uvicorn>=0.41.0",
+    "yamlargparse==1.31.1",
 ]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+
+[tool.uv]
+# Only ClearVoice's FRCRN model is imported. Its published dependency set is for
+# the full multi-task application and hard-pins NumPy/librosa/soundfile versions
+# that conflict with this project. Keep the package itself in the uv lock while
+# relying on the project's direct numerical/audio dependencies.
+exclude-dependencies = [
+    { package = { name = "clearvoice", version = "0.1.2" }, dependencies = [
+        "einops",
+        "gdown",
+        "huggingface-hub",
+        "joblib",
+        "librosa",
+        "numpy",
+        "opencv-python",
+        "packaging",
+        "pydub",
+        "python-speech-features",
+        "rotary-embedding-torch",
+        "scenedetect",
+        "scikit-learn",
+        "scipy",
+        "soundfile",
+        "torch",
+        "torchaudio",
+        "torchinfo",
+        "torchvision",
+        "tqdm",
+        "yamlargparse",
+    ] },
+]
 
 [[tool.uv.index]]
 name = "pytorch-cu130"

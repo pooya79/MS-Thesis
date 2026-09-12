@@ -80,7 +80,7 @@ class FRCRN:
         from clearvoice.models.frcrn_se.frcrn import FRCRN_SE_16K
         version = importlib.metadata.version("clearvoice")
         if version != "0.1.2":
-            raise ValueError("use clearvoice==0.1.2 from preparation-requirements.txt")
+            raise ValueError("run `uv sync` to install the locked clearvoice==0.1.2")
         model_root.mkdir(parents=True, exist_ok=True)
         record = model_root / "checkpoint.json"
         repo = "alibabasglab/FRCRN_SE_16K"

@@ -22,7 +22,7 @@ and these prepared datasets under `data/`:
 
 No new degradation is generated. Model downloads require internet access.
 Use the existing project environment throughout; direct `.venv/bin/python`
-invocations also preserve the optional preparation packages.
+invocations use the same locked project environment.
 
 ```bash
 cd ~/MS-Thesis
@@ -32,8 +32,7 @@ set -euo pipefail
 
 .venv/bin/python -c 'import torch; assert torch.cuda.is_available(), "CUDA is unavailable"; print(torch.cuda.get_device_name(0))'
 
-uv pip install --python .venv/bin/python --no-deps \
-  -r configs/speech_enhancement/cv25_tiny/preparation-requirements.txt
+uv sync
 
 .venv/bin/python -m ml.fusion.prepare_bridge_inputs --dry-run
 ```

@@ -25,15 +25,14 @@ are needed. Model weights remain generated artifacts outside Git.
 
 ### Prepare the inputs (can run before Tiny training)
 
-Use the project's existing `.venv`. Install only the optional modules needed by
-our direct FRCRN adapter; this intentionally does not install ClearVoice's full
+Sync the project's `.venv`. The project dependency configuration installs the
+modules needed by our direct FRCRN adapter while excluding ClearVoice's full
 multi-task pipeline dependencies, which conflict with the project's NumPy 2
 stack. The actual adapters have been smoke-tested with the project runtime.
 
 ```bash
 cd ~/MS-Thesis
-uv pip install --python .venv/bin/python --no-deps \
-  -r configs/speech_enhancement/cv25_tiny/preparation-requirements.txt
+uv sync
 
 # Validate metadata and report counts without loading models or changing data.
 .venv/bin/python -m ml.fusion.prepare_bridge_inputs --dry-run
