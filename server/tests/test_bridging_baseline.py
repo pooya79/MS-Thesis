@@ -173,8 +173,10 @@ def test_tiny_configs_are_cv25_only():
     for name in ("cross_attention", "gated", "residual_cross_attention"):
         config = load_fusion_config(root / f"{name}.yaml")
         assert config["model_name"] == "openai/whisper-tiny"
-        assert set(config["datasets"]) == {"data/cv-corpus-25.0", "data/cv-corpus-25.0-degraded-v2"}
+        assert set(config["datasets"]) == {"data/cv25-official/cv-corpus-25.0", "data/cv25-official/cv-corpus-25.0-degraded-v2"}
         build_fusion(384, config["fusion"])
     baseline = yaml.safe_load((root / "baseline.yaml").read_text())
+    assert baseline["data"]["root_dir"] == "data/cv25-official"
+    assert baseline["run"]["output_dir"] == "models/asr/cv25-tiny-official"
     assert baseline["model"]["name"] == "openai/whisper-tiny"
     assert set(baseline["data"]["datasets"]) == {"cv-corpus-25.0", "cv-corpus-25.0-degraded-v2"}

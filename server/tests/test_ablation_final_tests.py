@@ -12,6 +12,7 @@ import ml.fusion.evaluate_ablation as evaluation
 
 def test_suite_has_original_test_sets_and_every_method():
     config = evaluation.load_config(Path("configs/speech_enhancement/cv25_tiny/final_tests.yaml"))
+    assert config["data"]["root_dir"] == "data/cv25-official"
     assert config["data"]["datasets"] == list(evaluation.TEST_DATASETS)
     assert {"baseline", "cross_attention", "gated", "residual_cross_attention", "bridge", "bridge_pq"} <= config["methods"].keys()
     import yaml

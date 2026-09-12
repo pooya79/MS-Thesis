@@ -5,13 +5,13 @@ model:
   language: Persian
   task: transcribe
 data:
-  root_dir: data
+  root_dir: data/cv25-official
   datasets:
   - cv-corpus-25.0
   - cv-corpus-25.0-degraded-v2
   sample_rate: 16000
 run:
-  output_dir: models/asr/cv25-tiny
+  output_dir: models/asr/cv25-tiny-official
   name: baseline
   resume: auto
 training:

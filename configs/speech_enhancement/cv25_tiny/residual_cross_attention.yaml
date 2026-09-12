@@ -1,9 +1,9 @@
-# Tiny pilot: full CV25 dev validation; held-out tests are in final_tests.yaml.
-run_dir: models/asr/cv25-tiny/residual_cross_attention
-base_asr_checkpoint: models/asr/cv25-tiny/baseline/best
+# Tiny pilot: official CV25 dev validation; held-out tests are in final_tests.yaml.
+run_dir: models/asr/cv25-tiny-official/residual_cross_attention
+base_asr_checkpoint: models/asr/cv25-tiny-official/baseline/best
 datasets:
-- data/cv-corpus-25.0-degraded-v2
-- data/cv-corpus-25.0
+- data/cv25-official/cv-corpus-25.0-degraded-v2
+- data/cv25-official/cv-corpus-25.0
 sample_rate: 16000
 train_split: train
 valid_split: dev

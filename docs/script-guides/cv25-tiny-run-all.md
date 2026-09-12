@@ -14,11 +14,22 @@ running step 8; do not tune against the final test results.
 ## 1. Environment and dataset preflight
 
 The server must already have the project's working CUDA-enabled `.venv`, `uv`,
-and these prepared datasets under `data/`:
+and these source datasets under `data/`:
 
 - `cv-corpus-25.0`: train/dev/test TSVs and audio.
 - `cv-corpus-25.0-degraded-v2`: existing train/dev degraded audio and mappings.
 - `AGFarsdat_test_normalized`: test TSV and audio.
+
+Create the isolated official cohort once before preflight:
+
+```bash
+uv run python -m ml.speech_data.prepare_cv25_official
+```
+
+See [official split preparation](prepare-cv25-official.md). All configs use
+`data/cv25-official` and fresh `cv25-tiny-official` outputs. Never resume old
+expanded-data checkpoints. The archive's original test split is also restored,
+so no official test clip can enter training through the old expanded split.
 
 No new degradation is generated. Model downloads require internet access.
 Use `uv run python` throughout so every command uses the locked project
@@ -38,21 +49,36 @@ uv sync
 
 uv run python -c 'import torch; assert torch.cuda.is_available(), "CUDA is unavailable"; print(torch.cuda.get_device_name(0))'
 
-uv run python -m ml.fusion.prepare_bridge_inputs --dry-run
+uv run python -m ml.fusion.prepare_bridge_inputs --data-root data/cv25-official --output artifacts/cv25-tiny-official/bridge-inputs --dry-run
 ```
 
 Review the printed skip counts before proceeding. Row-level mismatches are
 omitted; structural errors and required splits with no usable clips still fail.
 
+For the fixed recipe below, the complete sequence can also run unattended after
+reviewing `selection.json`:
+
+```bash
+bash ml/speech_data/scripts/run_cv25_tiny_official.sh --help
+nohup bash ml/speech_data/scripts/run_cv25_tiny_official.sh > /tmp/cv25-tiny-official.log 2>&1 < /dev/null &
+```
+
+The launcher accepts no arguments, uses CUDA and the committed configs, and
+runs preflight followed by steps 2–8 in order. It makes no recipe changes based
+on dev or test scores. Logs, PID, start/finish times and exit code are saved in
+`artifacts/cv25-tiny-official/run-all`. It refuses an existing launcher directory;
+resume failed work manually using the individual commands and their documented
+resume rules. Do not start a second launcher alongside an active run.
+
 ## 2. Generate the paper baseline's waveform inputs and DNSMOS scores
 
 ```bash
-uv run python -m ml.fusion.prepare_bridge_inputs --device cuda
+uv run python -m ml.fusion.prepare_bridge_inputs --data-root data/cv25-official --output artifacts/cv25-tiny-official/bridge-inputs --device cuda
 ```
 
 This downloads frozen FRCRN and DNSMOS models, enhances degraded CV25 train/dev
 inputs, scores train/dev inputs, and enhances both original test sets. It creates
-`artifacts/cv25-tiny/bridge-inputs/bridge_train_dev.jsonl`, `bridge_dev.jsonl`,
+`artifacts/cv25-tiny-official/bridge-inputs/bridge_train_dev.jsonl`, `bridge_dev.jsonl`,
 provenance, and a ready-to-use `final_tests.yaml`. No test supervision is created.
 Rerun this same command to resume completed-clip preparation. Preparation defaults
 to `--batch-size 4 --workers 4`; tune those options as described in the bridging
@@ -66,16 +92,16 @@ uv run python -m ml.asr.train_whisper_small \
 ```
 
 The historical module name says Small; the configuration selects **Tiny**.
-The resulting `models/asr/cv25-tiny/baseline/best` initializes all branches.
+The resulting `models/asr/cv25-tiny-official/baseline/best` initializes all branches.
 Keep this checkpoint fixed once you create the bridge cache or start fusion.
 
 ## 4. Cache recognition targets for the published-method reconstruction
 
 ```bash
 uv run python -m ml.fusion.bridging_experiment prepare \
-  --manifest artifacts/cv25-tiny/bridge-inputs/bridge_train_dev.jsonl \
-  --asr-checkpoint models/asr/cv25-tiny/baseline/best \
-  --output artifacts/cv25-tiny/bridge-cache \
+  --manifest artifacts/cv25-tiny-official/bridge-inputs/bridge_train_dev.jsonl \
+  --asr-checkpoint models/asr/cv25-tiny-official/baseline/best \
+  --output artifacts/cv25-tiny-official/bridge-cache \
   --device cuda
 ```
 
@@ -89,14 +115,14 @@ and does not resume a partial cache.
 ```bash
 # Paper baseline reconstruction: perceptual quality + recognition information.
 uv run python -m ml.fusion.bridging_experiment train \
-  --cache artifacts/cv25-tiny/bridge-cache \
-  --output models/asr/cv25-tiny/bridge \
+  --cache artifacts/cv25-tiny-official/bridge-cache \
+  --output models/asr/cv25-tiny-official/bridge \
   --device cuda
 
 # Loss ablation: perceptual quality only, with the same cached inputs.
 uv run python -m ml.fusion.bridging_experiment train \
-  --cache artifacts/cv25-tiny/bridge-cache \
-  --output models/asr/cv25-tiny/bridge-pq \
+  --cache artifacts/cv25-tiny-official/bridge-cache \
+  --output models/asr/cv25-tiny-official/bridge-pq \
   --pq-only --device cuda
 ```
 
@@ -120,17 +146,17 @@ initialization. Their enhancer configurations match. Run the copy commands once,
 before the corresponding variant's first training invocation.
 
 ```bash
-mkdir -p models/asr/cv25-tiny/gated/checkpoints/stage0_warmup
-cp -n models/asr/cv25-tiny/cross_attention/checkpoints/stage0_warmup/enhancer.pt \
-  models/asr/cv25-tiny/gated/checkpoints/stage0_warmup/enhancer.pt
+mkdir -p models/asr/cv25-tiny-official/gated/checkpoints/stage0_warmup
+cp -n models/asr/cv25-tiny-official/cross_attention/checkpoints/stage0_warmup/enhancer.pt \
+  models/asr/cv25-tiny-official/gated/checkpoints/stage0_warmup/enhancer.pt
 
 uv run python -m ml.fusion.train_fusion \
   --config configs/speech_enhancement/cv25_tiny/gated.yaml \
   --resume-from-stage fusion
 
-mkdir -p models/asr/cv25-tiny/residual_cross_attention/checkpoints/stage0_warmup
-cp -n models/asr/cv25-tiny/cross_attention/checkpoints/stage0_warmup/enhancer.pt \
-  models/asr/cv25-tiny/residual_cross_attention/checkpoints/stage0_warmup/enhancer.pt
+mkdir -p models/asr/cv25-tiny-official/residual_cross_attention/checkpoints/stage0_warmup
+cp -n models/asr/cv25-tiny-official/cross_attention/checkpoints/stage0_warmup/enhancer.pt \
+  models/asr/cv25-tiny-official/residual_cross_attention/checkpoints/stage0_warmup/enhancer.pt
 
 uv run python -m ml.fusion.train_fusion \
   --config configs/speech_enhancement/cv25_tiny/residual_cross_attention.yaml \
@@ -151,25 +177,25 @@ Each output directory must be new.
 
 ```bash
 uv run python -m ml.fusion.bridging_experiment evaluate \
-  --manifest artifacts/cv25-tiny/bridge-inputs/bridge_dev.jsonl \
-  --checkpoint models/asr/cv25-tiny/bridge/best.pt \
-  --output artifacts/cv25-tiny/bridge-dev --split dev --device cuda
+  --manifest artifacts/cv25-tiny-official/bridge-inputs/bridge_dev.jsonl \
+  --checkpoint models/asr/cv25-tiny-official/bridge/best.pt \
+  --output artifacts/cv25-tiny-official/bridge-dev --split dev --device cuda
 
 uv run python -m ml.fusion.bridging_experiment evaluate \
-  --manifest artifacts/cv25-tiny/bridge-inputs/bridge_dev.jsonl \
-  --checkpoint models/asr/cv25-tiny/bridge-pq/best.pt \
-  --output artifacts/cv25-tiny/bridge-pq-dev --split dev --device cuda
+  --manifest artifacts/cv25-tiny-official/bridge-inputs/bridge_dev.jsonl \
+  --checkpoint models/asr/cv25-tiny-official/bridge-pq/best.pt \
+  --output artifacts/cv25-tiny-official/bridge-pq-dev --split dev --device cuda
 
 uv run python -m ml.fusion.bridging_experiment evaluate \
-  --manifest artifacts/cv25-tiny/bridge-inputs/bridge_dev.jsonl \
-  --checkpoint models/asr/cv25-tiny/bridge/best.pt \
-  --omega 1 --output artifacts/cv25-tiny/bridge-original-dev \
+  --manifest artifacts/cv25-tiny-official/bridge-inputs/bridge_dev.jsonl \
+  --checkpoint models/asr/cv25-tiny-official/bridge/best.pt \
+  --omega 1 --output artifacts/cv25-tiny-official/bridge-original-dev \
   --split dev --device cuda
 
 uv run python -m ml.fusion.bridging_experiment evaluate \
-  --manifest artifacts/cv25-tiny/bridge-inputs/bridge_dev.jsonl \
-  --checkpoint models/asr/cv25-tiny/bridge/best.pt \
-  --omega 0 --output artifacts/cv25-tiny/bridge-enhanced-dev \
+  --manifest artifacts/cv25-tiny-official/bridge-inputs/bridge_dev.jsonl \
+  --checkpoint models/asr/cv25-tiny-official/bridge/best.pt \
+  --omega 0 --output artifacts/cv25-tiny-official/bridge-enhanced-dev \
   --split dev --device cuda
 ```
 
@@ -184,8 +210,8 @@ which has real enhancer identities and paths; the static template has placeholde
 
 ```bash
 uv run python -m ml.fusion.evaluate_ablation \
-  --config artifacts/cv25-tiny/bridge-inputs/final_tests.yaml \
-  --output artifacts/cv25-tiny/final-tests-all \
+  --config artifacts/cv25-tiny-official/bridge-inputs/final_tests.yaml \
+  --output artifacts/cv25-tiny-official/final-tests-all \
   --device cuda
 ```
 
@@ -209,7 +235,7 @@ every method, with separate CV25 and AGFarsdat WER/CER. Its preflight refuses
 empty datasets and writes invalid or over-30-second clip omissions to
 `skipped_inputs.jsonl`; every method uses the same filtered cohort.
 
-Results are in `artifacts/cv25-tiny/final-tests-all/summary.json`, with per-method
+Results are in `artifacts/cv25-tiny-official/final-tests-all/summary.json`, with per-method
 metrics/predictions and the common `test_manifest.jsonl`. This output directory
 must be new. For a failed partial final evaluation, preserve the outputs and run
 only missing methods with `--methods` into a new directory; compare manifest
