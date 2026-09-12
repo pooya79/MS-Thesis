@@ -1,0 +1,25 @@
+# Paths are relative to the repository root, or --project-root on another machine.
+# These are candidate final exports, not a claim that final outperforms best.
+models:
+  - key: medium
+    repo_name: whisper-medium-fa
+    title: Persian Whisper Medium
+    base_model: openai/whisper-medium
+    checkpoint: models/asr/whisper-medium/runs/whisper-medium-fa/final
+    training_config: models/asr/whisper-medium/runs/whisper-medium-fa/config/training.yaml
+    provenance_note: >-
+      This export is from the whisper-medium-fa run. Its saved configuration
+      lists Common Voice, degraded and long variants, FarsSpon, and FLEURS.
+      Coverage of "all data" has not been verified against the actual training
+      manifests and logs.
+  - key: small
+    repo_name: whisper-small-fa
+    title: Persian Whisper Small
+    base_model: openai/whisper-small
+    checkpoint: models/asr/whisper-small-iranseda/runs/whisper-small-fa/final
+    training_config: models/asr/whisper-small-iranseda/runs/whisper-small-fa/config/training.yaml
+    provenance_note: >-
+      The saved configuration lists Common Voice, noise-added and long variants,
+      FarsSpon, and FLEURS. The exact training-data composition and multi-condition
+      recipe have not been independently verified against training manifests
+      and logs.

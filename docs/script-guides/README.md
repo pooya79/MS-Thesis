@@ -14,6 +14,7 @@ Every maintained Python script exposes `--help`. Use the help output before runn
 - [Dataset download and preparation](dataset-download-and-preparation.md): Common Voice, FLEURS, PerSets, and Persian evaluation datasets.
 - [Speech degradation](speech-degradation.md): degradation assets, degraded and noise-only datasets, demos, manifests, and validation.
 - [ASR training and evaluation](asr-training-and-evaluation.md): Whisper and FastConformer training and local evaluation workflows.
+- [Hugging Face model publication](huggingface-model-publication.md): preview and upload Whisper exports with private or manually gated access and usage cards.
 - [Enhancement and fusion](enhancement-and-fusion.md): enhancement/fusion curriculum training, evaluation, and diagnosis.
 
 ## Command index
@@ -68,6 +69,7 @@ uv run python -m ml.speech_data.validate_degraded_dataset --help
 ### ASR evaluation and training
 
 ```bash
+uv run python -m ml.asr.upload_hf_models --help
 uv run python -m ml.asr.eval_openrouter_stt --help
 uv run python -m ml.asr.rescore_openrouter_stt --help
 uv run python -m ml.asr.eval_elevenlabs_scribe --help
