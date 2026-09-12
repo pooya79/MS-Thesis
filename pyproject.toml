@@ -38,34 +38,13 @@ dependencies = [
 pythonpath = ["."]
 
 [tool.uv]
-# Only ClearVoice's FRCRN model is imported. Its published dependency set is for
-# the full multi-task application and hard-pins NumPy/librosa/soundfile versions
-# that conflict with this project. Keep the package itself in the uv lock while
-# relying on the project's direct numerical/audio dependencies.
-exclude-dependencies = [
-    { package = { name = "clearvoice", version = "0.1.2" }, dependencies = [
-        "einops",
-        "gdown",
-        "huggingface-hub",
-        "joblib",
-        "librosa",
-        "numpy",
-        "opencv-python",
-        "packaging",
-        "pydub",
-        "python-speech-features",
-        "rotary-embedding-torch",
-        "scenedetect",
-        "scikit-learn",
-        "scipy",
-        "soundfile",
-        "torch",
-        "torchaudio",
-        "torchinfo",
-        "torchvision",
-        "tqdm",
-        "yamlargparse",
-    ] },
+# ClearVoice 0.1.2 pins older versions for its full application. The direct
+# FRCRN adapter is tested with this project's newer numerical/audio stack.
+# String overrides are supported by older uv releases used on GPU servers.
+override-dependencies = [
+    "librosa>=0.11.0",
+    "numpy>=2.4.6",
+    "soundfile>=0.13.1",
 ]
 
 [[tool.uv.index]]

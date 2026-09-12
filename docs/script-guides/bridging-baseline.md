@@ -25,10 +25,10 @@ are needed. Model weights remain generated artifacts outside Git.
 
 ### Prepare the inputs (can run before Tiny training)
 
-Sync the project's `.venv`. The project dependency configuration installs the
-modules needed by our direct FRCRN adapter while excluding ClearVoice's full
-multi-task pipeline dependencies, which conflict with the project's NumPy 2
-stack. The actual adapters have been smoke-tested with the project runtime.
+Sync the project's `.venv`. The project dependency configuration installs
+ClearVoice while overriding its outdated NumPy, librosa, and soundfile pins with
+the versions used by this project. The direct FRCRN adapter has been smoke-tested
+with the project runtime; other ClearVoice pipelines are not used here.
 
 ```bash
 cd ~/MS-Thesis
