@@ -68,6 +68,13 @@ Rerun the same command to resume: completed records are verified against source
 and output hashes and the model identities, then reused. Do not change the
 selection limit/seed in an existing output directory. Final manifests are written
 only after the selected scope completes. Keep pilot manifests out of full runs.
+If a batch fails, no completion records are written for that batch: an identical
+rerun reuses all earlier completed clips and retries the failed batch onward. The
+ClearVoice FRCRN convolutional iSTFT can omit the final incomplete 320-sample hop;
+preparation restores that boundary with at most 319 trailing zero samples. A
+larger shortfall or any nonfinite output remains invalid. When a batch produces
+invalid output, preparation retries its clips individually, records any clip that
+still fails as `enhancement_failed`, and continues with the valid clips.
 
 `--batch-size` controls how many length-sorted waveforms FRCRN sends to the GPU
 in one inference call. `--workers` controls concurrent audio validation/loading

@@ -18,6 +18,7 @@ import torch
 
 FRCRN_REVISION = "3766e6a64b0d8cb58f08d913d617bf129f11ed53"
 DNSMOS_SHA256 = "269fbebdb513aa23cddfbb593542ecc540284a91849ac50516870e1ac78f6edd"
+FRCRN_MAX_OUTPUT_SHORTFALL = 319
 
 
 def sha256(path: Path) -> str:
@@ -142,9 +143,21 @@ class FRCRN:
             raise ValueError("FRCRN returned the wrong batch size")
         outputs = []
         for item, length in zip(result, lengths, strict=True):
-            item = np.asarray(item).reshape(-1)[:length]
-            if len(item) < length or not np.isfinite(item).all():
-                raise ValueError("FRCRN returned invalid/short audio")
+            item = np.asarray(item).reshape(-1)
+            if not np.isfinite(item).all():
+                raise ValueError("FRCRN returned nonfinite audio")
+            shortfall = length - len(item)
+            if shortfall > FRCRN_MAX_OUTPUT_SHORTFALL:
+                raise ValueError(
+                    f"FRCRN output is {shortfall} samples shorter than its input"
+                )
+            # ClearVoice's convolutional iSTFT can omit the final incomplete
+            # 320-sample hop. Those samples have no model estimate, so restore
+            # exact alignment with trailing silence, matching its zero-padded
+            # inference boundary.
+            if shortfall > 0:
+                item = np.pad(item, (0, shortfall))
+            item = item[:length]
             outputs.append(item)
         return outputs
 

@@ -1,11 +1,13 @@
 import json
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
 import pytest
 import soundfile as sf
+import torch
 
 from ml.fusion import prepare_bridge_inputs as prep
 from ml.fusion.bridge_pretrained import FRCRN, dnsmos_segments
@@ -65,6 +67,76 @@ def test_frcrn_batches_variable_length_waves_and_restores_lengths():
     assert [len(output) for output in outputs] == [1600, 18000]
     np.testing.assert_allclose(outputs[0], .5)
     np.testing.assert_allclose(outputs[1], .5)
+
+
+def test_frcrn_repairs_one_incomplete_output_hop():
+    class Model:
+        def inference_batch(self, inputs):
+            return inputs[:, :15920]
+
+    enhancer = FRCRN.__new__(FRCRN)
+    enhancer.model = Model()
+    enhancer.device = "cpu"
+
+    output = enhancer.enhance_batch([np.ones(16000, dtype=np.float32)])[0]
+
+    assert len(output) == 16000
+    np.testing.assert_allclose(output[:-80], 1)
+    np.testing.assert_array_equal(output[-80:], 0)
+
+
+def test_frcrn_rejects_materially_short_or_nonfinite_output():
+    class Model:
+        def __init__(self, result):
+            self.result = result
+
+        def inference_batch(self, inputs):
+            return self.result(inputs)
+
+    enhancer = FRCRN.__new__(FRCRN)
+    enhancer.device = "cpu"
+    wave = np.ones(16000, dtype=np.float32)
+
+    enhancer.model = Model(lambda inputs: inputs[:, :15680])
+    with pytest.raises(ValueError, match="320 samples shorter"):
+        enhancer.enhance_batch([wave])
+
+    enhancer.model = Model(lambda inputs: inputs * torch.tensor(float("nan")))
+    with pytest.raises(ValueError, match="nonfinite"):
+        enhancer.enhance_batch([wave])
+
+
+def test_batch_failure_retries_individually_and_skips_only_bad_clip(tmp_path):
+    paths = []
+    for index, value in enumerate((1.0, 2.0)):
+        path = tmp_path / f"{index}.wav"
+        sf.write(path, np.full(1600, value, dtype=np.float32), 16000, subtype="FLOAT")
+        paths.append(path)
+    rows = [
+        {"id": f"clip-{index}", "split": "test", "relative_path": path.name,
+         "dataset": "set", "noisy_path": str(path), "sentence": "hello"}
+        for index, path in enumerate(paths)
+    ]
+
+    class Enhancer:
+        def enhance_batch(self, waves, *, target_length):
+            if len(waves) > 1:
+                raise ValueError("bad batch")
+            if waves[0].mean() > 1.5:
+                raise ValueError("bad clip")
+            return [waves[0] * .5]
+
+    skipped = []
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        results = prep.process_batch(
+            rows, tmp_path / "output", Enhancer(), None, {"enhancer_id": "test"},
+            executor, 16000, skipped,
+        )
+
+    assert [row["id"] for row in results] == ["clip-0"]
+    assert [(row["id"], row["reason"]) for row in skipped] == [
+        ("clip-1", "enhancement_failed")
+    ]
 
 
 def test_preparation_generates_all_inputs_and_resumes(tmp_path, monkeypatch):

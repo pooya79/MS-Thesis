@@ -158,7 +158,8 @@ def _write_result(row: dict, root: Path, wave: np.ndarray, enhanced: np.ndarray,
 
 
 def process_batch(rows: list[dict], root: Path, enhancer: Any, scorer: Any,
-                  identity: dict, executor: ThreadPoolExecutor, target_length: int) -> list[dict]:
+                  identity: dict, executor: ThreadPoolExecutor, target_length: int,
+                  skipped: list[dict]) -> list[dict]:
     identities = [{**identity, "dnsmos_id": None} if row["split"] == "test" else identity for row in rows]
     loaded = list(executor.map(
         lambda pair: _cached_or_wave(pair[0], root, pair[1]),
@@ -166,29 +167,54 @@ def process_batch(rows: list[dict], root: Path, enhancer: Any, scorer: Any,
     ))
     pending = [index for index, (cached, _, _) in enumerate(loaded) if cached is None]
     waves = [loaded[index][2] for index in pending]
-    if hasattr(enhancer, "enhance_batch"):
-        enhanced = enhancer.enhance_batch(waves, target_length=target_length)
-    else:  # Small test doubles and third-party adapters may expose only scalar inference.
-        enhanced = [enhancer(wave) for wave in waves]
-    if len(enhanced) != len(waves):
-        raise ValueError("enhancer returned the wrong batch size")
-    enhanced = [np.asarray(item, dtype=np.float32) for item in enhanced]
-    for index, item in zip(pending, enhanced, strict=True):
+    enhanced_by_index: dict[int, np.ndarray] = {}
+
+    def keep(index: int, item: Any) -> None:
+        value = np.asarray(item, dtype=np.float32)
         wave = loaded[index][2]
-        if item.shape != wave.shape or not np.isfinite(item).all():
-            raise ValueError(f"unaligned/nonfinite enhancement: {rows[index]['id']}")
-    score_indexes = [index for index in pending if rows[index]["split"] != "test"]
+        if value.shape != wave.shape or not np.isfinite(value).all():
+            raise ValueError("enhancer returned unaligned/nonfinite audio")
+        enhanced_by_index[index] = value
+
+    if hasattr(enhancer, "enhance_batch"):
+        try:
+            enhanced = enhancer.enhance_batch(waves, target_length=target_length)
+            if len(enhanced) != len(waves):
+                raise ValueError("enhancer returned the wrong batch size")
+            for index, item in zip(pending, enhanced, strict=True):
+                keep(index, item)
+        except ValueError as batch_error:
+            print(f"Batch enhancement failed ({batch_error}); retrying clips individually", flush=True)
+            enhanced_by_index.clear()
+            for index in pending:
+                wave = loaded[index][2]
+                try:
+                    values = enhancer.enhance_batch(
+                        [wave], target_length=frcrn_padded_length(len(wave))
+                    )
+                    if len(values) != 1:
+                        raise ValueError("enhancer returned the wrong batch size")
+                    keep(index, values[0])
+                except ValueError as exc:
+                    skipped.append(skipped_record(rows[index], "enhancement_failed", str(exc)))
+    else:  # Small test doubles and third-party adapters may expose only scalar inference.
+        for index, wave in zip(pending, waves, strict=True):
+            try:
+                keep(index, enhancer(wave))
+            except ValueError as exc:
+                skipped.append(skipped_record(rows[index], "enhancement_failed", str(exc)))
+
+    score_indexes = [index for index in enhanced_by_index if rows[index]["split"] != "test"]
     score_values = list(executor.map(
         scorer, (loaded[index][2] for index in score_indexes)
     )) if score_indexes else []
     scores = {index: value for index, value in zip(score_indexes, score_values, strict=True)}
     results = []
-    enhanced_by_index = {index: item for index, item in zip(pending, enhanced, strict=True)}
     for index, row in enumerate(rows):
         cached, source_hash, wave = loaded[index]
         if cached is not None:
             results.append(cached)
-        else:
+        elif index in enhanced_by_index:
             results.append(_write_result(row, root, wave, enhanced_by_index[index],
                                          scores.get(index, {}), source_hash, identities[index]))
     return results
@@ -289,10 +315,24 @@ def run(args: argparse.Namespace) -> None:
                 batch = ordered_rows[start:start + args.batch_size]
                 batch_target = max(frcrn_padded_length(lengths[row["id"]]) for row in batch)
                 prepared.extend(process_batch(batch, output, enhancer, scorer, identity,
-                                              executor, batch_target))
+                                              executor, batch_target, skipped))
                 for offset, row in enumerate(batch, start=1):
                     progress.update(start + offset, row["id"])
     prepared.sort(key=lambda row: order[row["id"]])
+    prepared_splits = {str(row["split"]) for row in prepared}
+    if not required_splits.issubset(prepared_splits):
+        missing = sorted(required_splits - prepared_splits)
+        raise ValueError(f"no successfully enhanced clips remain in required splits: {missing}")
+    if "test" in required_splits:
+        missing_datasets = [name for name in TEST_DATASETS
+                            if not any(row["split"] == "test" and row["dataset"] == name
+                                       for row in prepared)]
+        if missing_datasets:
+            raise ValueError(
+                f"no successfully enhanced test clips remain in required datasets: {missing_datasets}"
+            )
+    counts = {s: sum(r["split"] == s for r in prepared) for s in ("train", "dev", "test")}
+    write_skipped(output / "skipped_inputs.jsonl", skipped)
     write_manifests(output, prepared, identity)
     if counts["test"]:
         config = yaml.safe_load(args.test_config.read_text())
