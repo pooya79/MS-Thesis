@@ -658,6 +658,8 @@ def test_train_fusion_help(capsys: pytest.CaptureFixture[str]) -> None:
     out = capsys.readouterr().out
     assert "3-stage" in out
     assert "--resume-from-stage" in out
+    assert "num_train_epochs" in out
+    assert "gradient_accumulation_steps" in out
 
 
 def _tiny_whisper_encoder():
@@ -743,3 +745,158 @@ def test_diagnose_enhancement_with_checkpoint_reports_captured(tmp_path: Path) -
     # An identity-init enhancer leaves the mel unchanged -> trained ~= identity.
     assert overall["trained_L_enh"] == pytest.approx(overall["identity_L_enh"], rel=1e-3)
     assert (out_dir / "mels").is_dir() and any((out_dir / "mels").glob("*_noisy.npy"))
+
+
+@pytest.mark.parametrize("epochs", [0, -1, float("inf"), float("nan")])
+def test_invalid_epoch_budget(tmp_path: Path, epochs: float) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump({"stages": {"warmup": {"num_train_epochs": epochs}}}))
+    with pytest.raises(ValueError, match="num_train_epochs"):
+        load_fusion_config(path)
+
+
+def test_epoch_config_replaces_default_steps_and_rejects_explicit_conflict(tmp_path: Path) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text("stages:\n  warmup:\n    num_train_epochs: 2\n")
+    stage = load_fusion_config(path)["stages"]["warmup"]
+    assert stage["max_steps"] is None
+    path.write_text("stages:\n  warmup:\n    num_train_epochs: 2\n    max_steps: 10\n")
+    with pytest.raises(ValueError, match="not both"):
+        load_fusion_config(path)
+
+
+@pytest.mark.parametrize("accumulation", [0, -1, 1.5, True])
+def test_invalid_accumulation(accumulation: float) -> None:
+    config = load_fusion_config_from_dict({"stages": {"warmup": {"gradient_accumulation_steps": accumulation}}})
+    with pytest.raises(ValueError, match="gradient_accumulation_steps"):
+        validate_fusion_config(config)
+
+
+def test_epoch_budget_rounds_partial_groups_and_fractional_epochs() -> None:
+    from ml.fusion.train_fusion import stage_step_budget, stage_event_due
+
+    stage = {"num_train_epochs": 1.5, "gradient_accumulation_steps": 2, "eval_save_at_epoch_end": True}
+    assert stage_step_budget(stage, [None] * 5) == (3, 5)
+    assert stage_event_due(stage, 1000, 3, 3, 5)
+    assert stage_event_due(stage, 1000, 5, 3, 5)
+    assert not stage_event_due(stage, 1000, 2, 3, 5)
+    assert stage_event_due(stage, 2, 2, 3, 5)
+    with pytest.raises(ValueError, match="at least one"):
+        stage_step_budget(stage, [])
+
+
+def test_training_groups_resume_same_order_and_flush_partial_epoch() -> None:
+    import torch
+    from ml.fusion.train_fusion import training_groups
+
+    def groups(start: int):
+        loader = torch.utils.data.DataLoader(list(range(9)), batch_size=2, shuffle=True)
+        return [[int(row) for batch in group for row in batch] for group in training_groups(loader, 2, start, 6, 1337)]
+
+    complete = groups(0)
+    assert [len(group) for group in complete] == [4, 4, 1, 4, 4, 1]
+    for epoch in (complete[:3], complete[3:]):
+        assert sorted(row for group in epoch for row in group) == list(range(9))
+    assert groups(2) == complete[2:]
+    assert groups(3) == complete[3:]
+    assert groups(6) == []
+
+
+@pytest.mark.parametrize("stage_name", ["warmup", "fusion", "joint"])
+def test_epoch_training_evaluates_short_runs_and_saves_optimizer_updates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stage_name: str,
+) -> None:
+    import torch
+    import ml.fusion.train_fusion as trainer
+
+    monkeypatch.setattr(trainer, "build_fusion_model", _tiny_dual_view_model)
+    monkeypatch.setattr(trainer, "load_tokenizer", lambda config: _FakeTokenizer())
+    root = _make_degraded_dataset(tmp_path / "ds", n=3, splits=("train", "dev"))
+    config = load_fusion_config(_tiny_config(root, tmp_path / "run"))
+    config["generation_max_length"] = 16
+    config["stages"][stage_name].update({
+        "max_steps": None, "num_train_epochs": 2, "batch_size": 2,
+        "gradient_accumulation_steps": 2, "eval_batch_size": 3,
+        "num_workers": 0, "eval_every": 1000, "save_every": 1000,
+        "eval_save_at_epoch_end": True, "warmup_steps": 0,
+    })
+    run_dir = tmp_path / "run"
+    trainer.STAGE_RUNNERS[stage_name](config, run_dir, build_enhancer(config["enhancer"]), "cpu")
+    records = [json.loads(line) for line in (run_dir / "logs/eval_metrics.jsonl").read_text().splitlines()]
+    assert [row["step"] for row in records] == [1, 2]
+    assert [row["epoch"] for row in records] == [1, 2]
+    checkpoint = torch.load(run_dir / "checkpoints" / trainer.STAGE_DIRS[stage_name] / "last.pt", weights_only=False)
+    assert checkpoint["step"] == 2
+    assert checkpoint["scheduler_state"]["last_epoch"] == 2
+    assert {int(state["step"]) for state in checkpoint["optimizer_state"]["state"].values()} == {2}
+    budget = json.loads((run_dir / "config" / f"{stage_name}_budget.json").read_text())
+    assert budget["train_examples"] == 3
+    assert budget["optimizer_steps_per_epoch"] == 1
+    assert budget["max_optimizer_steps"] == 2
+
+
+def test_accumulated_warmup_matches_full_batch_with_short_tail(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import torch
+    import ml.fusion.train_fusion as trainer
+
+    torch.manual_seed(17)
+    rows = [{"pair_id": str(i), "noisy_mel": torch.randn(80, 10), "clean_mel": torch.randn(80, 10)} for i in range(7)]
+    monkeypatch.setattr(trainer, "build_train_dataset", lambda *args, **kwargs: rows)
+    monkeypatch.setattr(trainer, "build_dev_loader", lambda *args, **kwargs: None)
+
+    def run(batch_size: int, accumulation: int):
+        config = load_fusion_config_from_dict({"mixed_precision": "false", "stages": {"warmup": {
+            "max_steps": None, "num_train_epochs": 2, "batch_size": batch_size,
+            "gradient_accumulation_steps": accumulation, "num_workers": 0,
+            "eval_every": 0, "save_every": 0, "warmup_steps": 0,
+        }}})
+        torch.manual_seed(5)
+        enhancer = torch.nn.Linear(10, 10)
+        trainer.run_stage_warmup(config, tmp_path / f"batch{batch_size}", enhancer, "cpu")
+        return enhancer.state_dict()
+
+    accumulated, full = run(2, 2), run(4, 1)
+    for name in full:
+        torch.testing.assert_close(accumulated[name], full[name], atol=1e-7, rtol=1e-5)
+
+
+def test_changed_or_legacy_epoch_budget_requires_new_run(tmp_path: Path) -> None:
+    import torch
+    from ml.fusion.train_fusion import record_stage_budget
+
+    loader = torch.utils.data.DataLoader(list(range(9)), batch_size=2)
+    stage = {"batch_size": 2, "num_train_epochs": 1}
+    record_stage_budget(tmp_path, "warmup", stage, loader)
+    with pytest.raises(ValueError, match="budget changed"):
+        record_stage_budget(tmp_path, "warmup", dict(stage, num_train_epochs=2), loader)
+    legacy = tmp_path / "legacy"
+    checkpoint = legacy / "checkpoints/stage0_warmup/last.pt"
+    checkpoint.parent.mkdir(parents=True)
+    checkpoint.touch()
+    with pytest.raises(ValueError, match="legacy step checkpoint"):
+        record_stage_budget(legacy, "warmup", stage, loader)
+
+
+def test_cv25_tiny_recipes_match_training_exposure() -> None:
+    from ml.asr.train_whisper_small import load_training_config
+
+    root = Path(__file__).resolve().parents[2] / "configs/speech_enhancement/cv25_tiny"
+    baseline = load_training_config(root / "baseline.yaml")["training"]
+    assert baseline["num_train_epochs"] == 1
+    assert baseline["per_device_train_batch_size"] == 8
+    assert baseline["per_device_eval_batch_size"] == 128
+    assert baseline["gradient_accumulation_steps"] == 2
+    assert baseline["eval_steps"] == baseline["save_steps"] == 1000
+    assert baseline["eval_save_at_epoch_end"] is True
+    stages = []
+    for name in ("cross_attention", "gated", "residual_cross_attention"):
+        config = load_fusion_config(root / f"{name}.yaml")
+        stages.append(config["stages"])
+        for stage in config["stages"].values():
+            assert stage["num_train_epochs"] == 1 and stage["max_steps"] is None
+            assert stage["batch_size"] == 8 and stage["gradient_accumulation_steps"] == 2
+            assert stage["eval_batch_size"] == 128
+            assert stage["eval_every"] == stage["save_every"] == 1000
+            assert stage["eval_save_at_epoch_end"] is True
+            assert stage["warmup_steps"] is None and stage["warmup_ratio"] == 0.05
+    assert stages[0] == stages[1] == stages[2]

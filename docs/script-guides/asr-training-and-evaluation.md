@@ -24,6 +24,27 @@ Audio files with unreadable headers are skipped before training and recorded in
 check but fails during full decoding, its path is logged and the loader
 substitutes the next readable example instead of stopping the run.
 
+### Epoch budgets and checkpoint cadence
+
+`training.num_train_epochs` controls training duration. `eval_steps` and
+`save_steps` count optimizer updates, after gradient accumulation. The optional
+`training.eval_save_at_epoch_end` boolean (default false) adds evaluation and
+saving at each epoch end, ensuring short runs still have dev checkpoint
+selection. Periodic evaluation and saving remain enabled.
+
+The CV25 Tiny baseline in `configs/speech_enhancement/cv25_tiny/baseline.yaml`
+uses 1 epoch, train microbatch 8, accumulation 2 (effective batch 16 on one GPU),
+evaluation batch 128, and `eval_steps: 1000` / `save_steps: 1000`, with epoch-end
+checkpointing enabled. The Tiny fusion variants match those batch sizes and
+update intervals, with their own per-stage epoch budgets. Other model-size
+recipes retain their existing settings. Use fresh runs when changing the recipe;
+do not auto-resume checkpoints made with the previous batch settings.
+
+```bash
+uv run python -m ml.asr.train_whisper_small --help
+uv run python -m ml.asr.train_whisper_small --config configs/speech_enhancement/cv25_tiny/baseline.yaml
+```
+
 ## Whisper-small Evaluation
 
 Run a saved Whisper-small checkpoint on the configured dataset `test.tsv` files. Outputs include `metrics.json`, `predictions.jsonl`, the effective config, logs, and a source manifest. `metrics.json` reports aggregate WER/CER and a `dataset_metrics` list with WER/CER per dataset directory:

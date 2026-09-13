@@ -38,3 +38,53 @@ uv run python -m ml.enhancement.diagnose_enhancement \
 ```
 
 `--dataset` is a degraded `generate_degraded_dataset` directory (repeatable). Omit `--enhancer-checkpoint` to report the identity baseline only; pass an `enhancer.pt` or a `fusion_model.pt` (the `enhancer.*` weights are extracted) to evaluate a trained enhancer. `--feature-encoder` (a Whisper run dir or Hub id) additionally reports the same identity-vs-trained comparison in the **encoder feature space** (`identity_L_feat`/`trained_L_feat`/`captured_feat`) — the distance that actually tracks WER and the target of the warm-up feature-matching loss. `--dump-mels N` writes the first N clips' noisy/clean/enhanced log-Mels as `.npy` under `<output-dir>/mels/` for offline plotting (no plotting dependency). `--output-dir` writes `diagnosis.json` (overall + per-bandwidth + per-dataset); `--max-batches` caps work per dataset and `--batch-size`/`--device` control throughput.
+
+
+## Epoch budgets and gradient accumulation
+
+Run the Tiny curriculum with the matched experiment recipe:
+
+```bash
+uv run python -m ml.fusion.train_fusion --help
+uv run python -m ml.fusion.train_fusion --config configs/speech_enhancement/cv25_tiny/cross_attention.yaml
+```
+
+Each stage accepts `num_train_epochs` (positive finite float) instead of
+`max_steps` (positive integer optimizer-update budget). Set only one. Explicit
+epoch budgets replace inherited step defaults; legacy configs retain their
+existing step budgets. `gradient_accumulation_steps` is a positive integer,
+default 1; `batch_size` is the microbatch size. `eval_batch_size` independently
+controls evaluation batches and defaults to `batch_size`.
+
+For a stage loader containing `M` microbatches and accumulation `A`, one epoch is
+`ceil(M / A)` optimizer updates. The total is
+`ceil(num_train_epochs * ceil(M / A))`; fractional epochs round up to a complete
+optimizer update. Short final microbatches and accumulation groups are retained,
+and groups never cross epoch boundaries. Losses are weighted by the number of
+examples in each microbatch within the group. Gradient clipping, optimizer and
+scheduler steps, and the logging/evaluation/save cadence occur once per update.
+The scheduler uses this resolved total; `warmup_ratio` takes effect when
+`warmup_steps` is null, with the warm-up update count rounded down.
+
+`eval_save_at_epoch_end` (boolean, default false) adds evaluation and rolling
+checkpoint saves at epoch boundaries and the final update, alongside
+`eval_every`/`save_every` update intervals. With this option enabled, a run
+shorter than the periodic interval still gets dev checkpoint selection.
+Evaluation still requires a usable dev loader. Logs include `epoch`, measured
+as completed optimizer updates divided by updates per epoch.
+
+The Tiny configs use 1 epoch in each stage, batch 8, accumulation 2, evaluation
+batch 128, and evaluation/saving every 1,000 updates plus epoch ends. All three
+fusion variants share these settings. The baseline's effective training batch
+is also 16. Warm-up and fusion consume degraded data; joint training additionally
+consumes clean data, so each stage resolves its own dataset size and update
+budget. The published bridge remains a separate 45-epoch frozen-ASR experiment.
+
+Each stage records `config/<stage>_budget.json`. Resume refuses a changed budget,
+and an epoch recipe cannot resume an old step-only `last.pt` without a recorded
+budget. Start fresh when changing the experiment recipe, including the baseline
+and all dependent caches. For an unchanged recipe, resumed fusion stages restore
+the optimizer-update position and reconstruct the epoch's shuffled row order,
+reading skipped batches on a mid-epoch resume. RNG state for model dropout and
+augmentation is not restored, so continuation is not guaranteed bitwise identical
+to an uninterrupted run. Keep data and the full recipe fixed during resume.

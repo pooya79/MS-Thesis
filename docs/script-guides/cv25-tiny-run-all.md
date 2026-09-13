@@ -95,6 +95,18 @@ The historical module name says Small; the configuration selects **Tiny**.
 The resulting `models/asr/cv25-tiny-official/baseline/best` initializes all branches.
 Keep this checkpoint fixed once you create the bridge cache or start fusion.
 
+The baseline trains for **1 epoch** over usable original + degraded train rows,
+with microbatch 8, gradient accumulation 2 (effective batch 16 on one GPU), and
+evaluation batch 128. Evaluation and saving happen every **1,000 optimizer
+updates**, plus every epoch end, so a shorter run still selects a checkpoint.
+These settings are in `baseline.yaml`; `eval_save_at_epoch_end: true` supplements
+the requested `eval_steps: 1000` and `save_steps: 1000` cadence.
+
+This is a changed training recipe. Use fresh outputs for the entire sequence;
+do not auto-resume the old baseline or reuse its dependent caches/checkpoints.
+If prior outputs exist, preserve them under a separate experiment directory
+before starting this recipe at the configured paths.
+
 ## 4. Cache recognition targets for the published-method reconstruction
 
 ```bash
@@ -163,11 +175,31 @@ uv run python -m ml.fusion.train_fusion \
   --resume-from-stage fusion
 ```
 
-The curriculum is warm-up (1,000 steps), fusion (2,000), joint training (4,000).
+The curriculum uses **1 epoch per stage** as an initial pilot budget, shared
+across all three variants. Warm-up and fusion epochs cover degraded pairs only;
+joint epochs cover degraded + original examples. These counts are independent
+pilot choices, not a conversion of the former 1,000/2,000/4,000-step budgets.
+Increase them consistently across variants only after reviewing dev results.
+
+All stages use microbatch 8, gradient accumulation 2 (effective batch 16), and
+evaluation batch 128, matching the ASR baseline's batch settings. An incomplete
+accumulation group is flushed at each epoch end. Evaluation and saving run every
+1,000 optimizer updates and at every epoch end. Full dev splits remain enabled.
+If fusion evaluation does not fit GPU memory, reduce `eval_batch_size` identically
+across variants; this changes evaluation throughput, not the training budget.
+
+The cosine schedule derives its update count from each stage's actual loader;
+`warmup_ratio: 0.05` uses 5% of that budget (rounded down to whole updates).
+`config/{warmup,fusion,joint}_budget.json` records usable examples, microbatches,
+optimizer updates per epoch, and the resolved total. Metrics record both step
+and epoch. See [training budget semantics](enhancement-and-fusion.md#epoch-budgets-and-gradient-accumulation).
+
 The latter two variants skip only the shared warm-up computation. Each saves
 its final dev-selected checkpoint at `checkpoints/stage2_joint/best.pt`.
 The residual variant uses ordinary ASR + Mel loss, without recognition-benefit
-gate supervision. These are the committed pilot budgets, not a converged recipe.
+gate supervision. The bridge keeps its published 45-epoch frozen-ASR recipe;
+matching epoch units does not make its compute or trainable parameters equal to
+fusion. These remain pilot budgets, not a converged recipe.
 
 ## 7. Decode the bridge variants on dev
 

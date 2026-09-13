@@ -39,6 +39,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "training": {
         "seed": 1337,
         "num_train_epochs": 3,
+        "eval_save_at_epoch_end": False,
         "learning_rate": 1e-5,
         "warmup_steps": 500,
         "per_device_train_batch_size": 4,
@@ -146,6 +147,8 @@ def validate_config(config: dict[str, Any]) -> None:
         raise ValueError("training.mixed_precision must be auto, true, or false")
     if training["device"] not in {"auto", "cuda", "cpu"}:
         raise ValueError("training.device must be auto, cuda, or cpu")
+    if not isinstance(training.get("eval_save_at_epoch_end", False), bool):
+        raise ValueError("training.eval_save_at_epoch_end must be true or false")
     if not isinstance(training["load_best_model_at_end"], bool):
         raise ValueError("training.load_best_model_at_end must be true or false")
     if not isinstance(training.get("gradient_checkpointing", False), bool):
@@ -474,6 +477,15 @@ def resolve_pretrained_model(config: dict[str, Any], config_path: Path | None = 
     return source
 
 
+class EpochEndCheckpointCallback(TrainerCallback):
+    """Evaluate/save at epoch end in addition to the configured step cadence."""
+
+    def on_epoch_end(self, args: Any, state: Any, control: Any, **kwargs: Any) -> Any:
+        control.should_evaluate = True
+        control.should_save = True
+        return control
+
+
 class JsonMetricsCallback(TrainerCallback):
     def __init__(self, run_dir: Path, metrics_path: Path) -> None:
         self.run_dir = run_dir
@@ -745,7 +757,8 @@ def run_training(
             "eval_dataset": eval_dataset,
             "data_collator": WhisperDataCollator(processor),
             "compute_metrics": compute_metrics,
-            "callbacks": [JsonMetricsCallback(run_dir, metrics_path)],
+            "callbacks": [JsonMetricsCallback(run_dir, metrics_path)]
+            + ([EpochEndCheckpointCallback()] if config["training"].get("eval_save_at_epoch_end", False) else []),
         }
         processor_arg = "processing_class" if "processing_class" in inspect.signature(Seq2SeqTrainer.__init__).parameters else "tokenizer"
         trainer_kwargs[processor_arg] = processor.feature_extractor
@@ -812,7 +825,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
             "Fine-tune Whisper-small from a YAML config. Stop with Ctrl+C after checkpoints "
-            "exist, then resume by re-running with run.resume: auto or --resume auto."
+            "exist, then resume by re-running with run.resume: auto or --resume auto. "
+            "YAML training.eval_save_at_epoch_end (boolean, default false) also evaluates "
+            "and saves after each epoch alongside eval_steps/save_steps."
         )
     )
     parser.add_argument("--config", required=True, type=Path, help="YAML training config path.")

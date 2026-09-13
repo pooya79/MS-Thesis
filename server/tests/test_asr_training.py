@@ -611,3 +611,56 @@ def test_resumable_sampler_skip_drops_already_seen_prefix() -> None:
     sampler.set_epoch(3, skip=999)
     assert list(sampler) == []
     assert len(sampler) == 0
+
+
+def test_epoch_end_callback_evaluates_and_saves_short_asr_run() -> None:
+    from ml.asr.train_whisper_small import EpochEndCheckpointCallback
+    from transformers import TrainerControl, TrainerState
+
+    control = TrainerControl()
+    result = EpochEndCheckpointCallback().on_epoch_end(
+        SimpleNamespace(eval_steps=1000, save_steps=1000), TrainerState(global_step=3, epoch=1), control,
+    )
+    assert result.should_evaluate and result.should_save
+
+
+def test_whisper_help_documents_epoch_checkpoint_option(capsys: pytest.CaptureFixture[str]) -> None:
+    from ml.asr.train_whisper_small import main
+
+    with pytest.raises(SystemExit):
+        main(["--help"])
+    assert "eval_save_at_epoch_end" in capsys.readouterr().out
+
+
+def test_short_asr_trainer_run_selects_epoch_end_checkpoint(tmp_path: Path) -> None:
+    from transformers import Trainer
+    from ml.asr.train_whisper_small import EpochEndCheckpointCallback, build_training_arguments
+
+    class TinyRegressor(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.projection = torch.nn.Linear(1, 1)
+
+        def forward(self, input_ids, labels=None):
+            logits = self.projection(input_ids)
+            return {"loss": torch.nn.functional.mse_loss(logits, labels), "logits": logits}
+
+    path = tmp_path / "config.yaml"
+    write_yaml(path, {"training": {
+        "device": "cpu", "mixed_precision": "false", "num_train_epochs": 1,
+        "per_device_train_batch_size": 2, "per_device_eval_batch_size": 4,
+        "gradient_accumulation_steps": 2, "num_workers": 0,
+        "eval_steps": 1000, "save_steps": 1000, "load_best_model_at_end": True,
+        "eval_save_at_epoch_end": True,
+    }})
+    args = build_training_arguments(load_training_config(path), tmp_path / "run")
+    args.metric_for_best_model = "loss"
+    args.disable_tqdm = True
+    dataset = [{"input_ids": [float(i)], "labels": [float(i)]} for i in range(3)]
+    trainer = Trainer(model=TinyRegressor(), args=args, train_dataset=dataset,
+                      eval_dataset=dataset, callbacks=[EpochEndCheckpointCallback()])
+    trainer.train()
+    assert trainer.state.global_step == 1
+    assert trainer.state.best_model_checkpoint is not None
+    assert Path(trainer.state.best_model_checkpoint).is_dir()
+    assert any("eval_loss" in row for row in trainer.state.log_history)

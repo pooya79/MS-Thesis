@@ -25,6 +25,9 @@ on top of the warmed enhancer and the fine-tuned Persian Whisper backbone, and
 optimise ``L_ASR + lambda * L_enh`` — Stage 1 with the backbone frozen, Stage 2
 end to end.
 
+Stages accept ``num_train_epochs`` or legacy ``max_steps`` budgets. Gradient
+accumulation defaults to 1; all step counters count optimizer updates. Optional
+``eval_save_at_epoch_end`` also evaluates/saves at epoch ends and the final update.
 Each stage validates on ``valid_split`` every ``eval_every`` steps — Stage 0 by
 dev ``L_enh``, Stages 1-2 by dev WER/CER decoded through the fused encoder — and
 keeps the best-scoring weights as ``best.pt`` (dev metrics logged to
@@ -45,9 +48,12 @@ import argparse
 import hashlib
 import json
 import logging
+import math
 import subprocess
+from collections.abc import Iterator
 from copy import deepcopy
 from datetime import UTC, datetime
+from itertools import islice
 from pathlib import Path
 from typing import Any
 
@@ -161,6 +167,10 @@ def load_fusion_config(config_path: Path) -> dict[str, Any]:
     if not isinstance(loaded, dict):
         raise ValueError(f"{config_path} must contain a YAML mapping")
     config = deep_merge(DEFAULT_CONFIG, loaded)
+    # Epoch budgets replace inherited step defaults; explicit conflicts are errors.
+    for name, stage in loaded.get("stages", {}).items():
+        if stage.get("num_train_epochs") is not None and "max_steps" not in stage:
+            config["stages"][name]["max_steps"] = None
     # Do not pass cross-attention defaults to another architecture's constructor.
     requested_fusion = loaded.get("fusion", {})
     if requested_fusion.get("type", DEFAULT_CONFIG["fusion"]["type"]) != DEFAULT_CONFIG["fusion"]["type"]:
@@ -190,8 +200,21 @@ def validate_fusion_config(config: dict[str, Any]) -> None:
     for name, stage in config["stages"].items():
         if name not in STAGE_ORDER:
             raise ValueError(f"unknown stage {name!r}; expected one of {STAGE_ORDER}")
-        if int(stage.get("max_steps", 0)) < 1:
+        epochs = stage.get("num_train_epochs")
+        steps = stage.get("max_steps")
+        if epochs is not None:
+            if not math.isfinite(float(epochs)) or float(epochs) <= 0:
+                raise ValueError(f"stage {name}.num_train_epochs must be finite and > 0")
+            if steps is not None:
+                raise ValueError(f"stage {name}: use num_train_epochs or max_steps, not both")
+        elif steps is None or int(steps) < 1:
             raise ValueError(f"stage {name}.max_steps must be >= 1")
+        for key in ("gradient_accumulation_steps", "eval_batch_size"):
+            value = stage.get(key, 1)
+            if isinstance(value, bool) or int(value) != value or int(value) < 1:
+                raise ValueError(f"stage {name}.{key} must be a positive integer")
+        if not isinstance(stage.get("eval_save_at_epoch_end", False), bool):
+            raise ValueError(f"stage {name}.eval_save_at_epoch_end must be a boolean")
         if int(stage.get("batch_size", 0)) < 1:
             raise ValueError(f"stage {name}.batch_size must be >= 1")
 
@@ -591,8 +614,8 @@ def make_progress_bar(iterable: Any, desc: str, total: int | None = None) -> Any
 def make_step_bar(desc: str, total: int, initial: int = 0) -> Any:
     """Manual tqdm bar over training steps (auto-disabled off-TTY via ``disable=None``).
 
-    The step loops re-enter the dataloader across the ``while step < max_steps``
-    epochs, so we drive a manual bar with ``.update(1)`` rather than wrapping an
+    Training groups span multiple dataloader epochs, so we drive a manual bar
+    with ``.update(1)`` for each optimizer update rather than wrapping an
     iterable; ``initial`` carries the resumed step count. Returns ``None`` when
     tqdm is missing so callers simply skip the updates.
     """
@@ -715,6 +738,66 @@ def eval_score(stage_name: str, metrics: dict[str, float]) -> float:
     return float(metrics.get("L_warmup", metrics["L_enh"]))
 
 
+def stage_step_budget(stage: dict[str, Any], loader: Any) -> tuple[int, int]:
+    """Return optimizer updates per epoch and total, including partial groups."""
+    if len(loader) < 1:
+        raise ValueError("training loader must contain at least one batch")
+    updates_per_epoch = math.ceil(len(loader) / int(stage.get("gradient_accumulation_steps", 1)))
+    epochs = stage.get("num_train_epochs")
+    total = math.ceil(float(epochs) * updates_per_epoch) if epochs is not None else int(stage["max_steps"])
+    return updates_per_epoch, total
+
+
+def training_groups(
+    loader: Any, accumulation: int, start_step: int, max_steps: int, seed: int,
+) -> Iterator[list[dict[str, Any]]]:
+    """Yield microbatch groups without crossing epochs; resume the same row order.
+
+    Skipped batches are read on a mid-epoch resume. Model RNG state is not restored,
+    so dropout/augmentation trajectories are not guaranteed bitwise identical.
+    """
+    per_epoch = math.ceil(len(loader) / accumulation)
+    for epoch in range(start_step // per_epoch, math.ceil(max_steps / per_epoch)):
+        # Keep the sampler RNG independent of DataLoader worker/base-seed draws.
+        loader.sampler.generator = _seeded_generator(seed + epoch)
+        batches = iter(loader)
+        for index in range(per_epoch):
+            step = epoch * per_epoch + index
+            if step >= max_steps:
+                return
+            group = list(islice(batches, accumulation))
+            if step >= start_step:
+                yield group
+
+
+def stage_event_due(stage: dict[str, Any], every: int, step: int, per_epoch: int, total: int) -> bool:
+    """Periodic updates plus optional epoch boundaries and the final update."""
+    return bool(every and (step % every == 0 or step == total)) or bool(
+        stage.get("eval_save_at_epoch_end", False) and (step % per_epoch == 0 or step == total)
+    )
+
+
+def record_stage_budget(run_dir: Path, name: str, stage: dict[str, Any], loader: Any) -> tuple[int, int]:
+    per_epoch, total = stage_step_budget(stage, loader)
+    budget = {
+        "train_examples": len(loader.dataset), "microbatches_per_epoch": len(loader),
+        "optimizer_steps_per_epoch": per_epoch, "max_optimizer_steps": total,
+        "num_train_epochs": stage.get("num_train_epochs"),
+        "batch_size": int(stage["batch_size"]),
+        "gradient_accumulation_steps": int(stage.get("gradient_accumulation_steps", 1)),
+    }
+    path = run_dir / "config" / f"{name}_budget.json"
+    if path.exists() and json.loads(path.read_text()) != budget:
+        raise ValueError(f"{name} training budget changed; use a new run directory")
+    if not path.exists() and stage.get("num_train_epochs") is not None:
+        checkpoint = run_dir / "checkpoints" / STAGE_DIRS[name] / "last.pt"
+        if checkpoint.exists():
+            raise ValueError(f"{name}: cannot resume a legacy step checkpoint with an epoch recipe; use a new run directory")
+    write_json(path, budget)
+    logging.info("%s training budget: %s", name, budget)
+    return per_epoch, total
+
+
 def build_lr_scheduler(optimizer: Any, stage: dict[str, Any], max_steps: int) -> Any:
     """Cosine-with-warmup LR schedule for a stage, or ``None`` for a flat LR.
 
@@ -819,7 +902,7 @@ def run_stage_warmup(
     if feat_encoder is not None:
         logging.info("stage0 warmup: feature matching on (weight=%s, lambda=%s)", feat_weight, lam)
 
-    max_steps = int(stage["max_steps"])
+    steps_per_epoch, max_steps = record_stage_budget(run_dir, "warmup", stage, loader)
     log_every = int(stage.get("log_every", 50))
     save_every = int(stage.get("save_every", 1000))
     eval_every = int(stage.get("eval_every", 0) or 0)
@@ -834,13 +917,15 @@ def run_stage_warmup(
     step = start_step
     logging.info("stage0 warmup: max_steps=%s batch_size=%s amp=%s", max_steps, stage["batch_size"], amp_enabled)
     progress = make_step_bar("stage0 warmup", max_steps, initial=start_step)
-    while step < max_steps:
-        for batch in loader:
-            if step >= max_steps:
-                break
+    accumulation = int(stage.get("gradient_accumulation_steps", 1))
+    for group in training_groups(loader, accumulation, start_step, max_steps, int(config["seed"])):
+        optimizer.zero_grad(set_to_none=True)
+        examples = sum(len(batch["noisy_mel"]) for batch in group)
+        totals = {"loss": 0.0, "l_enh": 0.0, "l_feat": 0.0, "l_asr": 0.0}
+        for batch in group:
+            weight = len(batch["noisy_mel"]) / examples
             noisy = batch["noisy_mel"].to(device)
             clean = batch["clean_mel"].to(device)
-            optimizer.zero_grad(set_to_none=True)
             with torch.amp.autocast("cuda", enabled=amp_enabled):
                 enhanced = enhancer(noisy)
                 l_enh = enhancement_l1_loss(enhanced, clean)
@@ -849,46 +934,52 @@ def run_stage_warmup(
                     loss = lam * l_enh + feat_weight * l_feat
                 else:
                     loss = l_enh
-            scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
-            if scheduler is not None:
-                scheduler.step()
-            step += 1
+            scaler.scale(loss * weight).backward()
+            totals["loss"] += loss.detach() * weight
+            totals["l_enh"] += l_enh.detach() * weight
+            if feat_encoder is not None:
+                totals["l_feat"] += l_feat.detach() * weight
+        loss, l_enh = totals["loss"], totals["l_enh"]
+        l_feat = totals["l_feat"]
+        scaler.step(optimizer)
+        scaler.update()
+        if scheduler is not None:
+            scheduler.step()
+        step += 1
+        if progress is not None:
+            progress.update(1)
+        if step % log_every == 0 or step == max_steps:
+            l_enh_value = float(l_enh.detach())
+            lr = optimizer.param_groups[0]["lr"]
+            record = {"timestamp": utc_now(), "stage": "warmup", "step": step, "epoch": step / steps_per_epoch, "L_enh": l_enh_value, "lr": lr}
+            postfix = {"L_enh": f"{l_enh_value:.4f}", "lr": f"{lr:.2e}"}
+            if feat_encoder is not None:
+                record["L_feat"] = float(l_feat.detach())
+                record["loss"] = float(loss.detach())
+                postfix["L_feat"] = f"{record['L_feat']:.4f}"
+                logging.info("stage0 step=%s loss=%.4f L_enh=%.4f L_feat=%.4f lr=%.2e", step, record["loss"], l_enh_value, record["L_feat"], lr)
+            else:
+                logging.info("stage0 step=%s L_enh=%.4f lr=%.2e", step, l_enh_value, lr)
             if progress is not None:
-                progress.update(1)
-            if step % log_every == 0 or step == max_steps:
-                l_enh_value = float(l_enh.detach())
-                lr = optimizer.param_groups[0]["lr"]
-                record = {"timestamp": utc_now(), "stage": "warmup", "step": step, "L_enh": l_enh_value, "lr": lr}
-                postfix = {"L_enh": f"{l_enh_value:.4f}", "lr": f"{lr:.2e}"}
-                if feat_encoder is not None:
-                    record["L_feat"] = float(l_feat.detach())
-                    record["loss"] = float(loss.detach())
-                    postfix["L_feat"] = f"{record['L_feat']:.4f}"
-                    logging.info("stage0 step=%s loss=%.4f L_enh=%.4f L_feat=%.4f lr=%.2e", step, record["loss"], l_enh_value, record["L_feat"], lr)
-                else:
-                    logging.info("stage0 step=%s L_enh=%.4f lr=%.2e", step, l_enh_value, lr)
-                if progress is not None:
-                    progress.set_postfix(**postfix)
-                append_jsonl(metrics_path, record)
-            if dev_loader is not None and eval_every and (step % eval_every == 0 or step == max_steps):
-                metrics = evaluate_enhancer(
-                    enhancer, dev_loader, device, amp_enabled,
-                    feat_encoder=feat_encoder, feat_weight=feat_weight, lam=lam,
-                )
-                if "L_feat" in metrics:
-                    logging.info("stage0 eval step=%s L_enh=%.4f L_feat=%.4f L_warmup=%.4f", step, metrics["L_enh"], metrics["L_feat"], metrics["L_warmup"])
-                else:
-                    logging.info("stage0 eval step=%s L_enh=%.4f", step, metrics["L_enh"])
-                append_jsonl(eval_path, {"timestamp": utc_now(), "stage": "warmup", "step": step, **metrics})
-                score = eval_score("warmup", metrics)
-                if score < best_score:
-                    best_score = score
-                    save_enhancer_checkpoint(checkpoint_dir / "best.pt", enhancer, config, step)
-                    logging.info("stage0 new best score=%.4f -> best.pt", score)
-            if save_every and step % save_every == 0:
-                save_enhancer_checkpoint(checkpoint_dir / "last.pt", enhancer, config, step, optimizer=optimizer, scaler=scaler, scheduler=scheduler)
+                progress.set_postfix(**postfix)
+            append_jsonl(metrics_path, record)
+        if dev_loader is not None and stage_event_due(stage, eval_every, step, steps_per_epoch, max_steps):
+            metrics = evaluate_enhancer(
+                enhancer, dev_loader, device, amp_enabled,
+                feat_encoder=feat_encoder, feat_weight=feat_weight, lam=lam,
+            )
+            if "L_feat" in metrics:
+                logging.info("stage0 eval step=%s L_enh=%.4f L_feat=%.4f L_warmup=%.4f", step, metrics["L_enh"], metrics["L_feat"], metrics["L_warmup"])
+            else:
+                logging.info("stage0 eval step=%s L_enh=%.4f", step, metrics["L_enh"])
+            append_jsonl(eval_path, {"timestamp": utc_now(), "stage": "warmup", "step": step, "epoch": step / steps_per_epoch, **metrics})
+            score = eval_score("warmup", metrics)
+            if score < best_score:
+                best_score = score
+                save_enhancer_checkpoint(checkpoint_dir / "best.pt", enhancer, config, step)
+                logging.info("stage0 new best score=%.4f -> best.pt", score)
+        if stage_event_due(stage, save_every, step, steps_per_epoch, max_steps):
+            save_enhancer_checkpoint(checkpoint_dir / "last.pt", enhancer, config, step, optimizer=optimizer, scaler=scaler, scheduler=scheduler)
     if progress is not None:
         progress.close()
 
@@ -1114,7 +1205,7 @@ def _run_fusion_stage(
     amp_enabled = use_amp(config["mixed_precision"], device)
     scaler = torch.amp.GradScaler("cuda", enabled=amp_enabled)
     lam = float(stage.get("lambda", 0.3))
-    max_steps = int(stage["max_steps"])
+    steps_per_epoch, max_steps = record_stage_budget(run_dir, stage_name, stage, loader)
     log_every = int(stage.get("log_every", 50))
     save_every = int(stage.get("save_every", 1000))
     eval_every = int(stage.get("eval_every", 0) or 0)
@@ -1139,15 +1230,17 @@ def _run_fusion_stage(
         stage_name, max_steps, stage["batch_size"], lam, train_backbone, amp_enabled,
     )
     progress = make_step_bar(stage_name, max_steps, initial=start_step)
-    while step < max_steps:
-        for batch in loader:
-            if step >= max_steps:
-                break
+    accumulation = int(stage.get("gradient_accumulation_steps", 1))
+    for group in training_groups(loader, accumulation, start_step, max_steps, int(config["seed"])):
+        optimizer.zero_grad(set_to_none=True)
+        examples = sum(len(batch["noisy_mel"]) for batch in group)
+        totals = {"loss": 0.0, "l_enh": 0.0, "l_feat": 0.0, "l_asr": 0.0}
+        for batch in group:
+            weight = len(batch["noisy_mel"]) / examples
             noisy = batch["noisy_mel"].to(device)
             clean = batch["clean_mel"].to(device)
             labels = batch["labels"].to(device)
             next_step = step + 1
-            optimizer.zero_grad(set_to_none=True)
             with torch.amp.autocast("cuda", enabled=amp_enabled):
                 out = model(noisy, labels=labels)
                 l_asr = out["loss"]
@@ -1203,58 +1296,63 @@ def _run_fusion_stage(
                         batch.get("pair_id", []),
                         debug_path,
                     )
-            scaler.scale(loss).backward()
-            if grad_clip > 0:
-                scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_((p for g in param_groups for p in g["params"]), grad_clip)
-            scaler.step(optimizer)
-            scaler.update()
-            if scheduler is not None:
-                scheduler.step()
-            step += 1
+            scaler.scale(loss * weight).backward()
+            totals["loss"] += loss.detach() * weight
+            totals["l_enh"] += l_enh.detach() * weight
+            totals["l_asr"] += l_asr.detach() * weight
+        loss, l_enh = totals["loss"], totals["l_enh"]
+        l_asr = totals["l_asr"]
+        if grad_clip > 0:
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_((p for g in param_groups for p in g["params"]), grad_clip)
+        scaler.step(optimizer)
+        scaler.update()
+        if scheduler is not None:
+            scheduler.step()
+        step += 1
+        if progress is not None:
+            progress.update(1)
+        if step % log_every == 0 or step == max_steps:
+            lr = optimizer.param_groups[0]["lr"]
+            logging.info("%s step=%s loss=%.4f L_ASR=%.4f L_enh=%.4f lr=%.2e", stage_name, step, float(loss.detach()), float(l_asr.detach()), float(l_enh.detach()), lr)
             if progress is not None:
-                progress.update(1)
-            if step % log_every == 0 or step == max_steps:
-                lr = optimizer.param_groups[0]["lr"]
-                logging.info("%s step=%s loss=%.4f L_ASR=%.4f L_enh=%.4f lr=%.2e", stage_name, step, float(loss.detach()), float(l_asr.detach()), float(l_enh.detach()), lr)
-                if progress is not None:
-                    progress.set_postfix(loss=f"{float(loss.detach()):.4f}", L_ASR=f"{float(l_asr.detach()):.4f}", L_enh=f"{float(l_enh.detach()):.4f}", lr=f"{lr:.2e}")
-                append_jsonl(metrics_path, {
-                    "timestamp": utc_now(), "stage": stage_name, "step": step,
-                    "loss": float(loss.detach()), "L_ASR": float(l_asr.detach()), "L_enh": float(l_enh.detach()), "lr": lr,
-                })
-            should_eval = bool(eval_every) and (step % eval_every == 0 or step == max_steps)
-            if should_eval and (dev_loader is not None or clean_dev_loader is not None):
-                record = {"timestamp": utc_now(), "stage": stage_name, "step": step}
-                degraded_metrics = None
-                if dev_loader is not None:
-                    degraded_metrics = evaluate_fusion(
-                        model, dev_loader, tokenizer, device, amp_enabled,
-                        config=config, max_batches=eval_max_batches,
-                    )
-                    record.update(degraded_metrics)
-                    logging.info("%s eval step=%s wer=%.4f cer=%.4f loss=%.4f", stage_name, step, degraded_metrics["wer"], degraded_metrics["cer"], degraded_metrics["loss"])
-                clean_metrics = None
-                if clean_dev_loader is not None:
-                    clean_metrics = evaluate_fusion(
-                        model, clean_dev_loader, tokenizer, device, amp_enabled,
-                        config=config, max_batches=eval_max_batches,
-                    )
-                    record.update({f"clean_{key}": value for key, value in clean_metrics.items()})
-                    logging.info("%s clean eval step=%s wer=%.4f cer=%.4f loss=%.4f", stage_name, step, clean_metrics["wer"], clean_metrics["cer"], clean_metrics["loss"])
-                append_jsonl(eval_path, record)
-                # Select on degraded WER (the metric to beat); fall back to clean
-                # only when no degraded dev split exists.
-                score = eval_score(stage_name, degraded_metrics if degraded_metrics is not None else clean_metrics)
-                if score < best_score:
-                    best_score = score
-                    save_fusion_checkpoint(checkpoint_dir / "best.pt", model, config, step)
-                    logging.info("%s new best wer=%.4f -> best.pt", stage_name, score)
-            if save_every and step % save_every == 0:
-                save_fusion_checkpoint(
-                    checkpoint_dir / "last.pt", model, config, step,
-                    optimizer=optimizer, scaler=scaler, scheduler=scheduler, include_backbone=include_backbone,
+                progress.set_postfix(loss=f"{float(loss.detach()):.4f}", L_ASR=f"{float(l_asr.detach()):.4f}", L_enh=f"{float(l_enh.detach()):.4f}", lr=f"{lr:.2e}")
+            append_jsonl(metrics_path, {
+                "timestamp": utc_now(), "stage": stage_name, "step": step, "epoch": step / steps_per_epoch,
+                "loss": float(loss.detach()), "L_ASR": float(l_asr.detach()), "L_enh": float(l_enh.detach()), "lr": lr,
+            })
+        should_eval = stage_event_due(stage, eval_every, step, steps_per_epoch, max_steps)
+        if should_eval and (dev_loader is not None or clean_dev_loader is not None):
+            record = {"timestamp": utc_now(), "stage": stage_name, "step": step, "epoch": step / steps_per_epoch}
+            degraded_metrics = None
+            if dev_loader is not None:
+                degraded_metrics = evaluate_fusion(
+                    model, dev_loader, tokenizer, device, amp_enabled,
+                    config=config, max_batches=eval_max_batches,
                 )
+                record.update(degraded_metrics)
+                logging.info("%s eval step=%s wer=%.4f cer=%.4f loss=%.4f", stage_name, step, degraded_metrics["wer"], degraded_metrics["cer"], degraded_metrics["loss"])
+            clean_metrics = None
+            if clean_dev_loader is not None:
+                clean_metrics = evaluate_fusion(
+                    model, clean_dev_loader, tokenizer, device, amp_enabled,
+                    config=config, max_batches=eval_max_batches,
+                )
+                record.update({f"clean_{key}": value for key, value in clean_metrics.items()})
+                logging.info("%s clean eval step=%s wer=%.4f cer=%.4f loss=%.4f", stage_name, step, clean_metrics["wer"], clean_metrics["cer"], clean_metrics["loss"])
+            append_jsonl(eval_path, record)
+            # Select on degraded WER (the metric to beat); fall back to clean
+            # only when no degraded dev split exists.
+            score = eval_score(stage_name, degraded_metrics if degraded_metrics is not None else clean_metrics)
+            if score < best_score:
+                best_score = score
+                save_fusion_checkpoint(checkpoint_dir / "best.pt", model, config, step)
+                logging.info("%s new best wer=%.4f -> best.pt", stage_name, score)
+        if stage_event_due(stage, save_every, step, steps_per_epoch, max_steps):
+            save_fusion_checkpoint(
+                checkpoint_dir / "last.pt", model, config, step,
+                optimizer=optimizer, scaler=scaler, scheduler=scheduler, include_backbone=include_backbone,
+            )
     if progress is not None:
         progress.close()
 
@@ -1334,7 +1432,9 @@ def main(argv: list[str] | None = None) -> int:
         description=(
             "Run the 3-stage enhancement+fusion curriculum (Stage 0 warm-up -> Stage 1 "
             "fusion -> Stage 2 joint) from one YAML config, writing all artifacts to one "
-            "run directory. Consumes a degraded dataset from generate_degraded_dataset."
+            "run directory. Configure num_train_epochs (positive float) or legacy max_steps "
+            "per stage; gradient_accumulation_steps defaults to 1. "
+            "Consumes a degraded dataset from generate_degraded_dataset."
         )
     )
     parser.add_argument("--config", required=True, type=Path, help="YAML fusion training config path.")
