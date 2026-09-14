@@ -257,7 +257,9 @@ delay upstream. No automatic normalization changes the waveform mixing ratio.
 ## Commands
 
 Run from the repository root. Every subcommand supports `--help` with defaults.
-The bridge WER-cache/training/evaluation output directories must be new.
+Bridge training/evaluation output directories must be new. WER-cache preparation
+requires a new directory unless `--resume` is used for a compatible interrupted
+cache.
 
 Long-running preparation, cache, bridge-training, bridge-evaluation, and final
 evaluation commands print elapsed time, an ETA, and an estimated finish timestamp
@@ -284,7 +286,7 @@ uv run python -m ml.asr.train_whisper_small --config configs/speech_enhancement/
 uv run python -m ml.fusion.bridging_experiment prepare \
   --manifest artifacts/cv25-tiny/bridge-inputs/bridge_train_dev.jsonl \
   --asr-checkpoint models/asr/cv25-tiny/baseline/best \
-  --output artifacts/cv25-tiny/bridge-cache --device cuda
+  --output artifacts/cv25-tiny/bridge-cache --device cuda --batch-size 8
 
 uv run python -m ml.fusion.bridging_experiment train \
   --cache artifacts/cv25-tiny/bridge-cache \
@@ -307,6 +309,22 @@ subset, then cache all selected targets once. Do not use test to choose a gate,
 coefficient, epoch, loss, or architecture. Cache metadata records the manifest
 hash, backbone, enhancer/scorer IDs, coefficient order and decoding limit.
 Regenerate the cache when any upstream checkpoint or decoding policy changes.
+
+Preparation batches all eleven OA mixtures for multiple clips into each Whisper
+generation call. `--batch-size` is the number of clips, so the default of 8 sends
+88 waveforms per ASR batch. Increase it while watching VRAM (for example, 16 or
+32 on a large GPU); decoding speed and memory also depend on clip/token lengths.
+If CUDA runs out of memory, restart with `--resume` and a smaller batch. Resume
+validates provenance and the contiguous cache/index prefix, repairs an
+interrupted final write, and continues at the first missing or invalid item:
+
+```bash
+uv run python -m ml.fusion.bridging_experiment prepare \
+  --manifest artifacts/cv25-tiny/bridge-inputs/bridge_train_dev.jsonl \
+  --asr-checkpoint models/asr/cv25-tiny/baseline/best \
+  --output artifacts/cv25-tiny/bridge-cache --device cuda \
+  --batch-size 16 --resume
+```
 
 ## Experiment order and fair claims
 

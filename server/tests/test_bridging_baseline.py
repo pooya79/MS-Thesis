@@ -124,9 +124,12 @@ def test_prepare_and_evaluate_waveform_workflow(tmp_path, monkeypatch):
         def __init__(self, *args):
             pass
 
+        def transcribe_batch(self, waves):
+            calls.extend(wave.clone() for wave in waves)
+            return ["hello"] * len(waves)
+
         def __call__(self, wave):
-            calls.append(wave.clone())
-            return "hello"
+            return self.transcribe_batch([wave])[0]
 
     monkeypatch.setattr(experiment, "Recognizer", OfflineRecognizer)
     sf.write(tmp_path / "noisy.wav", np.sin(np.arange(1600) * .1).astype(np.float32) * .1, 16000)
@@ -154,6 +157,14 @@ def test_prepare_and_evaluate_waveform_workflow(tmp_path, monkeypatch):
     assert calls[0].abs().sum() > 0 and calls[10].abs().sum() == 0
     item = torch.load(cache / "00000000.pt", weights_only=True)
     assert item["noisy"].shape[0] == 80 and item["wers"].sum() == 0
+    first_record = (cache / "index.jsonl").read_text().splitlines()[0]
+    (cache / "index.jsonl").write_text(first_record + "\n")
+    (cache / "00000001.pt").unlink()
+    calls.clear()
+    main(["prepare", "--manifest", str(manifest), "--output", str(cache),
+          "--asr-checkpoint", "offline", "--resume", "--batch-size", "1"])
+    assert len(calls) == 11
+    assert len((cache / "index.jsonl").read_text().splitlines()) == 2
     checkpoint = tmp_path / "model.pt"
     model = BridgingModule(channels=16)
     torch.save({"state_dict": model.state_dict(), "model_config": {"channels": 16},

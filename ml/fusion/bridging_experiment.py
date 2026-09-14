@@ -132,12 +132,55 @@ class Recognizer:
         self.device, self.max_tokens = device, max_tokens
 
     @torch.inference_mode()
-    def __call__(self, wave: torch.Tensor) -> str:
-        features = self.processor.feature_extractor(wave.numpy(), sampling_rate=16000,
-                                                   return_tensors="pt").input_features.to(self.device)
+    def transcribe_batch(self, waves: list[torch.Tensor]) -> list[str]:
+        """Decode a waveform batch in one Whisper generation call."""
+        features = self.processor.feature_extractor(
+            [wave.numpy() for wave in waves], sampling_rate=16000, return_tensors="pt",
+        ).input_features.to(self.device)
         tokens = self.model.generate(features, language="Persian", task="transcribe", do_sample=False,
                                      num_beams=1, max_new_tokens=self.max_tokens)
-        return self.processor.batch_decode(tokens, skip_special_tokens=True)[0].strip()
+        return [text.strip() for text in self.processor.batch_decode(tokens, skip_special_tokens=True)]
+
+    def __call__(self, wave: torch.Tensor) -> str:
+        return self.transcribe_batch([wave])[0]
+
+
+def _valid_cache(path: Path) -> bool:
+    try:
+        item = torch.load(path, weights_only=True, map_location="cpu")
+        required = {"noisy", "enhanced", "wers", "sig", "bak"}
+        return (isinstance(item, dict) and required.issubset(item)
+                and item["noisy"].ndim == 2 and item["enhanced"].shape == item["noisy"].shape
+                and item["wers"].numel() == len(OA_COEFFICIENTS)
+                and all(torch.is_tensor(item[key]) and torch.isfinite(item[key]).all()
+                        for key in required))
+    except (EOFError, OSError, RuntimeError, ValueError):
+        return False
+
+
+def _resume_prefix(output: Path, rows: list[dict]) -> list[dict]:
+    """Return the valid, contiguous cache prefix and discard an interrupted tail."""
+    index_path = output / "index.jsonl"
+    if not index_path.is_file():
+        return []
+    records: list[dict] = []
+    for line_number, line in enumerate(index_path.read_text().splitlines(), start=1):
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            print(f"[bridge-cache] ignoring interrupted index tail at line {line_number}", flush=True)
+            break
+        number = len(records)
+        expected_name = f"{number:08d}.pt"
+        if (number >= len(rows) or not isinstance(record, dict)
+                or str(record.get("id")) != str(rows[number]["id"])
+                or record.get("cache") != expected_name
+                or not _valid_cache(output / expected_name)):
+            print(f"[bridge-cache] rebuilding invalid cache tail from item {number + 1}", flush=True)
+            break
+        records.append(record)
+    index_path.write_text("".join(json.dumps(record, ensure_ascii=False) + "\n" for record in records))
+    return records
 
 
 def prepare(args: argparse.Namespace) -> None:
@@ -164,32 +207,58 @@ def prepare(args: argparse.Namespace) -> None:
     if not rows or not {"train", "dev"}.issubset({str(row["split"]) for row in rows}):
         raise ValueError("usable paired audio is required in both train and dev splits")
     output = args.output
-    output.mkdir(parents=True, exist_ok=False)
+    output.mkdir(parents=True, exist_ok=args.resume)
     write_skipped(output / "skipped_inputs.jsonl", skipped)
     meta = {"paper": "2501.02452v1", "asr_checkpoint": args.asr_checkpoint,
             "enhancer_id": identity["enhancer_id"], "dnsmos_id": identity["dnsmos_id"],
-            "coefficients": OA_COEFFICIENTS, "max_tokens": args.max_tokens,
+            "coefficients": list(OA_COEFFICIENTS), "max_tokens": args.max_tokens,
             "manifest_sha256": manifest_hash,
             "skipped_inputs": len(skipped),
             "text_policy": "strip_only; normalize all input references upstream identically",
             "implementation": "independent reconstruction; see docs/script-guides/bridging-baseline.md"}
-    (output / "provenance.json").write_text(json.dumps(meta, indent=2))
-    with ProgressReporter("bridge-cache", len(rows), output / "progress.json") as progress:
+    provenance_path = output / "provenance.json"
+    if args.resume:
+        if not provenance_path.is_file():
+            raise ValueError("cannot resume: output has no provenance.json")
+        existing_meta = json.loads(provenance_path.read_text())
+        mismatches = [key for key, value in meta.items() if existing_meta.get(key) != value]
+        if mismatches:
+            raise ValueError(f"cannot resume cache with different provenance fields: {', '.join(mismatches)}")
+        records = _resume_prefix(output, rows)
+    else:
+        records = []
+        provenance_path.write_text(json.dumps(meta, indent=2))
+    completed = len(records)
+    if completed == len(rows):
+        print(f"[bridge-cache] already complete: {completed}/{len(rows)}", flush=True)
+        return
+    with ProgressReporter("bridge-cache", len(rows), output / "progress.json", initial=completed) as progress:
         asr = Recognizer(args.asr_checkpoint, args.device, args.max_tokens)
-        with (output / "index.jsonl").open("w") as index:
-            for number, row in enumerate(rows):
-                noisy, enhanced = paired_audio(row, args.manifest.parent)
-                hypotheses = [asr(observation_addition(noisy, enhanced, torch.tensor(w))) for w in OA_COEFFICIENTS]
-                wers = [wer(row["sentence"].strip(), h) for h in hypotheses]
-                cache = {"noisy": filterbank(noisy), "enhanced": filterbank(enhanced),
-                         "wers": torch.tensor(wers), "sig": torch.tensor(float(row["dnsmos_sig"])),
-                         "bak": torch.tensor(float(row["dnsmos_bak"]))}
-                name = f"{number:08d}.pt"
-                torch.save(cache, output / name)
-                record = {**row, "cache": name, "wers": wers, "hypotheses": hypotheses}
-                index.write(json.dumps(record, ensure_ascii=False) + "\n")
-                index.flush()
-                progress.update(number + 1, row["id"])
+        with (output / "index.jsonl").open("a") as index:
+            for start in range(completed, len(rows), args.batch_size):
+                batch_rows = rows[start:start + args.batch_size]
+                pairs = [paired_audio(row, args.manifest.parent) for row in batch_rows]
+                mixtures = [observation_addition(noisy, enhanced, torch.tensor(weight))
+                            for noisy, enhanced in pairs for weight in OA_COEFFICIENTS]
+                decoded = asr.transcribe_batch(mixtures)
+                if len(decoded) != len(mixtures):
+                    raise RuntimeError("ASR returned the wrong number of batch hypotheses")
+                for offset, (row, (noisy, enhanced)) in enumerate(zip(batch_rows, pairs)):
+                    number = start + offset
+                    first = offset * len(OA_COEFFICIENTS)
+                    hypotheses = decoded[first:first + len(OA_COEFFICIENTS)]
+                    wers = [wer(row["sentence"].strip(), hypothesis) for hypothesis in hypotheses]
+                    cache = {"noisy": filterbank(noisy), "enhanced": filterbank(enhanced),
+                             "wers": torch.tensor(wers), "sig": torch.tensor(float(row["dnsmos_sig"])),
+                             "bak": torch.tensor(float(row["dnsmos_bak"]))}
+                    name = f"{number:08d}.pt"
+                    temporary = output / f".{name}.tmp"
+                    torch.save(cache, temporary)
+                    temporary.replace(output / name)
+                    record = {**row, "cache": name, "wers": wers, "hypotheses": hypotheses}
+                    index.write(json.dumps(record, ensure_ascii=False) + "\n")
+                    index.flush()
+                    progress.update(number + 1, row["id"])
 
 
 def augment(x: torch.Tensor) -> torch.Tensor:
@@ -347,6 +416,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--enhancer-id", default=None, help="frozen enhancer ID; default generated manifest provenance")
     p.add_argument("--dnsmos-id", default=None, help="SIG/BAK scorer ID; default generated manifest provenance")
     p.add_argument("--max-tokens", type=int, default=225, help="maximum generated new tokens")
+    p.add_argument("--batch-size", type=int, default=8,
+                   help="clips per ASR batch (eleven waveform mixtures per clip)")
+    p.add_argument("--resume", action="store_true",
+                   help="validate and continue an interrupted existing output directory")
     p.set_defaults(func=prepare)
     t = subs.add_parser("train", help="train only the bridging module from cached supervision", formatter_class=fmt)
     t.add_argument("--cache", type=Path, required=True, help="prepared cache directory")
@@ -364,10 +437,12 @@ def main(argv: list[str] | None = None) -> int:
     e.add_argument("--omega", type=float, default=None, help="fixed original-waveform weight; 0=SE, 1=original")
     e.set_defaults(func=evaluate)
     for sub in (p, t, e):
-        sub.add_argument("--output", type=Path, required=True, help="new output directory; existing directories refused")
+        output_help = ("cache output directory; existing directory allowed only with --resume" if sub is p
+                       else "new output directory; existing directories refused")
+        sub.add_argument("--output", type=Path, required=True, help=output_help)
         sub.add_argument("--device", default="cpu", help="torch device, e.g. cpu or cuda:0")
     args = parser.parse_args(argv)
-    for key in ("epochs", "accumulation", "max_tokens", "lr"):
+    for key in ("epochs", "accumulation", "max_tokens", "batch_size", "lr"):
         if hasattr(args, key) and getattr(args, key) <= 0:
             parser.error(f"--{key.replace('_', '-')} must be positive")
     if getattr(args, "omega", None) is not None and not 0 <= args.omega <= 1:

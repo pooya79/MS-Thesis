@@ -114,13 +114,16 @@ uv run python -m ml.fusion.bridging_experiment prepare \
   --manifest artifacts/cv25-tiny-official/bridge-inputs/bridge_train_dev.jsonl \
   --asr-checkpoint models/asr/cv25-tiny-official/baseline/best \
   --output artifacts/cv25-tiny-official/bridge-cache \
-  --device cuda
+  --device cuda --batch-size 8
 ```
 
 This decodes eleven original/enhanced mixtures per train/dev clip. It can be
 expensive; preserve the completed cache. Model IDs are read automatically from
-the generated provenance. This cache command requires a new output directory
-and does not resume a partial cache.
+the generated provenance. Mixtures are decoded in GPU batches; `--batch-size`
+counts clips (8 means 88 waveforms). For a 48 GB GPU, try 16 or 32 and reduce it
+if CUDA runs out of memory. Continue a compatible partial cache by rerunning the
+same command with `--resume`; preparation validates the completed prefix before
+starting at the first missing or invalid item.
 
 ## 5. Train the paper baseline and its loss ablation
 
