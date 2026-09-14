@@ -6,6 +6,8 @@ import hashlib
 import json
 import random
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from pathlib import Path
 
 import numpy as np
@@ -85,22 +87,36 @@ def filter_split_conflicts(rows: list[dict], skipped: list[dict]) -> list[dict]:
     return kept
 
 
-def filter_paired_rows(rows: list[dict], root: Path, skipped: list[dict], *, require_scores: bool = False) -> list[dict]:
+def _validate_paired_row(row: dict, root: Path,
+                         require_scores: bool) -> tuple[dict, str | None, str | None]:
+    if not str(row.get("sentence", "")).strip():
+        return row, "empty_transcript", None
+    try:
+        paired_audio(row, root)
+        if require_scores:
+            from ml.fusion.bridging import perceptual_target
+            perceptual_target(torch.tensor(float(row["dnsmos_sig"])),
+                              torch.tensor(float(row["dnsmos_bak"])))
+    except (KeyError, TypeError, OSError, RuntimeError, ValueError) as exc:
+        return row, "invalid_paired_audio", str(exc)
+    return row, None, None
+
+
+def filter_paired_rows(rows: list[dict], root: Path, skipped: list[dict], *,
+                       require_scores: bool = False, workers: int = 1,
+                       report_progress: bool = False) -> list[dict]:
     kept = []
-    for row in rows:
-        if not str(row.get("sentence", "")).strip():
-            skipped.append(skipped_record(row, "empty_transcript"))
-            continue
-        try:
-            paired_audio(row, root)
-            if require_scores:
-                from ml.fusion.bridging import perceptual_target
-                perceptual_target(torch.tensor(float(row["dnsmos_sig"])),
-                                  torch.tensor(float(row["dnsmos_bak"])))
-        except (KeyError, TypeError, OSError, RuntimeError, ValueError) as exc:
-            skipped.append(skipped_record(row, "invalid_paired_audio", str(exc)))
-            continue
-        kept.append(row)
+    validate = partial(_validate_paired_row, root=root, require_scores=require_scores)
+    progress = ProgressReporter("bridge-validate", len(rows), None) if report_progress and rows else None
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="bridge-validate") as executor:
+        results = executor.map(validate, rows)
+        for number, (row, reason, detail) in enumerate(results, start=1):
+            if reason is not None:
+                skipped.append(skipped_record(row, reason, detail))
+            else:
+                kept.append(row)
+            if progress is not None:
+                progress.update(number, str(row.get("id", "")))
     return kept
 
 
@@ -203,7 +219,9 @@ def prepare(args: argparse.Namespace) -> None:
         identity[name] = explicit or identity.get(name)
         if not identity[name]:
             raise ValueError(f"missing {name}; run ml.fusion.prepare_bridge_inputs first or supply an explicit ID")
-    rows = filter_paired_rows(rows, args.manifest.parent, skipped, require_scores=True)
+    print(f"Validating {len(rows)} paired clips with {args.workers} CPU workers...", flush=True)
+    rows = filter_paired_rows(rows, args.manifest.parent, skipped, require_scores=True,
+                              workers=args.workers, report_progress=True)
     if not rows or not {"train", "dev"}.issubset({str(row["split"]) for row in rows}):
         raise ValueError("usable paired audio is required in both train and dev splits")
     output = args.output
@@ -234,10 +252,12 @@ def prepare(args: argparse.Namespace) -> None:
         return
     with ProgressReporter("bridge-cache", len(rows), output / "progress.json", initial=completed) as progress:
         asr = Recognizer(args.asr_checkpoint, args.device, args.max_tokens)
-        with (output / "index.jsonl").open("a") as index:
+        load_pair = partial(paired_audio, root=args.manifest.parent)
+        with (output / "index.jsonl").open("a") as index, \
+                ThreadPoolExecutor(max_workers=args.workers, thread_name_prefix="bridge-load") as audio_pool:
             for start in range(completed, len(rows), args.batch_size):
                 batch_rows = rows[start:start + args.batch_size]
-                pairs = [paired_audio(row, args.manifest.parent) for row in batch_rows]
+                pairs = list(audio_pool.map(load_pair, batch_rows))
                 mixtures = [observation_addition(noisy, enhanced, torch.tensor(weight))
                             for noisy, enhanced in pairs for weight in OA_COEFFICIENTS]
                 decoded = asr.transcribe_batch(mixtures)
@@ -418,6 +438,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--max-tokens", type=int, default=225, help="maximum generated new tokens")
     p.add_argument("--batch-size", type=int, default=8,
                    help="clips per ASR batch (eleven waveform mixtures per clip)")
+    p.add_argument("--workers", type=int, default=4,
+                   help="CPU worker threads for parallel audio validation and loading")
     p.add_argument("--resume", action="store_true",
                    help="validate and continue an interrupted existing output directory")
     p.set_defaults(func=prepare)
@@ -442,7 +464,7 @@ def main(argv: list[str] | None = None) -> int:
         sub.add_argument("--output", type=Path, required=True, help=output_help)
         sub.add_argument("--device", default="cpu", help="torch device, e.g. cpu or cuda:0")
     args = parser.parse_args(argv)
-    for key in ("epochs", "accumulation", "max_tokens", "batch_size", "lr"):
+    for key in ("epochs", "accumulation", "max_tokens", "batch_size", "workers", "lr"):
         if hasattr(args, key) and getattr(args, key) <= 0:
             parser.error(f"--{key.replace('_', '-')} must be positive")
     if getattr(args, "omega", None) is not None and not 0 <= args.omega <= 1:

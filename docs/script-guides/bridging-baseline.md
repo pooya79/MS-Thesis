@@ -310,10 +310,13 @@ coefficient, epoch, loss, or architecture. Cache metadata records the manifest
 hash, backbone, enhancer/scorer IDs, coefficient order and decoding limit.
 Regenerate the cache when any upstream checkpoint or decoding policy changes.
 
-Preparation batches all eleven OA mixtures for multiple clips into each Whisper
-generation call. `--batch-size` is the number of clips, so the default of 8 sends
-88 waveforms per ASR batch. Increase it while watching VRAM (for example, 16 or
-32 on a large GPU); decoding speed and memory also depend on clip/token lengths.
+Preparation first validates all audio pairs on the CPU and now reports that phase
+as `bridge-validate`. `--workers` controls concurrent validation and batch audio
+loading; use `--workers 8` on an eight-CPU machine. Preparation then batches all
+eleven OA mixtures for multiple clips into each Whisper generation call.
+`--batch-size` is the number of clips, so the default of 8 sends 88 waveforms per
+ASR batch. Increase it while watching VRAM (for example, 16 or 32 on a large GPU);
+decoding speed and memory also depend on clip/token lengths.
 If CUDA runs out of memory, restart with `--resume` and a smaller batch. Resume
 validates provenance and the contiguous cache/index prefix, repairs an
 interrupted final write, and continues at the first missing or invalid item:
@@ -323,7 +326,7 @@ uv run python -m ml.fusion.bridging_experiment prepare \
   --manifest artifacts/cv25-tiny/bridge-inputs/bridge_train_dev.jsonl \
   --asr-checkpoint models/asr/cv25-tiny/baseline/best \
   --output artifacts/cv25-tiny/bridge-cache --device cuda \
-  --batch-size 16 --resume
+  --batch-size 16 --workers 8 --resume
 ```
 
 ## Experiment order and fair claims

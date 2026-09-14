@@ -148,7 +148,7 @@ def test_prepare_and_evaluate_waveform_workflow(tmp_path, monkeypatch):
         "enhancer_id": "automatic-frcrn", "dnsmos_id": "automatic-dnsmos"}))
     cache = tmp_path / "cache"
     main(["prepare", "--manifest", str(manifest), "--output", str(cache),
-          "--asr-checkpoint", "offline"])
+          "--asr-checkpoint", "offline", "--workers", "2"])
     assert json.loads((cache / "provenance.json").read_text())["enhancer_id"] == "automatic-frcrn"
     skipped = [json.loads(line) for line in (cache / "skipped_inputs.jsonl").read_text().splitlines()]
     assert [row["id"] for row in skipped] == ["missing"]
@@ -162,7 +162,7 @@ def test_prepare_and_evaluate_waveform_workflow(tmp_path, monkeypatch):
     (cache / "00000001.pt").unlink()
     calls.clear()
     main(["prepare", "--manifest", str(manifest), "--output", str(cache),
-          "--asr-checkpoint", "offline", "--resume", "--batch-size", "1"])
+          "--asr-checkpoint", "offline", "--resume", "--batch-size", "1", "--workers", "2"])
     assert len(calls) == 11
     assert len((cache / "index.jsonl").read_text().splitlines()) == 2
     checkpoint = tmp_path / "model.pt"
