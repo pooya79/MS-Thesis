@@ -339,6 +339,15 @@ def _chunks(rows: list[dict], size: int):
         yield rows[start:start + size]
 
 
+def _select_eval_rows(rows: list[dict], batch_size: int, max_batches: int,
+                      seed: int) -> list[dict]:
+    """Choose one reproducible dev subset reused for every epoch."""
+    limit = len(rows) if max_batches == 0 else min(len(rows), batch_size * max_batches)
+    if limit == len(rows):
+        return list(rows)
+    return random.Random(seed).sample(rows, limit)
+
+
 def train(args: argparse.Namespace) -> None:
     random.seed(args.seed)
     np.random.seed(args.seed)
@@ -366,6 +375,8 @@ def train(args: argparse.Namespace) -> None:
     dev_rows = [r for r in usable_rows if r["split"] == "dev"]
     if not train_rows or not dev_rows:
         raise ValueError("both train and dev caches are required")
+    eval_rows = _select_eval_rows(dev_rows, args.batch_size, args.eval_max_batches, args.seed)
+    eval_batches = (len(eval_rows) + args.batch_size - 1) // args.batch_size
     args.output.mkdir(parents=True, exist_ok=False)
     write_skipped(args.output / "skipped_inputs.jsonl", skipped)
     model_config = {"channels": args.channels}
@@ -374,13 +385,14 @@ def train(args: argparse.Namespace) -> None:
     provenance = json.loads((args.cache / "provenance.json").read_text())
     print(
         f"[bridge-train] starting device={args.device} epochs={args.epochs} "
-        f"train={len(train_rows)} dev={len(dev_rows)} batch_size={args.batch_size} "
+        f"train={len(train_rows)} dev_total={len(dev_rows)} eval_examples={len(eval_rows)} "
+        f"eval_batches={eval_batches} batch_size={args.batch_size} "
         f"utterances_per_update={args.accumulation} workers={args.workers} "
         f"loss={'PQ' if args.pq_only else 'PQ+RI'}",
         flush=True,
     )
     best = float("inf")
-    total_work = args.epochs * (len(train_rows) + len(dev_rows))
+    total_work = args.epochs * (len(train_rows) + len(eval_rows))
     completed_work = 0
     with ProgressReporter("bridge-train", total_work, args.output / "progress.json",
                           report_every_seconds=args.log_every_seconds) as progress, \
@@ -415,7 +427,7 @@ def train(args: argparse.Namespace) -> None:
             model.eval()
             dev_loss = 0.0
             with torch.inference_mode():
-                ordered_dev = sorted(dev_rows, key=lambda row: row["_frames"])
+                ordered_dev = sorted(eval_rows, key=lambda row: row["_frames"])
                 for batch_rows in _chunks(ordered_dev, args.batch_size):
                     item = _load_cache_batch(args.cache, batch_rows, args.device, pool)
                     out = model(item["noisy"], item["enhanced"], item["lengths"])
@@ -424,20 +436,22 @@ def train(args: argparse.Namespace) -> None:
                     dev_loss += loss * len(batch_rows)
                     completed_work += len(batch_rows)
                     progress.update(completed_work, f"epoch={epoch + 1}/{args.epochs} dev")
-            dev_loss /= len(dev_rows)
+            dev_loss /= len(eval_rows)
             payload = {"state_dict": model.state_dict(), "model_config": model_config,
                        "provenance": provenance, "epoch": epoch + 1, "seed": args.seed,
                        "dev_loss": dev_loss, "optimizer": optimizer.state_dict(),
                        "training": {"lr": args.lr, "epochs": args.epochs,
                                     "batch_size": args.batch_size, "accumulation": args.accumulation,
-                                    "workers": args.workers, "pq_only": args.pq_only,
+                                    "workers": args.workers, "eval_max_batches": args.eval_max_batches,
+                                    "eval_examples": len(eval_rows), "pq_only": args.pq_only,
                                     "selection": "dev combined loss"}}
             torch.save(payload, args.output / "last.pt")
             if dev_loss < best:
                 best = dev_loss
                 torch.save(payload, args.output / "best.pt")
             metrics = {"epoch": epoch + 1, "train_loss": training_loss / len(train_rows),
-                       "dev_loss": dev_loss}
+                       "dev_loss": dev_loss, "eval_examples": len(eval_rows),
+                       "eval_batches": eval_batches}
             with (args.output / "metrics.jsonl").open("a") as stream:
                 stream.write(json.dumps(metrics) + "\n")
             print(f"[bridge-train] epoch {epoch + 1}/{args.epochs} complete: {metrics}", flush=True)
@@ -513,6 +527,8 @@ def main(argv: list[str] | None = None) -> int:
                    help="utterances per padded GPU micro-batch; reduce after CUDA out-of-memory")
     t.add_argument("--workers", type=int, default=4,
                    help="CPU worker threads for parallel cache validation and loading")
+    t.add_argument("--eval-max-batches", type=int, default=4,
+                   help="maximum dev batches per epoch; 0 evaluates the full dev split")
     t.add_argument("--log-every-seconds", type=float, default=30,
                    help="maximum interval between progress/ETA log messages")
     t.add_argument("--seed", type=int, default=1337, help="random seed")
@@ -534,6 +550,8 @@ def main(argv: list[str] | None = None) -> int:
                 "log_every_seconds"):
         if hasattr(args, key) and getattr(args, key) <= 0:
             parser.error(f"--{key.replace('_', '-')} must be positive")
+    if hasattr(args, "eval_max_batches") and args.eval_max_batches < 0:
+        parser.error("--eval-max-batches must be nonnegative")
     if getattr(args, "omega", None) is not None and not 0 <= args.omega <= 1:
         parser.error("--omega must be in [0, 1]")
     args.func(args)

@@ -134,7 +134,9 @@ During runs, baseline ASR validates on original + degraded CV25 dev; fusion
 warm-up selects by dev enhancement/feature loss, fusion/joint selects by
 degraded CV25 dev WER, and joint also reports original CV25 dev metrics.
 The pilot fusion configs now use **full dev**, with `eval_max_batches: null`.
-The paper reconstruction selects on its train/dev cache's dev objective.
+The paper reconstruction selects on a fixed, seeded subset of up to four dev
+batches per epoch by default. Use `--eval-max-batches 0` for the full cache dev
+objective.
 Final-test evaluation is a separate command and never updates any checkpoint.
 
 Start on the GPU server after syncing the new repository files there:
@@ -154,7 +156,7 @@ inputs can be prepared beforehand using the commands above. To train its PQ-only
 uv run python -m ml.fusion.bridging_experiment train \
   --cache artifacts/cv25-tiny/bridge-cache \
   --output models/asr/cv25-tiny/bridge-pq --pq-only --device cuda \
-  --batch-size 4 --accumulation 8 --workers 4
+  --batch-size 4 --accumulation 8 --workers 4 --eval-max-batches 4
 ```
 
 ### Final evaluation of all methods
@@ -280,8 +282,10 @@ The separate waveform preparation command is resumable in its existing output. T
 resume a partial run. Preserve completed caches to avoid repeated ASR inference.
 
 Bridge training defaults to four utterances per padded GPU micro-batch, eight
-utterances per optimizer update, and four cache-loading threads. Thus the
-default performs two forward/backward passes per update. Increase
+utterances per optimizer update, four cache-loading threads, and at most four
+dev batches per epoch. The dev subset is selected once from the configured seed
+and reused across epochs. Use `--eval-max-batches 0` for full-dev checkpoint
+selection. The default performs two forward/backward passes per update. Increase
 `--batch-size` up to `--accumulation` while GPU memory permits; increasing it
 beyond accumulation has no effect. `--workers` parallelizes cache validation
 and each micro-batch's CPU reads. Startup logs report the effective settings,
@@ -304,7 +308,7 @@ uv run python -m ml.fusion.bridging_experiment prepare \
 uv run python -m ml.fusion.bridging_experiment train \
   --cache artifacts/cv25-tiny/bridge-cache \
   --output models/asr/cv25-tiny/bridge --device cuda \
-  --batch-size 4 --accumulation 8 --workers 4
+  --batch-size 4 --accumulation 8 --workers 4 --eval-max-batches 4
 
 uv run python -m ml.fusion.bridging_experiment evaluate \
   --manifest artifacts/cv25-tiny/bridge-inputs/bridge_dev.jsonl \

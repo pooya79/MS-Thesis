@@ -134,16 +134,20 @@ first missing or invalid item.
 uv run python -m ml.fusion.bridging_experiment train \
   --cache artifacts/cv25-tiny-official/bridge-cache \
   --output models/asr/cv25-tiny-official/bridge \
-  --device cuda --batch-size 4 --accumulation 8 --workers 4
+  --device cuda --batch-size 4 --accumulation 8 --workers 4 \
+  --eval-max-batches 4
 
 # Loss ablation: perceptual quality only, with the same cached inputs.
 uv run python -m ml.fusion.bridging_experiment train \
   --cache artifacts/cv25-tiny-official/bridge-cache \
   --output models/asr/cv25-tiny-official/bridge-pq \
-  --pq-only --device cuda --batch-size 4 --accumulation 8 --workers 4
+  --pq-only --device cuda --batch-size 4 --accumulation 8 --workers 4 \
+  --eval-max-batches 4
 ```
 
-Both default to seed 1337 and 5 epochs, selecting `best.pt` by dev objective.
+Both default to seed 1337 and 5 epochs, selecting `best.pt` using a fixed seeded
+subset of at most four dev batches per epoch. Use `--eval-max-batches 0` for
+full-dev selection.
 They use padded, length-masked GPU micro-batches and parallel CPU cache reads;
 `--accumulation 8` remains the number of utterances per optimizer update.
 Startup, phase, periodic ETA, and per-epoch loss logs are printed and

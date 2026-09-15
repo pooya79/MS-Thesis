@@ -11,7 +11,7 @@ from ml.fusion.bridging import (
     BridgingModule, OA_COEFFICIENTS, bridge_loss, observation_addition,
     perceptual_target, recognition_information_loss,
 )
-from ml.fusion.bridging_experiment import check_splits, main
+from ml.fusion.bridging_experiment import _select_eval_rows, check_splits, main
 from ml.fusion.model import build_fusion
 
 
@@ -82,6 +82,17 @@ def test_cli_help(command):
     assert "--help" in result.stdout
     if command == ["train"]:
         assert "training epochs (default: 5)" in result.stdout
+        assert "--eval-max-batches EVAL_MAX_BATCHES" in result.stdout
+
+
+def test_eval_subset_is_capped_and_reproducible():
+    rows = [{"id": str(index)} for index in range(20)]
+    selected = _select_eval_rows(rows, batch_size=2, max_batches=4, seed=1337)
+    assert len(selected) == 8
+    assert [row["id"] for row in selected] == [row["id"] for row in _select_eval_rows(
+        rows, batch_size=2, max_batches=4, seed=1337,
+    )]
+    assert _select_eval_rows(rows, batch_size=2, max_batches=0, seed=1337) == rows
 
 
 def test_cached_training_and_checkpoint_reload(tmp_path, capsys):
