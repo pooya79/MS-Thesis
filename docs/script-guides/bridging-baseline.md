@@ -153,7 +153,8 @@ inputs can be prepared beforehand using the commands above. To train its PQ-only
 ```bash
 uv run python -m ml.fusion.bridging_experiment train \
   --cache artifacts/cv25-tiny/bridge-cache \
-  --output models/asr/cv25-tiny/bridge-pq --pq-only --device cuda
+  --output models/asr/cv25-tiny/bridge-pq --pq-only --device cuda \
+  --batch-size 4 --accumulation 8 --workers 4
 ```
 
 ### Final evaluation of all methods
@@ -225,10 +226,12 @@ logits, and a linear sigmoid coefficient head on those logits. Review Fig. 1
 against any subsequently obtained author code before claiming architectural
 fidelity. These head/aggregation choices are reconstruction assumptions.
 
-Other declared choices: Adam, no unspecified paper warm-up schedule, one
-unpadded utterance per forward with gradient accumulation (avoids padding in
-batch normalization and pooling), zero Fbank dither, dev-loss checkpoint
-selection, and strip-only transcript handling. The published RI-only variant
+Other declared choices: Adam, no unspecified paper warm-up schedule,
+length-aware padded mini-batches with masked intermediate features and attention
+pooling, zero Fbank dither, dev-loss checkpoint selection, and strip-only
+transcript handling. Batch normalization still uses batch-level statistics, so
+changing `--batch-size` changes the training recipe; record it with results.
+The published RI-only variant
 is not exposed: without PQ the separate coefficient head would lack direct
 supervision in this reconstruction. `--pq-only` is a supported loss ablation.
 
@@ -276,6 +279,16 @@ watch -n 15 cat artifacts/cv25-tiny/bridge-inputs/progress.json
 The separate waveform preparation command is resumable in its existing output. This initial baseline trainer does not automatically
 resume a partial run. Preserve completed caches to avoid repeated ASR inference.
 
+Bridge training defaults to four utterances per padded GPU micro-batch, eight
+utterances per optimizer update, and four cache-loading threads. Thus the
+default performs two forward/backward passes per update. Increase
+`--batch-size` up to `--accumulation` while GPU memory permits; increasing it
+beyond accumulation has no effect. `--workers` parallelizes cache validation
+and each micro-batch's CPU reads. Startup logs report the effective settings,
+every epoch logs its train/validation transitions and final losses, and timed
+progress includes elapsed time, ETA, and estimated completion. Use
+`--log-every-seconds 10` for more frequent progress.
+
 ```bash
 uv run python -m ml.fusion.bridging_experiment prepare --help
 uv run python -m ml.fusion.bridging_experiment train --help
@@ -290,7 +303,8 @@ uv run python -m ml.fusion.bridging_experiment prepare \
 
 uv run python -m ml.fusion.bridging_experiment train \
   --cache artifacts/cv25-tiny/bridge-cache \
-  --output models/asr/cv25-tiny/bridge --device cuda
+  --output models/asr/cv25-tiny/bridge --device cuda \
+  --batch-size 4 --accumulation 8 --workers 4
 
 uv run python -m ml.fusion.bridging_experiment evaluate \
   --manifest artifacts/cv25-tiny/bridge-inputs/bridge_dev.jsonl \

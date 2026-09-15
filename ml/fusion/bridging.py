@@ -64,13 +64,25 @@ class SERes2Block(nn.Module):
         self.se = nn.Sequential(nn.Conv1d(channels, bottleneck, 1), nn.ReLU(),
                                 nn.Conv1d(bottleneck, channels, 1), nn.Sigmoid())
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        pieces = self.pre(x).chunk(len(self.parts) + 1, dim=1)
+    @staticmethod
+    def _mask(x: torch.Tensor, lengths: torch.Tensor | None) -> torch.Tensor:
+        if lengths is None:
+            return x
+        valid = torch.arange(x.shape[-1], device=x.device)[None, :] < lengths[:, None]
+        return x.masked_fill(~valid[:, None, :], 0)
+
+    def forward(self, x: torch.Tensor, lengths: torch.Tensor | None = None) -> torch.Tensor:
+        pieces = self._mask(self.pre(x), lengths).chunk(len(self.parts) + 1, dim=1)
         values = [pieces[0]]
         for i, layer in enumerate(self.parts, start=1):
-            values.append(layer(pieces[i] if i == 1 else pieces[i] + values[-1]))
-        y = self.post(torch.cat(values, dim=1))
-        return x + y * self.se(y.mean(dim=-1, keepdim=True))
+            value = layer(pieces[i] if i == 1 else pieces[i] + values[-1])
+            values.append(self._mask(value, lengths))
+        y = self._mask(self.post(torch.cat(values, dim=1)), lengths)
+        if lengths is None:
+            pooled = y.mean(dim=-1, keepdim=True)
+        else:
+            pooled = y.sum(dim=-1, keepdim=True) / lengths[:, None, None]
+        return self._mask(x + y * self.se(pooled), lengths)
 
 
 class UtteranceEncoder(nn.Module):
@@ -83,14 +95,31 @@ class UtteranceEncoder(nn.Module):
         self.attention = nn.Sequential(nn.Conv1d(channels, bottleneck, 1), nn.Tanh(),
                                        nn.Conv1d(bottleneck, channels, 1))
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    @staticmethod
+    def _mask(x: torch.Tensor, lengths: torch.Tensor | None) -> torch.Tensor:
+        if lengths is None:
+            return x
+        valid = torch.arange(x.shape[-1], device=x.device)[None, :] < lengths[:, None]
+        return x.masked_fill(~valid[:, None, :], 0)
+
+    def forward(self, x: torch.Tensor, lengths: torch.Tensor | None = None) -> torch.Tensor:
+        if lengths is not None:
+            if (lengths.ndim != 1 or len(lengths) != len(x) or (lengths < 2).any()
+                    or (lengths > x.shape[-1]).any()):
+                raise ValueError("lengths must contain one valid frame count per utterance")
         x = self.front(x)
+        x = self._mask(x, lengths)
         stages = []
         for block in self.blocks:
-            x = block(x)
+            x = block(x, lengths)
             stages.append(x)
         x = self.aggregate(torch.cat(stages, dim=1))
-        a = self.attention(x).softmax(dim=-1)
+        x = self._mask(x, lengths)
+        attention_logits = self.attention(x)
+        if lengths is not None:
+            valid = torch.arange(x.shape[-1], device=x.device)[None, :] < lengths[:, None]
+            attention_logits = attention_logits.masked_fill(~valid[:, None, :], -torch.inf)
+        a = attention_logits.softmax(dim=-1)
         mean = (a * x).sum(dim=-1)
         std = ((a * x.square()).sum(dim=-1) - mean.square()).clamp_min(1e-6).sqrt()
         return torch.cat((mean, std), dim=-1)
@@ -104,8 +133,11 @@ class BridgingModule(nn.Module):
         self.recognition = nn.Sequential(nn.Linear(4 * channels, hidden), nn.ReLU(), nn.Linear(hidden, 11))
         self.quality = nn.Linear(11, 1)
 
-    def forward(self, noisy: torch.Tensor, enhanced: torch.Tensor) -> dict[str, torch.Tensor]:
+    def forward(self, noisy: torch.Tensor, enhanced: torch.Tensor,
+                lengths: torch.Tensor | None = None) -> dict[str, torch.Tensor]:
         if noisy.shape != enhanced.shape or noisy.ndim != 3 or noisy.shape[1] != 80 or noisy.shape[-1] < 2:
-            raise ValueError("expected aligned, unpadded [batch, 80, frames>=2] filterbanks")
-        logits = self.recognition(torch.cat((self.encoder(noisy), self.encoder(enhanced)), dim=-1))
+            raise ValueError("expected aligned [batch, 80, frames>=2] filterbanks")
+        logits = self.recognition(torch.cat(
+            (self.encoder(noisy, lengths), self.encoder(enhanced, lengths)), dim=-1,
+        ))
         return {"logits": logits, "omega": self.quality(logits).sigmoid().squeeze(-1)}

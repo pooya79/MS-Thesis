@@ -82,25 +82,46 @@ def test_cli_help(command):
     assert "--help" in result.stdout
 
 
-def test_cached_training_and_checkpoint_reload(tmp_path):
+def test_cached_training_and_checkpoint_reload(tmp_path, capsys):
     cache = tmp_path / "cache"
     cache.mkdir()
     (cache / "provenance.json").write_text(json.dumps({"asr_checkpoint": "offline-test", "max_tokens": 20}))
     rows = []
-    for i, split in enumerate(("train", "dev")):
-        torch.save({"noisy": torch.randn(80, 12), "enhanced": torch.randn(80, 12),
+    for i, split in enumerate(("train", "train", "dev")):
+        frames = 12 + i
+        torch.save({"noisy": torch.randn(80, frames), "enhanced": torch.randn(80, frames),
                     "wers": torch.rand(11), "sig": torch.tensor(3.), "bak": torch.tensor(2.)}, cache / f"{i}.pt")
         rows.append({"id": str(i), "source_id": str(i), "split": split, "cache": f"{i}.pt"})
     rows.append({"id": "missing", "source_id": "missing", "split": "train", "cache": "missing.pt"})
     (cache / "index.jsonl").write_text("\n".join(json.dumps(r) for r in rows))
     output = tmp_path / "run"
-    assert main(["train", "--cache", str(cache), "--output", str(output), "--epochs", "1"]) == 0
+    assert main(["train", "--cache", str(cache), "--output", str(output), "--epochs", "1",
+                 "--batch-size", "2", "--workers", "2", "--log-every-seconds", "0.01"]) == 0
     saved = torch.load(output / "best.pt", weights_only=True)
     model = BridgingModule(**saved["model_config"])
     model.load_state_dict(saved["state_dict"])
     assert saved["epoch"] == 1
+    assert saved["training"]["batch_size"] == 2
+    assert saved["training"]["workers"] == 2
+    console = capsys.readouterr().out
+    assert "validating 4 cache entries with 2 workers" in console
+    assert "batch_size=2" in console
+    assert "epoch 1/1: validation" in console
     skipped = [json.loads(line) for line in (output / "skipped_inputs.jsonl").read_text().splitlines()]
     assert [(row["id"], row["reason"]) for row in skipped] == [("missing", "invalid_cache")]
+
+
+def test_bridge_length_mask_ignores_padded_tail_in_eval():
+    model = BridgingModule(channels=16, bottleneck=8, hidden=16).eval()
+    noisy = torch.randn(1, 80, 10)
+    enhanced = torch.randn(1, 80, 10)
+    padded_noisy = torch.nn.functional.pad(noisy, (0, 5))
+    padded_enhanced = torch.nn.functional.pad(enhanced, (0, 5))
+    with torch.inference_mode():
+        expected = model(noisy, enhanced)
+        actual = model(padded_noisy, padded_enhanced, torch.tensor([10]))
+    assert torch.allclose(actual["logits"], expected["logits"], atol=1e-5)
+    assert torch.allclose(actual["omega"], expected["omega"], atol=1e-5)
 
 
 def test_manifest_reader_skips_malformed_and_duplicate_rows(tmp_path):

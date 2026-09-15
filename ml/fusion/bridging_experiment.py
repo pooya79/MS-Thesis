@@ -161,17 +161,22 @@ class Recognizer:
         return self.transcribe_batch([wave])[0]
 
 
-def _valid_cache(path: Path) -> bool:
+def _cache_frame_count(path: Path) -> int | None:
     try:
         item = torch.load(path, weights_only=True, map_location="cpu")
         required = {"noisy", "enhanced", "wers", "sig", "bak"}
-        return (isinstance(item, dict) and required.issubset(item)
-                and item["noisy"].ndim == 2 and item["enhanced"].shape == item["noisy"].shape
-                and item["wers"].numel() == len(OA_COEFFICIENTS)
-                and all(torch.is_tensor(item[key]) and torch.isfinite(item[key]).all()
-                        for key in required))
-    except (EOFError, OSError, RuntimeError, ValueError):
-        return False
+        valid = (isinstance(item, dict) and required.issubset(item)
+                 and item["noisy"].ndim == 2 and item["enhanced"].shape == item["noisy"].shape
+                 and item["wers"].numel() == len(OA_COEFFICIENTS)
+                 and all(torch.is_tensor(item[key]) and torch.isfinite(item[key]).all()
+                         for key in required))
+        return int(item["noisy"].shape[-1]) if valid else None
+    except (EOFError, KeyError, OSError, RuntimeError, TypeError, ValueError):
+        return None
+
+
+def _valid_cache(path: Path) -> bool:
+    return _cache_frame_count(path) is not None
 
 
 def _resume_prefix(output: Path, rows: list[dict]) -> list[dict]:
@@ -292,6 +297,48 @@ def augment(x: torch.Tensor) -> torch.Tensor:
     return x
 
 
+def _load_cache_item(cache: Path, row: dict) -> dict[str, torch.Tensor]:
+    return torch.load(cache / row["cache"], weights_only=True, map_location="cpu")
+
+
+def _load_cache_batch(cache: Path, rows: list[dict], device: str,
+                      pool: ThreadPoolExecutor) -> dict[str, torch.Tensor]:
+    """Load cached examples concurrently and pad only the filterbank time axis."""
+    load = partial(_load_cache_item, cache)
+    items = list(pool.map(load, rows))
+    lengths = torch.tensor([item["noisy"].shape[-1] for item in items])
+    frames = int(lengths.max().item())
+
+    def pad(key: str) -> torch.Tensor:
+        return torch.stack([
+            torch.nn.functional.pad(item[key], (0, frames - item[key].shape[-1]))
+            for item in items
+        ])
+
+    batch = {
+        "noisy": pad("noisy"),
+        "enhanced": pad("enhanced"),
+        "wers": torch.stack([item["wers"] for item in items]),
+        "sig": torch.stack([item["sig"].reshape(()) for item in items]),
+        "bak": torch.stack([item["bak"].reshape(()) for item in items]),
+        "lengths": lengths,
+    }
+    return {key: value.to(device) for key, value in batch.items()}
+
+
+def _augment_batch(x: torch.Tensor, lengths: torch.Tensor) -> torch.Tensor:
+    """Apply independent masks without selecting padded time steps."""
+    augmented = x.clone()
+    for index, length in enumerate(lengths.tolist()):
+        augmented[index:index + 1, :, :length] = augment(augmented[index:index + 1, :, :length])
+    return augmented
+
+
+def _chunks(rows: list[dict], size: int):
+    for start in range(0, len(rows), size):
+        yield rows[start:start + size]
+
+
 def train(args: argparse.Namespace) -> None:
     random.seed(args.seed)
     np.random.seed(args.seed)
@@ -302,25 +349,19 @@ def train(args: argparse.Namespace) -> None:
         raise ValueError("test cache cannot be used in training")
     rows = filter_split_conflicts(rows, skipped)
     check_splits(rows)
+    print(f"[bridge-train] validating {len(rows)} cache entries with {args.workers} workers", flush=True)
     usable_rows = []
-    for row in rows:
-        cache_path = args.cache / str(row.get("cache", ""))
-        try:
-            item = torch.load(cache_path, weights_only=True, map_location="cpu")
-            required = {"noisy", "enhanced", "wers", "sig", "bak"}
-            if not isinstance(item, dict) or not required.issubset(item):
-                raise ValueError("cache lacks required tensors")
-            if item["noisy"].ndim != 2 or item["enhanced"].shape != item["noisy"].shape:
-                raise ValueError("cache filterbanks are missing or unaligned")
-            if item["wers"].numel() != len(OA_COEFFICIENTS):
-                raise ValueError("cache has the wrong number of WER targets")
-            if not all(torch.is_tensor(item[key]) and torch.isfinite(item[key]).all()
-                       for key in required):
-                raise ValueError("cache contains nonfinite or non-tensor values")
-        except (EOFError, KeyError, OSError, RuntimeError, ValueError) as exc:
-            skipped.append(skipped_record(row, "invalid_cache", str(exc)))
-            continue
-        usable_rows.append(row)
+    with ProgressReporter("bridge-cache-check", len(rows), None) as cache_progress, \
+            ThreadPoolExecutor(max_workers=args.workers, thread_name_prefix="bridge-cache-check") as pool:
+        paths = [args.cache / str(row.get("cache", "")) for row in rows]
+        for number, (row, cache_path, frames) in enumerate(
+                zip(rows, paths, pool.map(_cache_frame_count, paths)), start=1):
+            if frames is not None:
+                row["_frames"] = frames
+                usable_rows.append(row)
+            else:
+                skipped.append(skipped_record(row, "invalid_cache", str(cache_path)))
+            cache_progress.update(number, str(row["id"]))
     train_rows = [r for r in usable_rows if r["split"] == "train"]
     dev_rows = [r for r in usable_rows if r["split"] == "dev"]
     if not train_rows or not dev_rows:
@@ -331,56 +372,75 @@ def train(args: argparse.Namespace) -> None:
     model = BridgingModule(**model_config).to(args.device)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     provenance = json.loads((args.cache / "provenance.json").read_text())
+    print(
+        f"[bridge-train] starting device={args.device} epochs={args.epochs} "
+        f"train={len(train_rows)} dev={len(dev_rows)} batch_size={args.batch_size} "
+        f"utterances_per_update={args.accumulation} workers={args.workers} "
+        f"loss={'PQ' if args.pq_only else 'PQ+RI'}",
+        flush=True,
+    )
     best = float("inf")
     total_work = args.epochs * (len(train_rows) + len(dev_rows))
-    progress = ProgressReporter("bridge-train", total_work, args.output / "progress.json")
     completed_work = 0
-    for epoch in range(args.epochs):
-        model.train()
-        random.shuffle(train_rows)
-        optimizer.zero_grad()
-        training_loss = 0.0
-        for i, row in enumerate(train_rows):
-            item = torch.load(args.cache / row["cache"], weights_only=True, map_location=args.device)
-            outputs = model(augment(item["noisy"][None]), augment(item["enhanced"][None]))
-            loss = bridge_loss(outputs, item["wers"][None], item["sig"][None], item["bak"][None],
-                               recognition=not args.pq_only)
-            if not torch.isfinite(loss):
-                raise ValueError(f"nonfinite loss on {row['id']}")
-            group_start = (i // args.accumulation) * args.accumulation
-            group_size = min(args.accumulation, len(train_rows) - group_start)
-            (loss / group_size).backward()
-            training_loss += loss.item()
-            if (i + 1) % args.accumulation == 0 or i + 1 == len(train_rows):
+    with ProgressReporter("bridge-train", total_work, args.output / "progress.json",
+                          report_every_seconds=args.log_every_seconds) as progress, \
+            ThreadPoolExecutor(max_workers=args.workers, thread_name_prefix="bridge-train-load") as pool:
+        for epoch in range(args.epochs):
+            print(f"[bridge-train] epoch {epoch + 1}/{args.epochs}: training", flush=True)
+            model.train()
+            random.shuffle(train_rows)
+            optimizer.zero_grad()
+            training_loss = 0.0
+            for update_rows in _chunks(train_rows, args.accumulation):
+                # Sorting only within an optimizer update limits padding without changing update membership.
+                update_rows.sort(key=lambda row: row["_frames"])
+                group_size = len(update_rows)
+                for batch_rows in _chunks(update_rows, args.batch_size):
+                    item = _load_cache_batch(args.cache, batch_rows, args.device, pool)
+                    outputs = model(_augment_batch(item["noisy"], item["lengths"]),
+                                    _augment_batch(item["enhanced"], item["lengths"]),
+                                    item["lengths"])
+                    loss = bridge_loss(outputs, item["wers"], item["sig"], item["bak"],
+                                       recognition=not args.pq_only)
+                    if not torch.isfinite(loss):
+                        raise ValueError(f"nonfinite loss near {batch_rows[0]['id']}")
+                    (loss * (len(batch_rows) / group_size)).backward()
+                    training_loss += loss.item() * len(batch_rows)
+                    completed_work += len(batch_rows)
+                    progress.update(completed_work, f"epoch={epoch + 1}/{args.epochs} train")
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 10.0)
                 optimizer.step()
                 optimizer.zero_grad()
-            completed_work += 1
-            progress.update(completed_work, f"epoch={epoch + 1}/{args.epochs} train")
-        model.eval()
-        dev_loss = 0.0
-        with torch.inference_mode():
-            for row in dev_rows:
-                item = torch.load(args.cache / row["cache"], weights_only=True, map_location=args.device)
-                out = model(item["noisy"][None], item["enhanced"][None])
-                dev_loss += bridge_loss(out, item["wers"][None], item["sig"][None], item["bak"][None],
-                                        recognition=not args.pq_only).item()
-                completed_work += 1
-                progress.update(completed_work, f"epoch={epoch + 1}/{args.epochs} dev")
-        dev_loss /= len(dev_rows)
-        payload = {"state_dict": model.state_dict(), "model_config": model_config,
-                   "provenance": provenance, "epoch": epoch + 1, "seed": args.seed,
-                   "dev_loss": dev_loss, "optimizer": optimizer.state_dict(),
-                   "training": {"lr": args.lr, "epochs": args.epochs, "accumulation": args.accumulation,
-                                "pq_only": args.pq_only, "selection": "dev combined loss"}}
-        torch.save(payload, args.output / "last.pt")
-        if dev_loss < best:
-            best = dev_loss
-            torch.save(payload, args.output / "best.pt")
-        metrics = {"epoch": epoch + 1, "train_loss": training_loss / len(train_rows), "dev_loss": dev_loss}
-        with (args.output / "metrics.jsonl").open("a") as stream:
-            stream.write(json.dumps(metrics) + "\n")
-        print(metrics, flush=True)
+            print(f"[bridge-train] epoch {epoch + 1}/{args.epochs}: validation", flush=True)
+            model.eval()
+            dev_loss = 0.0
+            with torch.inference_mode():
+                ordered_dev = sorted(dev_rows, key=lambda row: row["_frames"])
+                for batch_rows in _chunks(ordered_dev, args.batch_size):
+                    item = _load_cache_batch(args.cache, batch_rows, args.device, pool)
+                    out = model(item["noisy"], item["enhanced"], item["lengths"])
+                    loss = bridge_loss(out, item["wers"], item["sig"], item["bak"],
+                                       recognition=not args.pq_only).item()
+                    dev_loss += loss * len(batch_rows)
+                    completed_work += len(batch_rows)
+                    progress.update(completed_work, f"epoch={epoch + 1}/{args.epochs} dev")
+            dev_loss /= len(dev_rows)
+            payload = {"state_dict": model.state_dict(), "model_config": model_config,
+                       "provenance": provenance, "epoch": epoch + 1, "seed": args.seed,
+                       "dev_loss": dev_loss, "optimizer": optimizer.state_dict(),
+                       "training": {"lr": args.lr, "epochs": args.epochs,
+                                    "batch_size": args.batch_size, "accumulation": args.accumulation,
+                                    "workers": args.workers, "pq_only": args.pq_only,
+                                    "selection": "dev combined loss"}}
+            torch.save(payload, args.output / "last.pt")
+            if dev_loss < best:
+                best = dev_loss
+                torch.save(payload, args.output / "best.pt")
+            metrics = {"epoch": epoch + 1, "train_loss": training_loss / len(train_rows),
+                       "dev_loss": dev_loss}
+            with (args.output / "metrics.jsonl").open("a") as stream:
+                stream.write(json.dumps(metrics) + "\n")
+            print(f"[bridge-train] epoch {epoch + 1}/{args.epochs} complete: {metrics}", flush=True)
 
 
 def evaluate(args: argparse.Namespace) -> None:
@@ -449,6 +509,12 @@ def main(argv: list[str] | None = None) -> int:
     t.add_argument("--lr", type=float, default=0.0005, help="Adam learning rate")
     t.add_argument("--channels", type=int, choices=(256, 384), default=256, help="frame-layer channels")
     t.add_argument("--accumulation", type=int, default=8, help="utterances per optimizer update")
+    t.add_argument("--batch-size", type=int, default=4,
+                   help="utterances per padded GPU micro-batch; reduce after CUDA out-of-memory")
+    t.add_argument("--workers", type=int, default=4,
+                   help="CPU worker threads for parallel cache validation and loading")
+    t.add_argument("--log-every-seconds", type=float, default=30,
+                   help="maximum interval between progress/ETA log messages")
     t.add_argument("--seed", type=int, default=1337, help="random seed")
     t.add_argument("--pq-only", action="store_true", help="ablate recognition-information loss")
     t.set_defaults(func=train)
@@ -464,7 +530,8 @@ def main(argv: list[str] | None = None) -> int:
         sub.add_argument("--output", type=Path, required=True, help=output_help)
         sub.add_argument("--device", default="cpu", help="torch device, e.g. cpu or cuda:0")
     args = parser.parse_args(argv)
-    for key in ("epochs", "accumulation", "max_tokens", "batch_size", "workers", "lr"):
+    for key in ("epochs", "accumulation", "max_tokens", "batch_size", "workers", "lr",
+                "log_every_seconds"):
         if hasattr(args, key) and getattr(args, key) <= 0:
             parser.error(f"--{key.replace('_', '-')} must be positive")
     if getattr(args, "omega", None) is not None and not 0 <= args.omega <= 1:

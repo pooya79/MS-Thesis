@@ -134,18 +134,21 @@ first missing or invalid item.
 uv run python -m ml.fusion.bridging_experiment train \
   --cache artifacts/cv25-tiny-official/bridge-cache \
   --output models/asr/cv25-tiny-official/bridge \
-  --device cuda
+  --device cuda --batch-size 4 --accumulation 8 --workers 4
 
 # Loss ablation: perceptual quality only, with the same cached inputs.
 uv run python -m ml.fusion.bridging_experiment train \
   --cache artifacts/cv25-tiny-official/bridge-cache \
   --output models/asr/cv25-tiny-official/bridge-pq \
-  --pq-only --device cuda
+  --pq-only --device cuda --batch-size 4 --accumulation 8 --workers 4
 ```
 
 Both default to seed 1337 and 45 epochs, selecting `best.pt` by dev objective.
-FRCRN and Whisper remain frozen. These trainers require new output directories
-and do not resume interrupted training.
+They use padded, length-masked GPU micro-batches and parallel CPU cache reads;
+`--accumulation 8` remains the number of utterances per optimizer update.
+Startup, phase, periodic ETA, and per-epoch loss logs are printed and
+`progress.json` is updated. FRCRN and Whisper remain frozen. These trainers
+require new output directories and do not resume interrupted training.
 
 ## 6. Train the three fusion variants with a shared warm-up enhancer
 
