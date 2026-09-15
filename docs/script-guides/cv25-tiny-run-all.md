@@ -143,7 +143,7 @@ uv run python -m ml.fusion.bridging_experiment train \
   --pq-only --device cuda --batch-size 4 --accumulation 8 --workers 4
 ```
 
-Both default to seed 1337 and 45 epochs, selecting `best.pt` by dev objective.
+Both default to seed 1337 and 5 epochs, selecting `best.pt` by dev objective.
 They use padded, length-masked GPU micro-batches and parallel CPU cache reads;
 `--accumulation 8` remains the number of utterances per optimizer update.
 Startup, phase, periodic ETA, and per-epoch loss logs are printed and

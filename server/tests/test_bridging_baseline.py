@@ -80,6 +80,8 @@ def test_cli_help(command):
                             capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     assert "--help" in result.stdout
+    if command == ["train"]:
+        assert "training epochs (default: 5)" in result.stdout
 
 
 def test_cached_training_and_checkpoint_reload(tmp_path, capsys):

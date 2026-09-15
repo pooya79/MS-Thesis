@@ -217,7 +217,7 @@ robustness on synthetically degraded test conditions.
 - 80-bin Kaldi Fbank, 25 ms windows / 10 ms hop; these are distinct from Whisper
   log-Mels. Shared utterance encoder, SE-Res2 blocks with dilations 2/3/4,
   scale 8, attention statistics pooling, 256 or 384 channels, hidden size 384.
-- Time/frequency masks of up to 5/4; LR 0.0005, 45 epochs, gradient norm 10.
+- Time/frequency masks of up to 5/4; LR 0.0005, 5 epochs, gradient norm 10.
 
 Underspecified details are fixed explicitly: channel-wise attentive mean/std
 pooling, concatenation of three block outputs before projection, concatenation

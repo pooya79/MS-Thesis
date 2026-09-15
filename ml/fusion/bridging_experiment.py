@@ -505,7 +505,7 @@ def main(argv: list[str] | None = None) -> int:
     p.set_defaults(func=prepare)
     t = subs.add_parser("train", help="train only the bridging module from cached supervision", formatter_class=fmt)
     t.add_argument("--cache", type=Path, required=True, help="prepared cache directory")
-    t.add_argument("--epochs", type=int, default=45, help="training epochs")
+    t.add_argument("--epochs", type=int, default=5, help="training epochs")
     t.add_argument("--lr", type=float, default=0.0005, help="Adam learning rate")
     t.add_argument("--channels", type=int, choices=(256, 384), default=256, help="frame-layer channels")
     t.add_argument("--accumulation", type=int, default=8, help="utterances per optimizer update")
