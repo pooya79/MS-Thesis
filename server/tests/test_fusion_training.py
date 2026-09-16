@@ -280,6 +280,13 @@ class _FakeTokenizer:
         return ["سلام" for _ in ids]
 
 
+class _CharacterTokenizer(_FakeTokenizer):
+    """One token per character, making label-limit tests deterministic."""
+
+    def __call__(self, text: str):
+        return SimpleNamespace(input_ids=list(range(len(text))))
+
+
 def test_run_training_completes_all_stages(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import ml.fusion.train_fusion as train_fusion
 
@@ -528,6 +535,66 @@ def test_clean_mel_dataset_yields_identical_views(tmp_path: Path) -> None:
     assert item["noisy_mel"].shape == (80, 3000)
     assert torch.equal(item["noisy_mel"], item["clean_mel"])  # no degradation -> same view
     assert item["labels"] == [1, 5, 7, 2]
+
+
+def test_clean_mel_dataset_skips_labels_above_whisper_limit(tmp_path: Path) -> None:
+    root = _make_clean_dataset(tmp_path / "clean")
+    split_path = root / "train.tsv"
+    rows = split_path.read_text(encoding="utf-8").splitlines()
+    rows[2] = rows[2].split("\t", 1)[0] + "\t" + ("x" * 65)
+    split_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+    dataset = CleanMelDataset(
+        root,
+        split="train",
+        return_labels=True,
+        tokenizer=_CharacterTokenizer(),
+        max_label_tokens=64,
+    )
+
+    assert len(dataset) == 1
+    assert dataset.skipped_overlong_labels == 1
+    assert len(dataset[0]["labels"]) <= 64
+
+
+def test_degraded_mel_dataset_skips_labels_above_whisper_limit(tmp_path: Path) -> None:
+    root = _make_degraded_dataset(tmp_path / "degraded")
+    mapping_path = root / "degraded_to_clean.jsonl"
+    rows = [json.loads(line) for line in mapping_path.read_text(encoding="utf-8").splitlines()]
+    rows[1]["sentence"] = "x" * 65
+    mapping_path.write_text(
+        "\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n",
+        encoding="utf-8",
+    )
+
+    dataset = DegradedMelDataset(
+        root,
+        split="train",
+        return_labels=True,
+        tokenizer=_CharacterTokenizer(),
+        max_label_tokens=64,
+    )
+
+    assert len(dataset) == 1
+    assert dataset.skipped_overlong_labels == 1
+    assert len(dataset[0]["labels"]) <= 64
+
+
+def test_label_filter_rejects_dataset_when_every_sample_is_overlong(tmp_path: Path) -> None:
+    root = _make_clean_dataset(tmp_path / "clean", n=1)
+    split_path = root / "train.tsv"
+    rows = split_path.read_text(encoding="utf-8").splitlines()
+    rows[1] = rows[1].split("\t", 1)[0] + "\t" + ("x" * 65)
+    split_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="no usable samples remain"):
+        CleanMelDataset(
+            root,
+            split="train",
+            return_labels=True,
+            tokenizer=_CharacterTokenizer(),
+            max_label_tokens=64,
+        )
 
 
 def test_resolve_dataset_specs_autodetects_and_partitions(tmp_path: Path) -> None:

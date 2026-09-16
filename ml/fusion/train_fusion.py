@@ -410,6 +410,7 @@ def build_train_dataset(
     return_labels: bool,
     tokenizer: Any,
     include_clean: bool,
+    max_label_tokens: int | None = None,
 ) -> Any:
     """Combined training dataset for one stage.
 
@@ -433,6 +434,7 @@ def build_train_dataset(
             model_name=config["model_name"],
             return_labels=return_labels,
             tokenizer=tokenizer,
+            max_label_tokens=max_label_tokens,
             seed=int(config["seed"]),
         )
         for dataset_dir in degraded_dirs
@@ -446,6 +448,7 @@ def build_train_dataset(
                     model_name=config["model_name"],
                     return_labels=return_labels,
                     tokenizer=tokenizer,
+                    max_label_tokens=max_label_tokens,
                     sample_rate=int(config.get("sample_rate", WHISPER_SAMPLE_RATE)),
                 )
             )
@@ -458,6 +461,7 @@ def build_dev_loader(
     *,
     return_labels: bool,
     tokenizer: Any = None,
+    max_label_tokens: int | None = None,
 ) -> Any | None:
     """Build a dev-split loader, or ``None`` when no usable validation split exists.
 
@@ -483,6 +487,7 @@ def build_dev_loader(
                     model_name=config["model_name"],
                     return_labels=return_labels,
                     tokenizer=tokenizer,
+                    max_label_tokens=max_label_tokens,
                     seed=int(config["seed"]),
                 )
             )
@@ -500,7 +505,13 @@ def build_dev_loader(
     )
 
 
-def build_clean_dev_loader(config: dict[str, Any], stage: dict[str, Any], *, tokenizer: Any) -> Any | None:
+def build_clean_dev_loader(
+    config: dict[str, Any],
+    stage: dict[str, Any],
+    *,
+    tokenizer: Any,
+    max_label_tokens: int | None = None,
+) -> Any | None:
     """Dev loader over the clean datasets' ``valid_split`` (joint-stage clean eval).
 
     Clean datasets carry no degradation, so this reports WER/CER on undegraded
@@ -520,6 +531,7 @@ def build_clean_dev_loader(config: dict[str, Any], stage: dict[str, Any], *, tok
                     model_name=config["model_name"],
                     return_labels=True,
                     tokenizer=tokenizer,
+                    max_label_tokens=max_label_tokens,
                     sample_rate=int(config.get("sample_rate", WHISPER_SAMPLE_RATE)),
                 )
             )
@@ -1159,6 +1171,14 @@ def _run_fusion_stage(
     checkpoint_dir = run_dir / "checkpoints" / STAGE_DIRS[stage_name]
 
     tokenizer = load_tokenizer(config)
+    model = build_fusion_model(config, enhancer=enhancer)
+    max_label_tokens = getattr(model.whisper.config, "max_target_positions", None)
+    max_label_tokens = int(max_label_tokens) if max_label_tokens is not None else None
+    logging.info(
+        "%s: filtering labels against Whisper max_target_positions=%s",
+        stage_name,
+        max_label_tokens if max_label_tokens is not None else "unbounded",
+    )
     # Stage 2 (joint) folds in any clean ASR datasets so the end-to-end fine-tune
     # also sees undegraded speech; Stage 1 stays degraded-only.
     train_dataset = build_train_dataset(
@@ -1167,6 +1187,7 @@ def _run_fusion_stage(
         return_labels=True,
         tokenizer=tokenizer,
         include_clean=(stage_name == "joint"),
+        max_label_tokens=max_label_tokens,
     )
     loader = make_dataloader(
         train_dataset,
@@ -1175,14 +1196,26 @@ def _run_fusion_stage(
         num_workers=int(stage.get("num_workers", 0)),
         seed=int(config["seed"]),
     )
-    dev_loader = build_dev_loader(config, stage, return_labels=True, tokenizer=tokenizer)
+    dev_loader = build_dev_loader(
+        config,
+        stage,
+        return_labels=True,
+        tokenizer=tokenizer,
+        max_label_tokens=max_label_tokens,
+    )
     # The joint (final) stage also reports dev metrics on the clean datasets, so
     # clean-speech regression is visible alongside the degraded WER it selects on.
     clean_dev_loader = (
-        build_clean_dev_loader(config, stage, tokenizer=tokenizer) if stage_name == "joint" else None
+        build_clean_dev_loader(
+            config,
+            stage,
+            tokenizer=tokenizer,
+            max_label_tokens=max_label_tokens,
+        )
+        if stage_name == "joint"
+        else None
     )
 
-    model = build_fusion_model(config, enhancer=enhancer)
     prior_ckpt = run_dir / "checkpoints" / STAGE_DIRS["fusion"] / "fusion_model.pt"
     if stage_name == "joint" and prior_ckpt.is_file():
         logging.info("stage2 joint: loading fusion model from %s", prior_ckpt)
@@ -1434,7 +1467,8 @@ def main(argv: list[str] | None = None) -> int:
             "fusion -> Stage 2 joint) from one YAML config, writing all artifacts to one "
             "run directory. Configure num_train_epochs (positive float) or legacy max_steps "
             "per stage; gradient_accumulation_steps defaults to 1. "
-            "Consumes a degraded dataset from generate_degraded_dataset."
+            "Consumes a degraded dataset from generate_degraded_dataset. Samples whose "
+            "labels exceed the loaded Whisper decoder limit are logged and skipped."
         )
     )
     parser.add_argument("--config", required=True, type=Path, help="YAML fusion training config path.")

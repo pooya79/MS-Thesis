@@ -29,11 +29,13 @@ Set ``clean_target: full_band`` to skip alignment and target the raw clean.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import csv
 import json
+import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 import numpy as np
 import torch
@@ -46,6 +48,62 @@ MAPPING_FILENAME = "degraded_to_clean.jsonl"
 FRAMES_PER_SECOND = 100  # Whisper hop: 160 samples @ 16 kHz
 _BANDWIDTH_ALIGNED = {"narrowband", "wideband_filtered"}
 _CLEAN_SPLITS = ("train", "dev", "test")
+_RecordT = TypeVar("_RecordT")
+
+
+def _filter_overlong_labels(
+    records: list[_RecordT],
+    *,
+    tokenizer: Any,
+    max_label_tokens: int | None,
+    transcript: Callable[[_RecordT], str],
+    record_id: Callable[[_RecordT], str],
+    source: Path,
+) -> tuple[list[_RecordT], int]:
+    """Drop records whose Whisper labels cannot fit the decoder context.
+
+    Whisper raises before computing loss when any padded label row exceeds
+    ``max_target_positions``. Filtering at dataset construction keeps both
+    training and evaluation robust and avoids silently truncating a transcript
+    into a target that no longer describes the complete utterance.
+    """
+    if max_label_tokens is None:
+        return records, 0
+    if max_label_tokens <= 0:
+        raise ValueError("max_label_tokens must be positive or None")
+
+    kept: list[_RecordT] = []
+    skipped_ids: list[str] = []
+    token_counts: dict[str, int] = {}
+    for record in records:
+        text = transcript(record)
+        token_count = token_counts.get(text)
+        if token_count is None:
+            token_count = len(tokenizer(text).input_ids)
+            token_counts[text] = token_count
+        if token_count > max_label_tokens:
+            if len(skipped_ids) < 5:
+                skipped_ids.append(f"{record_id(record)} ({token_count} tokens)")
+            continue
+        kept.append(record)
+
+    skipped = len(records) - len(kept)
+    if skipped:
+        logging.warning(
+            "skipped %s/%s samples from %s because label length exceeds Whisper's "
+            "%s-token limit; examples: %s",
+            skipped,
+            len(records),
+            source,
+            max_label_tokens,
+            ", ".join(skipped_ids),
+        )
+    if not kept:
+        raise ValueError(
+            f"no usable samples remain in {source} after filtering labels longer "
+            f"than {max_label_tokens} tokens"
+        )
+    return kept, skipped
 
 
 def detect_dataset_kind(dataset_dir: str | Path) -> str:
@@ -181,6 +239,7 @@ class DegradedMelDataset(Dataset):
         model_name: str = "openai/whisper-small",
         return_labels: bool = False,
         tokenizer: Any = None,
+        max_label_tokens: int | None = None,
         seed: int = 1337,
     ) -> None:
         if clean_target not in {"bandwidth_aligned", "full_band"}:
@@ -189,6 +248,16 @@ class DegradedMelDataset(Dataset):
             raise ValueError("return_labels=True requires a tokenizer")
         self.dataset_dir = Path(dataset_dir)
         self.pairs = read_mapping(self.dataset_dir, split)
+        self.skipped_overlong_labels = 0
+        if return_labels:
+            self.pairs, self.skipped_overlong_labels = _filter_overlong_labels(
+                self.pairs,
+                tokenizer=tokenizer,
+                max_label_tokens=max_label_tokens,
+                transcript=lambda pair: pair.transcript,
+                record_id=lambda pair: pair.pair_id,
+                source=self.dataset_dir / MAPPING_FILENAME,
+            )
         self.clean_target = clean_target
         self.model_name = model_name
         self.return_labels = return_labels
@@ -312,12 +381,23 @@ class CleanMelDataset(Dataset):
         model_name: str = "openai/whisper-small",
         return_labels: bool = False,
         tokenizer: Any = None,
+        max_label_tokens: int | None = None,
         sample_rate: int = WHISPER_SAMPLE_RATE,
     ) -> None:
         if return_labels and tokenizer is None:
             raise ValueError("return_labels=True requires a tokenizer")
         self.dataset_dir = Path(dataset_dir)
         self.clips = read_clean_rows(self.dataset_dir, split)
+        self.skipped_overlong_labels = 0
+        if return_labels:
+            self.clips, self.skipped_overlong_labels = _filter_overlong_labels(
+                self.clips,
+                tokenizer=tokenizer,
+                max_label_tokens=max_label_tokens,
+                transcript=lambda clip: clip.transcript,
+                record_id=lambda clip: clip.clip_id,
+                source=self.dataset_dir / f"{split}.tsv",
+            )
         self.model_name = model_name
         self.return_labels = return_labels
         self.tokenizer = tokenizer

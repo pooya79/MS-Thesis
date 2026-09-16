@@ -197,6 +197,12 @@ All stages use microbatch 8, gradient accumulation 2 (effective batch 16), and
 evaluation batch 128, matching the ASR baseline's batch settings. An incomplete
 accumulation group is flushed at each epoch end. Evaluation and saving run every
 1,000 optimizer updates and at every epoch end. Full dev splits remain enabled.
+Before constructing the train/dev loaders, the fusion trainer tokenizes transcript
+targets and skips any sample whose label sequence exceeds the loaded Whisper
+backbone's `max_target_positions` limit (448 for Whisper Tiny). It logs the skip
+count and representative sample IDs; it does not silently truncate mismatched or
+malformed transcripts. This policy applies to degraded and clean samples in both
+training and evaluation, matching the Whisper baseline trainer's safety check.
 If fusion evaluation does not fit GPU memory, reduce `eval_batch_size` identically
 across variants; this changes evaluation throughput, not the training budget.
 
