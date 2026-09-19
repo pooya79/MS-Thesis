@@ -80,6 +80,9 @@ def test_cli_help(command):
                             capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     assert "--help" in result.stdout
+    if command == ["evaluate"]:
+        assert "--batch-size BATCH_SIZE" in result.stdout
+        assert "(default: 1)" in result.stdout
     if command == ["train"]:
         assert "training epochs (default: 5)" in result.stdout
         assert "--eval-max-batches EVAL_MAX_BATCHES" in result.stdout
@@ -225,3 +228,74 @@ def test_tiny_configs_are_cv25_only():
     assert baseline["run"]["output_dir"] == "models/asr/cv25-tiny-official"
     assert baseline["model"]["name"] == "openai/whisper-tiny"
     assert set(baseline["data"]["datasets"]) == {"cv-corpus-25.0", "cv-corpus-25.0-degraded-v2"}
+
+
+@pytest.mark.parametrize("omega", [None, 0., 1.])
+@pytest.mark.parametrize("split", ["dev", "test"])
+def test_evaluation_batches_preserve_waveforms_and_records(tmp_path, monkeypatch, omega, split):
+    import ml.fusion.bridging_experiment as experiment
+
+    rows = [{"id": str(i), "source_id": str(i), "split": split, "sentence": f"clip {i}"}
+            for i in range(5)]
+    manifest = tmp_path / "pairs.jsonl"
+    manifest.write_text("\n".join(json.dumps(row) for row in rows))
+    monkeypatch.setattr(experiment, "filter_paired_rows", lambda rows, *args: rows)
+    def paired(row, root):
+        i = int(row["id"])
+        return torch.full((400 + i * 160,), float(i + 1)), torch.zeros(400 + i * 160)
+    monkeypatch.setattr(experiment, "paired_audio", paired)
+    monkeypatch.setattr(experiment, "filterbank", lambda wave: wave[None])
+    class Bridge:
+        def __init__(self, **kwargs):
+            pass
+        def to(self, device):
+            return self
+        def eval(self):
+            return self
+        def load_state_dict(self, state):
+            pass
+        def __call__(self, noisy, enhanced):
+            assert omega is None, "fixed endpoints must bypass bridge inference"
+            return {"omega": noisy[:, 0, 0] / 10}
+    monkeypatch.setattr(experiment, "BridgingModule", Bridge)
+    batches = []
+    class ASR:
+        def __init__(self, *args):
+            pass
+        def transcribe_batch(self, waves):
+            batches.append([wave.clone() for wave in waves])
+            return [f"clip {(len(wave) - 400) // 160}" for wave in waves]
+    monkeypatch.setattr(experiment, "Recognizer", ASR)
+    checkpoint = tmp_path / "best.pt"
+    torch.save({"model_config": {}, "state_dict": {},
+                "provenance": {"asr_checkpoint": "offline", "max_tokens": 20}}, checkpoint)
+    predictions = []
+    for batch_size in (1, 2):
+        batches.clear()
+        output = tmp_path / f"eval-{batch_size}"
+        args = ["evaluate", "--manifest", str(manifest), "--checkpoint", str(checkpoint),
+                "--output", str(output), "--split", split, "--batch-size", str(batch_size)]
+        if omega is not None:
+            args.extend(["--omega", str(omega)])
+        main(args)
+        assert [len(batch) for batch in batches] == ([1] * 5 if batch_size == 1 else [2, 2, 1])
+        for i, wave in enumerate(wave for batch in batches for wave in batch):
+            weight = (i + 1) / 10 if omega is None else omega
+            torch.testing.assert_close(wave, torch.full((400 + i * 160,), (i + 1) * weight))
+        predictions.append((output / "predictions.jsonl").read_text())
+        metrics = json.loads((output / "metrics.json").read_text())
+        assert metrics["wer"] == metrics["cer"] == 0
+        assert metrics["examples"] == 5 and metrics["batch_size"] == batch_size
+    assert predictions[0] == predictions[1]
+    records = [json.loads(line) for line in predictions[1].splitlines()]
+    assert [row["id"] for row in records] == [str(i) for i in range(5)]
+    assert [row["omega"] for row in records] == pytest.approx(
+        [(i + 1) / 10 if omega is None else omega for i in range(5)])
+
+
+@pytest.mark.parametrize("size", ["0", "-1", "abc"])
+def test_evaluate_rejects_invalid_batch_size(size):
+    with pytest.raises(SystemExit) as exc:
+        main(["evaluate", "--manifest", "unused.jsonl", "--checkpoint", "unused.pt",
+              "--output", "unused", "--batch-size", size])
+    assert exc.value.code == 2

@@ -159,6 +159,19 @@ uv run python -m ml.fusion.bridging_experiment train \
   --batch-size 4 --accumulation 8 --workers 4 --eval-max-batches 4
 ```
 
+### Batched bridge evaluation
+
+Add `--batch-size 8` to `uv run python -m ml.fusion.bridging_experiment evaluate`
+commands (see the complete commands in [the Tiny workflow](cv25-tiny-run-all.md)).
+`--batch-size` is a positive integer, defaulting to 1. It controls clips per
+Whisper decoding call for learned bridge weights and fixed `--omega 0`/`1`
+endpoints alike. Bridge weights remain per-clip computations. Reduce the batch
+size if GPU memory runs out. Outputs preserve manifest order, include the last
+partial batch, and record `batch_size` in `metrics.json`. Batched GPU decoding
+may produce small numerical differences from single-clip decoding. The same
+option works with a paired test manifest and `--split test`. This option applies
+to `bridging_experiment evaluate`, not the separate final-test runner below.
+
 ### Final evaluation of all methods
 
 Use the shared final-test runner, rather than combining scores from the older

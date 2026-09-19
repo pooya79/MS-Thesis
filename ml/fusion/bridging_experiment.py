@@ -478,24 +478,33 @@ def evaluate(args: argparse.Namespace) -> None:
     references, hypotheses = [], []
     with ProgressReporter("bridge-evaluate", len(rows), args.output / "progress.json") as progress, \
             (args.output / "predictions.jsonl").open("w") as stream, torch.inference_mode():
-        for number, row in enumerate(rows, start=1):
-            noisy, enhanced = paired_audio(row, args.manifest.parent)
-            if args.omega is None:
-                omega = model(filterbank(noisy)[None].to(args.device),
-                              filterbank(enhanced)[None].to(args.device))["omega"].cpu().squeeze(0)
-            else:
-                omega = torch.tensor(args.omega)
-            hypothesis = asr(observation_addition(noisy, enhanced, omega))
-            references.append(row["sentence"].strip())
-            hypotheses.append(hypothesis)
-            stream.write(json.dumps({"id": row["id"], "source_id": row["source_id"],
-                                     "reference": references[-1], "hypothesis": hypothesis,
-                                     "omega": omega.item()}, ensure_ascii=False) + "\n")
-            progress.update(number, row["id"])
+        completed = 0
+        for batch_rows in _chunks(rows, args.batch_size):
+            mixtures, weights = [], []
+            for row in batch_rows:
+                noisy, enhanced = paired_audio(row, args.manifest.parent)
+                if args.omega is None:
+                    omega = model(filterbank(noisy)[None].to(args.device),
+                                  filterbank(enhanced)[None].to(args.device))["omega"].cpu().squeeze(0)
+                else:
+                    omega = torch.tensor(args.omega)
+                mixtures.append(observation_addition(noisy, enhanced, omega))
+                weights.append(omega.item())
+            batch_hypotheses = asr.transcribe_batch(mixtures)
+            if len(batch_hypotheses) != len(batch_rows):
+                raise ValueError("ASR must return one hypothesis per evaluation clip")
+            for row, hypothesis, weight in zip(batch_rows, batch_hypotheses, weights, strict=True):
+                references.append(row["sentence"].strip())
+                hypotheses.append(hypothesis)
+                stream.write(json.dumps({"id": row["id"], "source_id": row["source_id"],
+                                         "reference": references[-1], "hypothesis": hypothesis,
+                                         "omega": weight}, ensure_ascii=False) + "\n")
+            completed += len(batch_rows)
+            progress.update(completed, batch_rows[-1]["id"])
     (args.output / "metrics.json").write_text(json.dumps({"wer": wer(references, hypotheses),
         "cer": cer(references, hypotheses), "examples": len(rows), "split": args.split,
         "skipped_inputs": len(skipped),
-        "omega_override": args.omega, "provenance": provenance,
+        "omega_override": args.omega, "batch_size": args.batch_size, "provenance": provenance,
         "checkpoint": str(args.checkpoint),
         "manifest_sha256": hashlib.sha256(args.manifest.read_bytes()).hexdigest()}, indent=2))
 
@@ -539,6 +548,8 @@ def main(argv: list[str] | None = None) -> int:
     e.add_argument("--checkpoint", type=Path, required=True, help="trained bridge checkpoint")
     e.add_argument("--split", choices=("dev", "test"), default="dev", help="requested evaluation split")
     e.add_argument("--omega", type=float, default=None, help="fixed original-waveform weight; 0=SE, 1=original")
+    e.add_argument("--batch-size", type=int, default=1,
+                   help="positive integer clips per Whisper decoding batch; reduce after CUDA out-of-memory")
     e.set_defaults(func=evaluate)
     for sub in (p, t, e):
         output_help = ("cache output directory; existing directory allowed only with --resume" if sub is p

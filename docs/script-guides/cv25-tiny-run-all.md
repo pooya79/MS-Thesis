@@ -224,29 +224,34 @@ fusion. These remain pilot budgets, not a converged recipe.
 Fusion and ASR training already perform dev evaluation. The following commands
 provide decoded dev WER/CER for both learned bridge variants and its two endpoints.
 Each output directory must be new.
+Evaluation uses `--batch-size 8` below to decode up to eight clips in each Whisper
+call. The positive integer option defaults to 1; lower it if GPU memory runs out.
+Bridge weights are still computed per clip. Manifest order and the final partial
+batch are preserved, and `metrics.json` records the batch size.
+Batch decoding can cause small numerical differences from single-clip decoding.
 
 ```bash
 uv run python -m ml.fusion.bridging_experiment evaluate \
   --manifest artifacts/cv25-tiny-official/bridge-inputs/bridge_dev.jsonl \
   --checkpoint models/asr/cv25-tiny-official/bridge/best.pt \
-  --output artifacts/cv25-tiny-official/bridge-dev --split dev --device cuda
+  --output artifacts/cv25-tiny-official/bridge-dev --split dev --device cuda --batch-size 8
 
 uv run python -m ml.fusion.bridging_experiment evaluate \
   --manifest artifacts/cv25-tiny-official/bridge-inputs/bridge_dev.jsonl \
   --checkpoint models/asr/cv25-tiny-official/bridge-pq/best.pt \
-  --output artifacts/cv25-tiny-official/bridge-pq-dev --split dev --device cuda
+  --output artifacts/cv25-tiny-official/bridge-pq-dev --split dev --device cuda --batch-size 8
 
 uv run python -m ml.fusion.bridging_experiment evaluate \
   --manifest artifacts/cv25-tiny-official/bridge-inputs/bridge_dev.jsonl \
   --checkpoint models/asr/cv25-tiny-official/bridge/best.pt \
   --omega 1 --output artifacts/cv25-tiny-official/bridge-original-dev \
-  --split dev --device cuda
+  --split dev --device cuda --batch-size 8
 
 uv run python -m ml.fusion.bridging_experiment evaluate \
   --manifest artifacts/cv25-tiny-official/bridge-inputs/bridge_dev.jsonl \
   --checkpoint models/asr/cv25-tiny-official/bridge/best.pt \
   --omega 0 --output artifacts/cv25-tiny-official/bridge-enhanced-dev \
-  --split dev --device cuda
+  --split dev --device cuda --batch-size 8
 ```
 
 Review the dev results and training logs now. Any recipe changes require new
