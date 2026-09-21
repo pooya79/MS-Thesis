@@ -655,18 +655,11 @@ def test_build_train_dataset_requires_degraded(tmp_path: Path) -> None:
         build_train_dataset(config, segment_seconds=None, return_labels=False, tokenizer=None, include_clean=True)
 
 
-def test_joint_sampler_enforces_group_ratio_and_balances_dataset_sizes() -> None:
-    import torch
-    from torch.utils.data import ConcatDataset, TensorDataset
+@pytest.mark.parametrize("fraction", [0, 0.25, 1])
+def test_joint_sampler_uses_all_degraded_and_unique_clean_subset(fraction: float) -> None:
+    from torch.utils.data import ConcatDataset
 
-    # The last clean dataset is 100x larger, like FarsSpon relative to a small
-    # clean corpus, but equal-within-kind balancing gives both equal mass.
-    dataset = ConcatDataset([
-        TensorDataset(torch.arange(10)),
-        TensorDataset(torch.arange(20)),
-        TensorDataset(torch.arange(5)),
-        TensorDataset(torch.arange(500)),
-    ])
+    dataset = ConcatDataset([list(range(10)), list(range(20)), list(range(5)), list(range(500))])
     config = {
         "datasets": [
             {"path": "deg-a", "kind": "degraded"},
@@ -674,34 +667,52 @@ def test_joint_sampler_enforces_group_ratio_and_balances_dataset_sizes() -> None
             {"path": "clean-small", "kind": "clean"},
             {"path": "clean-large", "kind": "clean"},
         ],
-        "dataset_dir": "",
         "seed": 1337,
-        "joint_sampling": {
-            "degraded_fraction": 0.75,
-            "balance_datasets_within_kind": True,
-            "samples_per_epoch": 20000,
-        },
+        "joint_sampling": {"clean_fraction": fraction},
     }
     sampler = build_joint_sampler(config, dataset)
-    assert sampler is not None
-    boundaries = (10, 30, 35, 535)
-    counts = [0, 0, 0, 0]
-    for index in sampler:
-        counts[next(i for i, end in enumerate(boundaries) if index < end)] += 1
-
-    assert sum(counts[:2]) / sum(counts) == pytest.approx(0.75, abs=0.015)
-    assert counts[0] / counts[1] == pytest.approx(1.0, abs=0.08)
-    assert counts[2] / counts[3] == pytest.approx(1.0, abs=0.12)
+    rows = list(sampler)
+    assert len(rows) == len(sampler) == 30 + int(505 * fraction)
+    assert len(set(rows)) == len(rows)
+    assert sorted(row for row in rows if row < 30) == list(range(30))
+    assert all(0 <= row < 535 for row in rows)
+    assert rows == list(build_joint_sampler(config, dataset))
 
 
-@pytest.mark.parametrize("fraction", [0, 1, -0.1, 1.1, True])
-def test_joint_sampler_rejects_invalid_degraded_fraction(fraction: float) -> None:
-    config = load_fusion_config_from_dict({"joint_sampling": {"degraded_fraction": fraction}})
-    with pytest.raises(ValueError, match="degraded_fraction"):
+def test_joint_subset_sampler_resumes_same_order_across_epochs() -> None:
+    from torch.utils.data import DataLoader
+    from ml.fusion.train_fusion import JointSubsetSampler, training_groups
+
+    def groups(start):
+        sampler = JointSubsetSampler(10, 100, 0.25, 1337)
+        loader = DataLoader(list(range(110)), batch_size=5, sampler=sampler)
+        return [[int(row) for batch in group for row in batch]
+                for group in training_groups(loader, 2, start, 8, 1337)]
+
+    full = groups(0)
+    assert groups(2) == full[2:]
+    assert groups(5) == full[5:]
+    epochs = [sum(full[:4], []), sum(full[4:], [])]
+    for rows in epochs:
+        assert len(rows) == len(set(rows)) == 35
+        assert sorted(row for row in rows if row < 10) == list(range(10))
+    assert {row for row in epochs[0] if row >= 10} != {row for row in epochs[1] if row >= 10}
+
+
+@pytest.mark.parametrize("fraction", [-0.1, 1.1, True, None, "0.25", float("nan"), float("inf")])
+def test_joint_sampler_rejects_invalid_clean_fraction(fraction) -> None:
+    config = load_fusion_config_from_dict({"joint_sampling": {"clean_fraction": fraction}})
+    with pytest.raises(ValueError, match="clean_fraction"):
         validate_fusion_config(config)
 
 
-@pytest.mark.parametrize("sampling", [None, {"degraded_fraction": 0.75}])
+def test_joint_sampler_rejects_old_weighted_settings() -> None:
+    config = load_fusion_config_from_dict({"joint_sampling": {"degraded_fraction": 0.75}})
+    with pytest.raises(ValueError, match="weighted sampling settings"):
+        validate_fusion_config(config)
+
+
+@pytest.mark.parametrize("sampling", [None, {"clean_fraction": 0.25}])
 def test_joint_stage_trains_on_clean_dataset(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sampling: dict | None,
 ) -> None:
@@ -734,7 +745,7 @@ def test_joint_stage_trains_on_clean_dataset(
 
     budget = json.loads((run_dir / "config/joint_budget.json").read_text())
     assert budget["joint_sampling"] == (
-        None if sampling is None else {"degraded_fraction": 0.75, "balance_datasets_within_kind": True}
+        None if sampling is None else {"clean_fraction": 0.25}
     )
     assert (run_dir / "checkpoints" / "stage2_joint" / "fusion_model.pt").is_file()
     stages = {json.loads(line)["stage"] for line in (run_dir / "logs" / "train_metrics.jsonl").read_text().splitlines()}
@@ -782,7 +793,7 @@ def test_train_fusion_help(capsys: pytest.CaptureFixture[str]) -> None:
     assert "--resume-from-stage" in out
     assert "num_train_epochs" in out
     assert "gradient_accumulation_steps" in out
-    assert "joint_sampling" in out
+    assert "joint_sampling.clean_fraction" in out
 
 
 def _tiny_whisper_encoder():
@@ -1041,29 +1052,28 @@ def test_resume_checks_joint_sampling_distribution(tmp_path: Path) -> None:
         loader = torch.utils.data.DataLoader(dataset, batch_size=2, sampler=sampler, shuffle=sampler is None)
         return record_stage_budget(tmp_path, "joint", stage, loader, joint_sampling=sampling)
 
-    original = {"degraded_fraction": 0.75}
+    original = {"clean_fraction": 0.25}
     expected = record(original)
-    assert record({**original, "balance_datasets_within_kind": True, "samples_per_epoch": 10}) == expected
+    assert record(dict(original)) == expected
     path = tmp_path / "config/joint_budget.json"
     saved = path.read_text()
     for changed in (
-        {"degraded_fraction": 0.25},
-        {**original, "balance_datasets_within_kind": False},
-        {**original, "samples_per_epoch": 11},
+        {"clean_fraction": 0.26},  # Same rounded count, different recipe.
+        {"clean_fraction": 0.5},
         None,
     ):
         with pytest.raises(ValueError, match="budget changed"):
             record(changed)
         assert path.read_text() == saved
 
-    # Do not guess the distribution for weighted runs that never recorded it.
+    # Do not guess the fraction for subset runs that never recorded it.
     old_weighted = json.loads(saved)
     old_weighted.pop("joint_sampling")
     path.write_text(json.dumps(old_weighted))
     with pytest.raises(ValueError, match="budget changed"):
         record(original)
 
-    # A historical shuffle budget must not silently migrate to weighted sampling.
+    # A historical shuffle budget must not silently migrate to subset sampling.
     for key in ("sampler", "sampled_examples_per_epoch"):
         old_weighted.pop(key)
     path.write_text(json.dumps(old_weighted))
@@ -1107,12 +1117,9 @@ def test_compact_small_fusion_reuses_report_recipe_with_tiny_module_capacity() -
     assert compact["datasets"] == reported["datasets"]
     assert compact["enhancer"] == tiny["enhancer"]
     assert compact["fusion"] == tiny["fusion"]
-    assert compact["joint_sampling"] == {
-        "degraded_fraction": 0.75,
-        "balance_datasets_within_kind": True,
-        "samples_per_epoch": None,
-    }
+    assert compact["joint_sampling"] == {"clean_fraction": 0.25}
     for stage_name, stage in compact["stages"].items():
+        assert stage["eval_every"] == 10000
         assert stage["num_train_epochs"] == 1
         assert stage["max_steps"] is None
         assert stage["eval_save_at_epoch_end"] is True
