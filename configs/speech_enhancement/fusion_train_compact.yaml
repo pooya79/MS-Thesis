@@ -1,0 +1,107 @@
+# Compact Whisper Small fusion run derived from report/whisper-fusion-v2.
+# Reuses fusion v2's datasets, trained ASR initialization, and loss settings.
+# Reduces enhancer/fusion capacity to the CV25 Tiny module settings, switches
+# to one epoch per stage, and rebalances joint-stage clean/degraded sampling.
+run_dir: models/asr/fusion/run_005_compact
+
+# Reuse the reported Persian Whisper Small model trained on clean + degraded data.
+base_asr_checkpoint: models/asr/whisper-small-deg-v2/runs/whisper-small-fa/best
+
+# Keep the same training mixture as the reported Whisper Small fusion v2 run.
+datasets:
+  - data/cv-corpus-25.0
+  - data/cv-corpus-25.0-degraded-v2
+  - data/FarsSpon_train_dev
+  - data/cv-corpus-25.0-long
+  - data/FarsSpon_train_dev-long
+  - data/cv-corpus-25.0-degraded-long-v2
+  - data/fleurs-normalized
+dataset_dir: null
+sample_rate: 16000
+train_split: train
+valid_split: dev
+clean_target: bandwidth_aligned
+model_name: openai/whisper-small
+language: Persian
+task: transcribe
+generation_max_length: 225
+mixed_precision: false
+device: auto
+seed: 1337
+resume_from_stage: null
+
+# Stage 2 draws 75% degraded and 25% clean examples. Within each group, every
+# configured dataset receives equal probability mass, so the ~600k-row FarsSpon
+# corpus cannot dominate the joint objective. Sampling is seeded and uses
+# replacement; null keeps the draw count equal to the concatenated length.
+joint_sampling:
+  degraded_fraction: 0.75
+  balance_datasets_within_kind: true
+  samples_per_epoch: null
+
+# Same enhancer capacity as configs/speech_enhancement/cv25_tiny/cross_attention.yaml.
+enhancer:
+  type: residual_unet
+  base_channels: 32
+  depth: 3
+  bottleneck: none
+
+# Same fusion capacity as configs/speech_enhancement/cv25_tiny/cross_attention.yaml.
+fusion:
+  type: cross_attention
+  num_layers: 1
+  num_heads: 4
+  ffn_ratio: 2.0
+
+# Epoch-based compact curriculum. Stage lengths now follow the usable dataset
+# and the configured joint sampler instead of fixed optimizer-step ceilings.
+stages:
+  warmup:
+    num_train_epochs: 1
+    eval_save_at_epoch_end: true
+    batch_size: 8
+    segment_seconds: 4.0
+    lr_enhancer: 0.0002
+    lr_scheduler: cosine
+    warmup_steps: null
+    warmup_ratio: 0.05
+    lambda: 0.5
+    feature_match_weight: 0.5
+    num_workers: 4
+    log_every: 50
+    eval_every: 4000
+    save_every: 1000
+    eval_max_batches: null
+  fusion:
+    num_train_epochs: 1
+    eval_save_at_epoch_end: true
+    batch_size: 8
+    lr_frontend: 0.0002
+    lr_scheduler: cosine
+    warmup_steps: null
+    warmup_ratio: 0.05
+    lambda: 0.3
+    eval_every: 5000
+    save_every: 1000
+    eval_max_batches: null
+    grad_clip: 1.0
+    debug_steps:
+      start: 5880
+      end: 6990
+  joint:
+    num_train_epochs: 1
+    eval_save_at_epoch_end: true
+    batch_size: 4
+    lr_frontend: 0.0001
+    lr_whisper: 0.000005
+    lr_scheduler: cosine
+    warmup_steps: null
+    warmup_ratio: 0.05
+    lambda: 0.1
+    eval_every: 5000
+    save_every: 1000
+    eval_max_batches: null
+    grad_clip: 1.0
+    debug_steps:
+      start: 5880
+      end: 6020

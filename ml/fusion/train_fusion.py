@@ -19,6 +19,11 @@ stack from regressing on clean speech (the enhancer/fusion see clean input
 against an identity target). At least one degraded dataset is required. The
 legacy single ``dataset_dir`` is still accepted as one degraded dataset.
 
+The joint stage can use deterministic weighted sampling via ``joint_sampling``.
+This assigns explicit probability mass to degraded versus clean examples and can
+balance datasets within each group, preventing a very large clean corpus from
+overwhelming the smaller degraded collection. Validation is never reweighted.
+
 All three stages are implemented. Stage 0 trains the enhancer alone on ``L_enh``.
 Stages 1-2 build the encoder-feature-space fusion model (``ml/fusion/model.py``)
 on top of the warmed enhancer and the fine-tuned Persian Whisper backbone, and
@@ -94,6 +99,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "device": "auto",
     "seed": 1337,
     "resume_from_stage": None,
+    # Optional Stage-2 sampling. None preserves historical concatenation/shuffle.
+    "joint_sampling": None,
     "enhancer": {"type": "residual_unet", "base_channels": 32, "depth": 3},
     "fusion": {"type": "cross_attention", "num_layers": 2, "num_heads": 8, "ffn_ratio": 2.0},
     "stages": {
@@ -192,6 +199,26 @@ def validate_fusion_config(config: dict[str, Any]) -> None:
                 raise ValueError(f"datasets entry kind must be 'degraded' or 'clean'; got {kind!r}")
     elif not str(config.get("dataset_dir", "")).strip():
         raise ValueError("set datasets (or the legacy dataset_dir) to at least one dataset directory")
+    sampling = config.get("joint_sampling")
+    if sampling is not None:
+        if not isinstance(sampling, dict):
+            raise ValueError("joint_sampling must be a mapping or null")
+        fraction = sampling.get("degraded_fraction")
+        if (
+            isinstance(fraction, bool)
+            or fraction is None
+            or not math.isfinite(float(fraction))
+            or not 0 < float(fraction) < 1
+        ):
+            raise ValueError("joint_sampling.degraded_fraction must be finite and strictly between 0 and 1")
+        balance = sampling.get("balance_datasets_within_kind", True)
+        if not isinstance(balance, bool):
+            raise ValueError("joint_sampling.balance_datasets_within_kind must be a boolean")
+        samples = sampling.get("samples_per_epoch")
+        if samples is not None and (
+            isinstance(samples, bool) or int(samples) != samples or int(samples) < 1
+        ):
+            raise ValueError("joint_sampling.samples_per_epoch must be a positive integer or null")
     if config["clean_target"] not in {"bandwidth_aligned", "full_band"}:
         raise ValueError("clean_target must be 'bandwidth_aligned' or 'full_band'")
     resume = config.get("resume_from_stage")
@@ -377,6 +404,7 @@ def make_dataloader(
     shuffle: bool,
     num_workers: int,
     seed: int,
+    sampler: Any = None,
 ) -> Any:
     """Build a deterministic ``DataLoader`` (seeded shuffle generator + workers)."""
     from torch.utils.data import DataLoader
@@ -384,11 +412,12 @@ def make_dataloader(
     return DataLoader(
         dataset,
         batch_size=int(batch_size),
-        shuffle=shuffle,
+        shuffle=shuffle if sampler is None else False,
+        sampler=sampler,
         num_workers=int(num_workers),
         collate_fn=collate_mels,
         drop_last=False,
-        generator=_seeded_generator(seed) if shuffle else None,
+        generator=_seeded_generator(seed) if shuffle or sampler is not None else None,
         worker_init_fn=_worker_init_fn if num_workers else None,
         persistent_workers=bool(num_workers),
     )
@@ -453,6 +482,64 @@ def build_train_dataset(
                 )
             )
     return concat_datasets(datasets)
+
+
+def build_joint_sampler(config: dict[str, Any], dataset: Any) -> Any | None:
+    """Build the optional deterministic Stage-2 clean/degraded sampler.
+
+    ``degraded_fraction`` is the expected probability of drawing any degraded
+    example. With ``balance_datasets_within_kind`` enabled, every dataset shares
+    its group's mass equally regardless of corpus size. Sampling uses replacement
+    and ``samples_per_epoch`` defaults to the concatenated dataset length.
+    """
+    sampling = config.get("joint_sampling")
+    if sampling is None:
+        return None
+
+    import torch
+    from torch.utils.data import ConcatDataset, WeightedRandomSampler
+
+    degraded_count = len(degraded_dataset_dirs(config))
+    clean_count = len(clean_dataset_dirs(config))
+    if degraded_count < 1 or clean_count < 1:
+        raise ValueError("joint_sampling requires at least one degraded and one clean dataset")
+    components = list(dataset.datasets) if isinstance(dataset, ConcatDataset) else [dataset]
+    if len(components) != degraded_count + clean_count:
+        raise ValueError("joint_sampling dataset components do not match configured degraded/clean datasets")
+
+    degraded_fraction = float(sampling["degraded_fraction"])
+    balance_datasets = bool(sampling.get("balance_datasets_within_kind", True))
+    group_specs = (
+        (components[:degraded_count], degraded_fraction),
+        (components[degraded_count:], 1.0 - degraded_fraction),
+    )
+    weights: list[float] = []
+    for group, group_mass in group_specs:
+        if any(len(component) < 1 for component in group):
+            raise ValueError("joint_sampling cannot sample an empty training dataset")
+        if balance_datasets:
+            dataset_mass = group_mass / len(group)
+            for component in group:
+                weights.extend([dataset_mass / len(component)] * len(component))
+        else:
+            example_weight = group_mass / sum(len(component) for component in group)
+            for component in group:
+                weights.extend([example_weight] * len(component))
+
+    configured_samples = sampling.get("samples_per_epoch")
+    num_samples = len(dataset) if configured_samples is None else int(configured_samples)
+    logging.info(
+        "joint sampling: degraded_fraction=%.3f balance_datasets_within_kind=%s samples_per_epoch=%s",
+        degraded_fraction,
+        balance_datasets,
+        num_samples,
+    )
+    return WeightedRandomSampler(
+        torch.tensor(weights, dtype=torch.double),
+        num_samples=num_samples,
+        replacement=True,
+        generator=_seeded_generator(int(config["seed"])),
+    )
 
 
 def build_dev_loader(
@@ -789,18 +876,34 @@ def stage_event_due(stage: dict[str, Any], every: int, step: int, per_epoch: int
     )
 
 
-def record_stage_budget(run_dir: Path, name: str, stage: dict[str, Any], loader: Any) -> tuple[int, int]:
+def record_stage_budget(
+    run_dir: Path, name: str, stage: dict[str, Any], loader: Any,
+    *, joint_sampling: dict[str, Any] | None = None,
+) -> tuple[int, int]:
     per_epoch, total = stage_step_budget(stage, loader)
     budget = {
         "train_examples": len(loader.dataset), "microbatches_per_epoch": len(loader),
+        "sampled_examples_per_epoch": len(loader.sampler),
+        "sampler": type(loader.sampler).__name__,
+        "joint_sampling": None if joint_sampling is None else {
+            "degraded_fraction": float(joint_sampling["degraded_fraction"]),
+            "balance_datasets_within_kind": joint_sampling.get("balance_datasets_within_kind", True),
+        },
         "optimizer_steps_per_epoch": per_epoch, "max_optimizer_steps": total,
         "num_train_epochs": stage.get("num_train_epochs"),
         "batch_size": int(stage["batch_size"]),
         "gradient_accumulation_steps": int(stage.get("gradient_accumulation_steps", 1)),
     }
     path = run_dir / "config" / f"{name}_budget.json"
-    if path.exists() and json.loads(path.read_text()) != budget:
-        raise ValueError(f"{name} training budget changed; use a new run directory")
+    if path.exists():
+        previous = json.loads(path.read_text())
+        # Before sampling metadata was recorded, training shuffled every row
+        # exactly once per epoch. Only migrate those historical defaults.
+        previous.setdefault("sampled_examples_per_epoch", previous["train_examples"])
+        previous.setdefault("sampler", "RandomSampler")
+        previous.setdefault("joint_sampling", None)
+        if previous != budget:
+            raise ValueError(f"{name} training budget changed; use a new run directory")
     if not path.exists() and stage.get("num_train_epochs") is not None:
         checkpoint = run_dir / "checkpoints" / STAGE_DIRS[name] / "last.pt"
         if checkpoint.exists():
@@ -1189,12 +1292,14 @@ def _run_fusion_stage(
         include_clean=(stage_name == "joint"),
         max_label_tokens=max_label_tokens,
     )
+    train_sampler = build_joint_sampler(config, train_dataset) if stage_name == "joint" else None
     loader = make_dataloader(
         train_dataset,
         batch_size=int(stage["batch_size"]),
-        shuffle=True,
+        shuffle=train_sampler is None,
         num_workers=int(stage.get("num_workers", 0)),
         seed=int(config["seed"]),
+        sampler=train_sampler,
     )
     dev_loader = build_dev_loader(
         config,
@@ -1238,7 +1343,10 @@ def _run_fusion_stage(
     amp_enabled = use_amp(config["mixed_precision"], device)
     scaler = torch.amp.GradScaler("cuda", enabled=amp_enabled)
     lam = float(stage.get("lambda", 0.3))
-    steps_per_epoch, max_steps = record_stage_budget(run_dir, stage_name, stage, loader)
+    steps_per_epoch, max_steps = record_stage_budget(
+        run_dir, stage_name, stage, loader,
+        joint_sampling=config.get("joint_sampling") if stage_name == "joint" else None,
+    )
     log_every = int(stage.get("log_every", 50))
     save_every = int(stage.get("save_every", 1000))
     eval_every = int(stage.get("eval_every", 0) or 0)
@@ -1467,7 +1575,8 @@ def main(argv: list[str] | None = None) -> int:
             "fusion -> Stage 2 joint) from one YAML config, writing all artifacts to one "
             "run directory. Configure num_train_epochs (positive float) or legacy max_steps "
             "per stage; gradient_accumulation_steps defaults to 1. "
-            "Consumes a degraded dataset from generate_degraded_dataset. Samples whose "
+            "Consumes a degraded dataset from generate_degraded_dataset. Optional "
+            "joint_sampling balances degraded and clean corpora in Stage 2. Samples whose "
             "labels exceed the loaded Whisper decoder limit are logged and skipped."
         )
     )

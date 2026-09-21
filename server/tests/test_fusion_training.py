@@ -19,6 +19,7 @@ from ml.enhancement.dataset import (
 )
 from ml.fusion.train_fusion import (
     build_enhancer,
+    build_joint_sampler,
     build_train_dataset,
     clean_dataset_dirs,
     configure_whisper_generation,
@@ -654,7 +655,56 @@ def test_build_train_dataset_requires_degraded(tmp_path: Path) -> None:
         build_train_dataset(config, segment_seconds=None, return_labels=False, tokenizer=None, include_clean=True)
 
 
-def test_joint_stage_trains_on_clean_dataset(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_joint_sampler_enforces_group_ratio_and_balances_dataset_sizes() -> None:
+    import torch
+    from torch.utils.data import ConcatDataset, TensorDataset
+
+    # The last clean dataset is 100x larger, like FarsSpon relative to a small
+    # clean corpus, but equal-within-kind balancing gives both equal mass.
+    dataset = ConcatDataset([
+        TensorDataset(torch.arange(10)),
+        TensorDataset(torch.arange(20)),
+        TensorDataset(torch.arange(5)),
+        TensorDataset(torch.arange(500)),
+    ])
+    config = {
+        "datasets": [
+            {"path": "deg-a", "kind": "degraded"},
+            {"path": "deg-b", "kind": "degraded"},
+            {"path": "clean-small", "kind": "clean"},
+            {"path": "clean-large", "kind": "clean"},
+        ],
+        "dataset_dir": "",
+        "seed": 1337,
+        "joint_sampling": {
+            "degraded_fraction": 0.75,
+            "balance_datasets_within_kind": True,
+            "samples_per_epoch": 20000,
+        },
+    }
+    sampler = build_joint_sampler(config, dataset)
+    assert sampler is not None
+    boundaries = (10, 30, 35, 535)
+    counts = [0, 0, 0, 0]
+    for index in sampler:
+        counts[next(i for i, end in enumerate(boundaries) if index < end)] += 1
+
+    assert sum(counts[:2]) / sum(counts) == pytest.approx(0.75, abs=0.015)
+    assert counts[0] / counts[1] == pytest.approx(1.0, abs=0.08)
+    assert counts[2] / counts[3] == pytest.approx(1.0, abs=0.12)
+
+
+@pytest.mark.parametrize("fraction", [0, 1, -0.1, 1.1, True])
+def test_joint_sampler_rejects_invalid_degraded_fraction(fraction: float) -> None:
+    config = load_fusion_config_from_dict({"joint_sampling": {"degraded_fraction": fraction}})
+    with pytest.raises(ValueError, match="degraded_fraction"):
+        validate_fusion_config(config)
+
+
+@pytest.mark.parametrize("sampling", [None, {"degraded_fraction": 0.75}])
+def test_joint_stage_trains_on_clean_dataset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sampling: dict | None,
+) -> None:
     import ml.fusion.train_fusion as train_fusion
     from ml.fusion.train_fusion import run_stage_joint
 
@@ -678,9 +728,14 @@ def test_joint_stage_trains_on_clean_dataset(tmp_path: Path, monkeypatch: pytest
     config_path = run_dir.parent / "fusion.yaml"
     config_path.write_text(yaml.safe_dump(overrides), encoding="utf-8")
     config = load_fusion_config(config_path)
+    config["joint_sampling"] = sampling
     enhancer = build_enhancer(config["enhancer"])
     run_stage_joint(config, run_dir, enhancer, "cpu")
 
+    budget = json.loads((run_dir / "config/joint_budget.json").read_text())
+    assert budget["joint_sampling"] == (
+        None if sampling is None else {"degraded_fraction": 0.75, "balance_datasets_within_kind": True}
+    )
     assert (run_dir / "checkpoints" / "stage2_joint" / "fusion_model.pt").is_file()
     stages = {json.loads(line)["stage"] for line in (run_dir / "logs" / "train_metrics.jsonl").read_text().splitlines()}
     assert "joint" in stages
@@ -727,6 +782,7 @@ def test_train_fusion_help(capsys: pytest.CaptureFixture[str]) -> None:
     assert "--resume-from-stage" in out
     assert "num_train_epochs" in out
     assert "gradient_accumulation_steps" in out
+    assert "joint_sampling" in out
 
 
 def _tiny_whisper_encoder():
@@ -944,6 +1000,77 @@ def test_changed_or_legacy_epoch_budget_requires_new_run(tmp_path: Path) -> None
         record_stage_budget(legacy, "warmup", stage, loader)
 
 
+@pytest.mark.parametrize("epoch_based", [False, True])
+def test_resume_migrates_historical_shuffle_budget(tmp_path: Path, epoch_based: bool) -> None:
+    import json
+    import torch
+    from ml.fusion.train_fusion import record_stage_budget
+
+    loader = torch.utils.data.DataLoader(list(range(9)), batch_size=2, shuffle=True)
+    stage = {"batch_size": 2, **({"num_train_epochs": 1} if epoch_based else {"max_steps": 7})}
+    expected = record_stage_budget(tmp_path, "joint", stage, loader)
+    path = tmp_path / "config/joint_budget.json"
+    historical = json.loads(path.read_text())
+    for key in ("sampler", "sampled_examples_per_epoch", "joint_sampling"):
+        historical.pop(key)
+    path.write_text(json.dumps(historical))
+
+    assert record_stage_budget(tmp_path, "joint", stage, loader) == expected
+    migrated = json.loads(path.read_text())
+    assert migrated["sampler"] == "RandomSampler"
+    assert migrated["sampled_examples_per_epoch"] == 9
+    assert migrated["joint_sampling"] is None
+    with pytest.raises(ValueError, match="budget changed"):
+        record_stage_budget(tmp_path, "joint", dict(stage, batch_size=3), loader)
+
+
+def test_resume_checks_joint_sampling_distribution(tmp_path: Path) -> None:
+    import json
+    import torch
+    from ml.fusion.train_fusion import record_stage_budget
+
+    dataset = torch.utils.data.ConcatDataset([list(range(3)), list(range(7))])
+    config = {
+        "seed": 1337,
+        "datasets": [{"path": "deg", "kind": "degraded"}, {"path": "clean", "kind": "clean"}],
+    }
+    stage = {"batch_size": 2, "num_train_epochs": 1}
+
+    def record(sampling):
+        sampler = build_joint_sampler(dict(config, joint_sampling=sampling), dataset)
+        loader = torch.utils.data.DataLoader(dataset, batch_size=2, sampler=sampler, shuffle=sampler is None)
+        return record_stage_budget(tmp_path, "joint", stage, loader, joint_sampling=sampling)
+
+    original = {"degraded_fraction": 0.75}
+    expected = record(original)
+    assert record({**original, "balance_datasets_within_kind": True, "samples_per_epoch": 10}) == expected
+    path = tmp_path / "config/joint_budget.json"
+    saved = path.read_text()
+    for changed in (
+        {"degraded_fraction": 0.25},
+        {**original, "balance_datasets_within_kind": False},
+        {**original, "samples_per_epoch": 11},
+        None,
+    ):
+        with pytest.raises(ValueError, match="budget changed"):
+            record(changed)
+        assert path.read_text() == saved
+
+    # Do not guess the distribution for weighted runs that never recorded it.
+    old_weighted = json.loads(saved)
+    old_weighted.pop("joint_sampling")
+    path.write_text(json.dumps(old_weighted))
+    with pytest.raises(ValueError, match="budget changed"):
+        record(original)
+
+    # A historical shuffle budget must not silently migrate to weighted sampling.
+    for key in ("sampler", "sampled_examples_per_epoch"):
+        old_weighted.pop(key)
+    path.write_text(json.dumps(old_weighted))
+    with pytest.raises(ValueError, match="budget changed"):
+        record(original)
+
+
 def test_cv25_tiny_recipes_match_training_exposure() -> None:
     from ml.asr.train_whisper_small import load_training_config
 
@@ -967,3 +1094,33 @@ def test_cv25_tiny_recipes_match_training_exposure() -> None:
             assert stage["eval_save_at_epoch_end"] is True
             assert stage["warmup_steps"] is None and stage["warmup_ratio"] == 0.05
     assert stages[0] == stages[1] == stages[2]
+
+
+def test_compact_small_fusion_reuses_report_recipe_with_tiny_module_capacity() -> None:
+    root = Path(__file__).resolve().parents[2]
+    tiny = load_fusion_config(root / "configs/speech_enhancement/cv25_tiny/cross_attention.yaml")
+    compact = load_fusion_config(root / "configs/speech_enhancement/fusion_train_compact.yaml")
+    reported = load_fusion_config(root / "report/whisper-fusion-v2/fusion_train_v4.yaml")
+
+    assert compact["model_name"] == "openai/whisper-small"
+    assert compact["base_asr_checkpoint"] == reported["base_asr_checkpoint"]
+    assert compact["datasets"] == reported["datasets"]
+    assert compact["enhancer"] == tiny["enhancer"]
+    assert compact["fusion"] == tiny["fusion"]
+    assert compact["joint_sampling"] == {
+        "degraded_fraction": 0.75,
+        "balance_datasets_within_kind": True,
+        "samples_per_epoch": None,
+    }
+    for stage_name, stage in compact["stages"].items():
+        assert stage["num_train_epochs"] == 1
+        assert stage["max_steps"] is None
+        assert stage["eval_save_at_epoch_end"] is True
+        assert stage["warmup_steps"] is None
+        assert stage["warmup_ratio"] == 0.05
+        # Keep the reported optimizer/loss settings while changing the budget.
+        for key in ({"warmup": ("lr_enhancer", "lambda"),
+                     "fusion": ("lr_frontend", "lambda"),
+                     "joint": ("lr_frontend", "lr_whisper", "lambda")}[stage_name]):
+            assert stage[key] == reported["stages"][stage_name][key]
+    assert compact["run_dir"] not in {reported["run_dir"], tiny["run_dir"]}
