@@ -794,6 +794,7 @@ def test_train_fusion_help(capsys: pytest.CaptureFixture[str]) -> None:
     assert "num_train_epochs" in out
     assert "gradient_accumulation_steps" in out
     assert "joint_sampling.clean_fraction" in out
+    assert "max_audio_failures" in out
 
 
 def _tiny_whisper_encoder():
@@ -1131,3 +1132,157 @@ def test_compact_small_fusion_reuses_report_recipe_with_tiny_module_capacity() -
                      "joint": ("lr_frontend", "lr_whisper", "lambda")}[stage_name]):
             assert stage[key] == reported["stages"][stage_name][key]
     assert compact["run_dir"] not in {reported["run_dir"], tiny["run_dir"]}
+
+
+@pytest.fixture
+def single_torch_thread():
+    import torch
+    previous = torch.get_num_threads()
+    torch.set_num_threads(1)
+    yield
+    torch.set_num_threads(previous)
+
+
+@pytest.mark.parametrize("workers", [0, 2])
+@pytest.mark.parametrize("bad_source", ["degraded", "clean", "clean_dataset"])
+def test_unreadable_training_audio_reported_and_skipped(tmp_path, monkeypatch, workers, bad_source, single_torch_thread):
+    import torch
+    from ml.enhancement import dataset as data
+    from ml.fusion.train_fusion import make_dataloader, training_groups
+
+    monkeypatch.setattr(data, "waveform_to_log_mel", lambda *a, **kw: torch.zeros(80, 20))
+    if bad_source == "clean_dataset":
+        root = _make_clean_dataset(tmp_path / "clean_ds")
+        dataset = CleanMelDataset(root, split="train")
+        bad = dataset.clips[0].audio_path
+    else:
+        root = _make_degraded_dataset(tmp_path / "ds")
+        dataset = DegradedMelDataset(root, split="train")
+        bad = getattr(dataset.pairs[0], f"{bad_source}_path")
+    bad.write_bytes(b"invalid audio")
+    report = tmp_path / "failures.jsonl"
+    loader = make_dataloader(dataset, batch_size=2, shuffle=False, num_workers=workers,
+                             seed=1, audio_failure_report=report)
+    loader.timeout = 20 if workers else 0
+    try:
+        groups = list(training_groups(loader, 1, 0, 1, 1))
+    finally:
+        if loader._iterator is not None:
+            loader._iterator._shutdown_workers()
+    assert len(groups) == 1 and len(groups[0]) == 1
+    assert groups[0][0]["noisy_mel"].shape[0] == 1
+    records = [json.loads(line) for line in report.read_text().splitlines()]
+    assert len(records) == 1
+    assert records[0]["path"] == str(bad)
+    assert records[0]["error_type"] == "LibsndfileError"
+    assert records[0]["pair_id"]
+    # Evaluation remains strict, including a readable error across workers.
+    strict = make_dataloader(dataset, batch_size=2, shuffle=False, num_workers=workers, seed=1)
+    strict.timeout = 20 if workers else 0
+    try:
+        with pytest.raises(RuntimeError, match="Cannot read audio"):
+            next(iter(strict))
+    finally:
+        if strict._iterator is not None:
+            strict._iterator._shutdown_workers()
+
+
+def test_audio_failure_limit_and_empty_batches(tmp_path):
+    from ml.enhancement.dataset import DegradedMelDataset
+    from ml.fusion.train_fusion import make_dataloader, training_groups
+
+    root = _make_degraded_dataset(tmp_path / "ds")
+    dataset = DegradedMelDataset(root, split="train")
+    for pair in dataset.pairs:
+        pair.degraded_path.unlink()
+    report = tmp_path / "failures.jsonl"
+    loader = make_dataloader(dataset, batch_size=1, shuffle=False, num_workers=0,
+                             seed=1, audio_failure_report=report, max_audio_failures=1)
+    groups = training_groups(loader, 1, 0, 2, 1)
+    assert next(groups) == []
+    with pytest.raises(RuntimeError, match="exceeded max_audio_failures=1"):
+        next(groups)
+    assert len(report.read_text().splitlines()) == 2
+    loader.max_audio_failures = 100
+    with pytest.raises(RuntimeError, match="no readable audio"):
+        list(training_groups(loader, 1, 0, 2, 1))
+
+
+def test_skip_audio_does_not_hide_programming_errors(tmp_path, monkeypatch):
+    from ml.enhancement import dataset as data
+    root = _make_degraded_dataset(tmp_path / "ds")
+    dataset = data.SkipUnreadableAudio(data.DegradedMelDataset(root, split="train"))
+    def broken(*args, **kwargs):
+        raise ValueError("feature bug")
+    monkeypatch.setattr(data, "waveform_to_log_mel", broken)
+    with pytest.raises(ValueError, match="feature bug"):
+        dataset[0]
+
+
+def test_skip_audio_handles_unprintable_decoder_error(tmp_path, monkeypatch):
+    from ml.enhancement import dataset as data
+    root = _make_degraded_dataset(tmp_path / "ds")
+    class BrokenError(sf.LibsndfileError):
+        def __str__(self):
+            raise TypeError("cannot format")
+    def broken(*args, **kwargs):
+        raise BrokenError(1)
+    monkeypatch.setattr(data, "load_audio", broken)
+    item = data.SkipUnreadableAudio(data.DegradedMelDataset(root, split="train"))[0]
+    assert item["audio_failure"]["error"] == "exception message unavailable"
+
+
+@pytest.mark.parametrize("limit", [-1, True, 1.5, "100"])
+def test_invalid_audio_failure_limit(tmp_path, limit):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump({"dataset_dir": "unused", "max_audio_failures": limit}))
+    with pytest.raises(ValueError, match="max_audio_failures"):
+        load_fusion_config(config_path)
+
+
+@pytest.mark.parametrize("stage_name", ["warmup", "fusion", "joint"])
+def test_all_stages_skip_empty_audio_group(tmp_path, monkeypatch, stage_name):
+    import torch
+    import ml.fusion.train_fusion as training
+
+    monkeypatch.setattr(training, "build_fusion_model", _tiny_dual_view_model)
+    monkeypatch.setattr(training, "load_tokenizer", lambda config: _FakeTokenizer())
+    root = _make_degraded_dataset(tmp_path / "ds")
+    pairs = read_mapping(root, "train")
+    pairs[0].clean_path.write_bytes(b"broken")
+    run_dir = tmp_path / "run"
+    config = load_fusion_config(_tiny_config(root, run_dir))
+    config["valid_split"] = None
+    config["stages"][stage_name].update({
+        "max_steps": 2, "batch_size": 1, "num_workers": 0,
+        "save_every": 1, "eval_every": 0, "log_every": 1,
+    })
+    result = training.STAGE_RUNNERS[stage_name](config, run_dir, build_enhancer(config["enhancer"]), "cpu")
+    assert result.is_file()
+    assert torch.load(result, weights_only=False)["step"] == 2
+    report = run_dir / f"{training.STAGE_DIRS[stage_name]}_audio_failures.jsonl"
+    records = [json.loads(line) for line in report.read_text().splitlines()]
+    assert len(records) == 1 and records[0]["path"] == str(pairs[0].clean_path)
+    # Exactly one group trained; the unreadable group consumed no optimizer update.
+    metrics = [json.loads(line) for line in (run_dir / "logs/train_metrics.jsonl").read_text().splitlines()]
+    assert len(metrics) == 1
+
+
+def test_audio_skips_preserve_resumed_order(tmp_path, monkeypatch):
+    import torch
+    from ml.enhancement import dataset as data
+    from ml.fusion.train_fusion import make_dataloader, training_groups
+
+    monkeypatch.setattr(data, "waveform_to_log_mel", lambda *a, **kw: torch.zeros(80, 20))
+    dataset = DegradedMelDataset(_make_degraded_dataset(tmp_path / "ds", n=4), split="train")
+    dataset.pairs[1].degraded_path.unlink()
+    report = tmp_path / "failures.jsonl"
+    def collect(start):
+        loader = make_dataloader(dataset, batch_size=1, shuffle=True, num_workers=0,
+                                 seed=7, audio_failure_report=report)
+        return [[pair for batch in group for pair in batch["pair_id"]]
+                for group in training_groups(loader, 2, start, 4, 7)]
+    full = collect(0)
+    resumed = collect(1)
+    assert resumed == full[1:]
+    assert len(report.read_text().splitlines()) == 4  # appends, including replayed reads

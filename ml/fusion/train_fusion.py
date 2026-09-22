@@ -68,7 +68,9 @@ from ml.asr.whisper_features import WHISPER_SAMPLE_RATE
 from ml.enhancement.dataset import (
     CleanMelDataset,
     DegradedMelDataset,
+    SkipUnreadableAudio,
     collate_mels,
+    collate_training_mels,
     detect_dataset_kind,
 )
 from ml.enhancement.enhancer import build_enhancer, enhancement_l1_loss
@@ -84,6 +86,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # with kind in {degraded, clean}; kind auto-detected when omitted). When left
     # null the legacy single `dataset_dir` is used as one degraded dataset.
     "datasets": None,
+    "max_audio_failures": 100,
     "dataset_dir": "data/cv-corpus-25.0-degraded",
     "sample_rate": WHISPER_SAMPLE_RATE,
     "train_split": "train",
@@ -186,6 +189,9 @@ def load_fusion_config(config_path: Path) -> dict[str, Any]:
 
 
 def validate_fusion_config(config: dict[str, Any]) -> None:
+    limit = config.get("max_audio_failures", 100)
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
+        raise ValueError("max_audio_failures must be a nonnegative integer")
     datasets = config.get("datasets")
     if datasets is not None:
         if not isinstance(datasets, list) or not datasets:
@@ -398,22 +404,28 @@ def make_dataloader(
     num_workers: int,
     seed: int,
     sampler: Any = None,
+    audio_failure_report: Path | None = None,
+    max_audio_failures: int = 100,
 ) -> Any:
     """Build a deterministic ``DataLoader`` (seeded shuffle generator + workers)."""
     from torch.utils.data import DataLoader
 
-    return DataLoader(
-        dataset,
+    loader = DataLoader(
+        SkipUnreadableAudio(dataset) if audio_failure_report is not None else dataset,
         batch_size=int(batch_size),
         shuffle=shuffle if sampler is None else False,
         sampler=sampler,
         num_workers=int(num_workers),
-        collate_fn=collate_mels,
+        collate_fn=collate_training_mels if audio_failure_report is not None else collate_mels,
         drop_last=False,
         generator=_seeded_generator(seed) if shuffle or sampler is not None else None,
         worker_init_fn=_worker_init_fn if num_workers else None,
         persistent_workers=bool(num_workers),
     )
+
+    loader.audio_failure_report = audio_failure_report
+    loader.max_audio_failures = max_audio_failures
+    return loader
 
 
 def concat_datasets(datasets: list[Any]) -> Any | None:
@@ -843,17 +855,41 @@ def training_groups(
     so dropout/augmentation trajectories are not guaranteed bitwise identical.
     """
     per_epoch = math.ceil(len(loader) / accumulation)
+    failures = 0
     for epoch in range(start_step // per_epoch, math.ceil(max_steps / per_epoch)):
         # Keep the sampler RNG independent of DataLoader worker/base-seed draws.
         loader.sampler.generator = _seeded_generator(seed + epoch)
         batches = iter(loader)
+        epoch_has_audio = False
         for index in range(per_epoch):
             step = epoch * per_epoch + index
             if step >= max_steps:
+                if not epoch_has_audio:
+                    raise RuntimeError("Training epoch contained no readable audio")
                 return
             group = list(islice(batches, accumulation))
+            if getattr(loader, "audio_failure_report", None) is not None:
+                valid = []
+                for batch in group:
+                    for failure in batch.pop("audio_failures", []):
+                        failures += 1
+                        append_jsonl(loader.audio_failure_report, {
+                            "timestamp": utc_now(), "epoch": epoch, "step": step + 1,
+                            **failure,
+                        })
+                        logging.warning("Skipping unreadable audio pair=%s path=%s: %s",
+                                        failure["pair_id"], failure["path"], failure["error"])
+                    if "noisy_mel" in batch:
+                        valid.append(batch)
+                group = valid
+                if failures > loader.max_audio_failures:
+                    raise RuntimeError(f"Audio failures exceeded max_audio_failures={loader.max_audio_failures}; "
+                                       f"see {loader.audio_failure_report}")
+            epoch_has_audio = epoch_has_audio or bool(group)
             if step >= start_step:
                 yield group
+        if not epoch_has_audio:
+            raise RuntimeError("Training epoch contained no readable audio")
 
 
 def stage_event_due(stage: dict[str, Any], every: int, step: int, per_epoch: int, total: int) -> bool:
@@ -992,6 +1028,8 @@ def run_stage_warmup(
         shuffle=True,
         num_workers=int(stage.get("num_workers", 0)),
         seed=int(config["seed"]),
+        audio_failure_report=run_dir / "stage0_warmup_audio_failures.jsonl",
+        max_audio_failures=config.get("max_audio_failures", 100),
     )
     dev_loader = build_dev_loader(config, stage, return_labels=False)
     enhancer.to(device).train()
@@ -1020,6 +1058,12 @@ def run_stage_warmup(
     progress = make_step_bar("stage0 warmup", max_steps, initial=start_step)
     accumulation = int(stage.get("gradient_accumulation_steps", 1))
     for group in training_groups(loader, accumulation, start_step, max_steps, int(config["seed"])):
+        if not group:
+            # Consume the data position for deterministic resume, without an update.
+            step += 1
+            if progress is not None:
+                progress.update(1)
+            continue
         optimizer.zero_grad(set_to_none=True)
         examples = sum(len(batch["noisy_mel"]) for batch in group)
         totals = {"loss": 0.0, "l_enh": 0.0, "l_feat": 0.0, "l_asr": 0.0}
@@ -1286,6 +1330,8 @@ def _run_fusion_stage(
         num_workers=int(stage.get("num_workers", 0)),
         seed=int(config["seed"]),
         sampler=train_sampler,
+        audio_failure_report=run_dir / f"{STAGE_DIRS[stage_name]}_audio_failures.jsonl",
+        max_audio_failures=config.get("max_audio_failures", 100),
     )
     dev_loader = build_dev_loader(
         config,
@@ -1359,6 +1405,12 @@ def _run_fusion_stage(
     progress = make_step_bar(stage_name, max_steps, initial=start_step)
     accumulation = int(stage.get("gradient_accumulation_steps", 1))
     for group in training_groups(loader, accumulation, start_step, max_steps, int(config["seed"])):
+        if not group:
+            # Consume the data position for deterministic resume, without an update.
+            step += 1
+            if progress is not None:
+                progress.update(1)
+            continue
         optimizer.zero_grad(set_to_none=True)
         examples = sum(len(batch["noisy_mel"]) for batch in group)
         totals = {"loss": 0.0, "l_enh": 0.0, "l_feat": 0.0, "l_asr": 0.0}
@@ -1563,7 +1615,9 @@ def main(argv: list[str] | None = None) -> int:
             "per stage; gradient_accumulation_steps defaults to 1. "
             "Consumes a degraded dataset from generate_degraded_dataset. Optional "
             "joint_sampling.clean_fraction selects a clean subset (0 to 1) alongside all degraded rows in Stage 2. Samples whose "
-            "labels exceed the loaded Whisper decoder limit are logged and skipped."
+            "labels exceed the loaded Whisper decoder limit are logged and skipped. "
+            "Unreadable training audio is reported and skipped in all stages; "
+            "max_audio_failures is a nonnegative YAML integer (default: 100; 0: fail fast)."
         )
     )
     parser.add_argument("--config", required=True, type=Path, help="YAML fusion training config path.")

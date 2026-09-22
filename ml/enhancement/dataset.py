@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 import numpy as np
+import soundfile as sf
 import torch
 from torch.utils.data import Dataset
 
@@ -49,6 +50,50 @@ FRAMES_PER_SECOND = 100  # Whisper hop: 160 samples @ 16 kHz
 _BANDWIDTH_ALIGNED = {"narrowband", "wideband_filtered"}
 _CLEAN_SPLITS = ("train", "dev", "test")
 _RecordT = TypeVar("_RecordT")
+
+
+class AudioReadError(RuntimeError):
+    """Audio decoding failure with serializable context for worker processes."""
+
+    record: dict[str, str]
+
+
+def _read_pair_audio(path: Path, pair_id: str) -> tuple[np.ndarray, int]:
+    try:
+        return load_audio(path)
+    except (sf.LibsndfileError, OSError) as error:
+        try:
+            detail = str(error)
+        except Exception:
+            detail = "exception message unavailable"
+        failure = AudioReadError(f"Cannot read audio {path} (pair {pair_id}): {detail}")
+        failure.record = {"pair_id": pair_id, "path": str(path),
+                          "error_type": type(error).__name__, "error": detail}
+        raise failure from error
+
+
+class SkipUnreadableAudio(Dataset):
+    """Convert only audio read failures to plain records before worker transport."""
+
+    def __init__(self, dataset: Any):
+        self.dataset = dataset
+
+    def __len__(self) -> int:
+        return len(self.dataset)
+
+    def __getitem__(self, index: int) -> dict[str, Any]:
+        try:
+            return self.dataset[index]
+        except AudioReadError as error:
+            return {"audio_failure": error.record}
+
+
+def collate_training_mels(batch: list[dict[str, Any]]) -> dict[str, Any]:
+    failures = [item["audio_failure"] for item in batch if "audio_failure" in item]
+    valid = [item for item in batch if "audio_failure" not in item]
+    result = collate_mels(valid) if valid else {}
+    result["audio_failures"] = failures
+    return result
 
 
 def _filter_overlong_labels(
@@ -272,13 +317,13 @@ class DegradedMelDataset(Dataset):
 
     def __getitem__(self, index: int) -> dict[str, Any]:
         pair = self.pairs[index]
-        degraded_audio, degraded_rate = load_audio(pair.degraded_path)
+        degraded_audio, degraded_rate = _read_pair_audio(pair.degraded_path, pair.pair_id)
         degraded_audio = to_mono(np.asarray(degraded_audio, dtype=np.float32))
         model_rate = int(pair.degradation.get("model_sample_rate", degraded_rate))
         if degraded_rate != model_rate:
             degraded_audio = resample_audio(degraded_audio, degraded_rate, model_rate)
 
-        clean_source, clean_rate = load_audio(pair.clean_path)
+        clean_source, clean_rate = _read_pair_audio(pair.clean_path, pair.pair_id)
         clean_audio = reconstruct_clean_target(
             clean_source,
             clean_rate,
@@ -408,7 +453,7 @@ class CleanMelDataset(Dataset):
 
     def __getitem__(self, index: int) -> dict[str, Any]:
         clip = self.clips[index]
-        audio, source_rate = load_audio(clip.audio_path)
+        audio, source_rate = _read_pair_audio(clip.audio_path, clip.clip_id)
         audio = to_mono(np.asarray(audio, dtype=np.float32))
         if int(source_rate) != self.sample_rate:
             audio = resample_audio(audio, int(source_rate), self.sample_rate)

@@ -92,3 +92,45 @@ the optimizer-update position and reconstruct the epoch's shuffled row order,
 reading skipped batches on a mid-epoch resume. RNG state for model dropout and
 augmentation is not restored, so continuation is not guaranteed bitwise identical
 to an uninterrupted run. Keep data and the full recipe fixed during resume.
+
+### Unreadable audio during fusion training
+
+All three stages of `ml.fusion.train_fusion` skip a training example when its
+clean or degraded audio cannot be opened or decoded. This also covers clean
+ASR examples in Stage 2. Other errors (features, labels, model execution) still
+stop training, and validation audio remains strict.
+
+```yaml
+# Top-level setting; applies separately to each stage invocation.
+max_audio_failures: 100  # nonnegative integer; default 100; 0 stops on first failure
+```
+
+The main process appends each failed read to the run directory's
+`stage0_warmup_audio_failures.jsonl`, `stage1_fusion_audio_failures.jsonl`, or
+`stage2_joint_audio_failures.jsonl`, including timestamp, zero-based epoch,
+one-based data step, pair ID, file path, error type, and error message. Records
+are preserved on resume. The limit counts failed examples encountered in the
+current stage invocation, including repeated failures across epochs and reads
+used to reach a resumed position; it resets on restart. Exceeding the limit
+stops training after recording the failures. An entirely unreadable epoch also
+stops training. Check the report for damaged files or unavailable storage.
+
+Valid examples in a partial batch still train, with accumulation weighted by
+the number of surviving examples. Empty batches are omitted; an entirely empty
+accumulation group consumes its data-step position without an optimizer or
+scheduler update. This preserves the row-order resume contract and keeps epoch
+budgets bounded, but can reduce the number of optimizer updates. Checkpoint and
+evaluation events at an empty group are deferred to the next scheduled event
+with valid audio. Skips do not rewrite source manifests or permanently blacklist
+files, so repaired files are eligible on the next read.
+
+After updating the training machine, resume with the original config and run
+directory (replace the placeholders below):
+
+```bash
+uv run python -m ml.fusion.train_fusion --config CONFIG.yaml --run-dir RUN_DIR --resume-from-stage warmup
+```
+
+The existing `last.pt` restores the saved model, optimizer, scaler, scheduler,
+and data step. Use `fusion` or `joint` to resume a later stage instead. See the
+configuration summary with `uv run python -m ml.fusion.train_fusion --help`.
