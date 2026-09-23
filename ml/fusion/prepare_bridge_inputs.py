@@ -242,8 +242,15 @@ def write_manifests(root: Path, rows: list[dict], identity: dict) -> None:
 
 def run(args: argparse.Namespace) -> None:
     data_root, output = args.data_root.resolve(), args.output.resolve()
+    small_config = None
+    if args.train_config is not None:
+        from ml.fusion.bridge_small_data import collect_small_rows, input_config, load_training_config
+        small_config = input_config(load_training_config(args.train_config))
+        data_root = Path(small_config["data_root"]).resolve()
+    test_datasets = tuple(small_config["test_datasets"]) if small_config else TEST_DATASETS
     skipped: list[dict] = []
-    rows = select_rows(collect_rows(data_root, args.scope, skipped), args.max_per_split, args.seed)
+    sources = collect_small_rows(small_config, args.scope, skipped) if small_config else collect_rows(data_root, args.scope, skipped)
+    rows = select_rows(sources, args.max_per_split, args.seed)
     if not rows:
         raise ValueError("no selected inputs")
     print(f"Collected {len(rows)} inputs; validating with {args.workers} workers", flush=True)
@@ -276,7 +283,7 @@ def run(args: argparse.Namespace) -> None:
         missing = sorted(required_splits - available_splits)
         raise ValueError(f"no usable clips remain in required splits: {missing}")
     if "test" in required_splits:
-        missing_datasets = [name for name in TEST_DATASETS
+        missing_datasets = [name for name in test_datasets
                             if not any(row["split"] == "test" and row["dataset"] == name for row in rows)]
         if missing_datasets:
             raise ValueError(f"no usable test clips remain in required datasets: {missing_datasets}")
@@ -289,6 +296,8 @@ def run(args: argparse.Namespace) -> None:
     output.mkdir(parents=True, exist_ok=True)
     request = {"data_root": str(data_root), "seed": args.seed, "max_per_split": args.max_per_split,
                "batch_size": args.batch_size, "preparation_version": 2}
+    if small_config:
+        request["train_config_sha256"] = sha256(args.train_config)
     request_path = output / "request.json"
     if request_path.exists() and json.loads(request_path.read_text()) != request:
         raise ValueError("selection or batching changed; use a new output directory (keep pilots separate)")
@@ -324,7 +333,7 @@ def run(args: argparse.Namespace) -> None:
         missing = sorted(required_splits - prepared_splits)
         raise ValueError(f"no successfully enhanced clips remain in required splits: {missing}")
     if "test" in required_splits:
-        missing_datasets = [name for name in TEST_DATASETS
+        missing_datasets = [name for name in test_datasets
                             if not any(row["split"] == "test" and row["dataset"] == name
                                        for row in prepared)]
         if missing_datasets:
@@ -335,10 +344,22 @@ def run(args: argparse.Namespace) -> None:
     write_skipped(output / "skipped_inputs.jsonl", skipped)
     write_manifests(output, prepared, identity)
     if counts["test"]:
-        config = yaml.safe_load(args.test_config.read_text())
-        config["data"]["root_dir"] = str(data_root)
+        if small_config:
+            checkpoint = str(small_config["asr_checkpoint"])
+            config = {"data": {"root_dir": str(data_root), "datasets": list(test_datasets), "split": "test"},
+                      "asr_checkpoint": checkpoint, "processor": "openai/whisper-small",
+                      "max_new_tokens": 225, "bridge_enhanced_root": str(output / "test-enhanced"),
+                      "bridge_enhancer_id": enhancer_id,
+                      "methods": {
+                          "baseline": {"kind": "asr"},
+                          "bridge": {"kind": "bridge", "checkpoint": str(small_config["bridge_checkpoint"])},
+                          "enhanced_only": {"kind": "bridge", "checkpoint": str(small_config["bridge_checkpoint"]), "omega": 0},
+                      }}
+        else:
+            config = yaml.safe_load(args.test_config.read_text())
+            config["data"]["root_dir"] = str(data_root)
+            config["bridge_enhancer_id"] = enhancer_id
         config["bridge_enhanced_root"] = str(output / "test-enhanced")
-        config["bridge_enhancer_id"] = enhancer_id
         (output / "final_tests.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
     skip_counts = {reason: sum(row["reason"] == reason for row in skipped)
                    for reason in sorted({row["reason"] for row in skipped})}
@@ -350,7 +371,9 @@ def run(args: argparse.Namespace) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser.add_argument("--data-root", type=Path, default=Path("data"), help="root containing CV25 and AGFarsdat directories")
+    parser.add_argument("--data-root", type=Path, default=Path("data"), help="root containing CV25 and AGFarsdat directories; overridden by --train-config")
+    parser.add_argument("--train-config", type=Path, default=None,
+                        help="Small bridge training YAML with clean/degraded train/dev and test dataset lists")
     parser.add_argument("--output", type=Path, default=Path("artifacts/cv25-tiny/bridge-inputs"), help="resumable output directory")
     parser.add_argument("--model-root", type=Path, default=Path("artifacts/pretrained/bridge"), help="frozen-model identity cache; weights download automatically")
     parser.add_argument("--scope", choices=("all", "train-dev", "test"), default="all", help="which inputs to prepare; test never gets DNSMOS targets")

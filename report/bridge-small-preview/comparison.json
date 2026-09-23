@@ -1,0 +1,460 @@
+{
+  "note": "Current methods share test_manifest.jsonl. Archived metrics may use different filtered clips; compare counts before interpreting differences.",
+  "methods": [
+    {
+      "model": "current/baseline",
+      "source": "report/bridge-small-preview/baseline.metrics.json",
+      "examples": 5,
+      "wer": 0.15,
+      "cer": 0.17391304347826086,
+      "datasets": {
+        "AGFarsdat_test_normalized": {
+          "examples": 1,
+          "wer": 0.5,
+          "cer": 0.5555555555555556
+        },
+        "cv-corpus-25.0": {
+          "examples": 1,
+          "wer": 0.0,
+          "cer": 0.0
+        },
+        "fleurs-normalized": {
+          "examples": 1,
+          "wer": 0.2,
+          "cer": 0.3333333333333333
+        },
+        "PersianSpeech_test": {
+          "examples": 1,
+          "wer": 0.0,
+          "cer": 0.0
+        },
+        "persian-speech-corpus-test": {
+          "examples": 1,
+          "wer": 0.2,
+          "cer": 0.13043478260869565
+        }
+      },
+      "matched_current_test_set": true
+    },
+    {
+      "model": "current/bridge",
+      "source": "report/bridge-small-preview/bridge.metrics.json",
+      "examples": 5,
+      "wer": 0.05,
+      "cer": 0.08695652173913043,
+      "datasets": {
+        "AGFarsdat_test_normalized": {
+          "examples": 1,
+          "wer": 0.0,
+          "cer": 0.0
+        },
+        "cv-corpus-25.0": {
+          "examples": 1,
+          "wer": 0.0,
+          "cer": 0.0
+        },
+        "fleurs-normalized": {
+          "examples": 1,
+          "wer": 0.2,
+          "cer": 0.3333333333333333
+        },
+        "PersianSpeech_test": {
+          "examples": 1,
+          "wer": 0.0,
+          "cer": 0.0
+        },
+        "persian-speech-corpus-test": {
+          "examples": 1,
+          "wer": 0.0,
+          "cer": 0.0
+        }
+      },
+      "matched_current_test_set": true
+    },
+    {
+      "model": "current/enhanced_only",
+      "source": "report/bridge-small-preview/enhanced_only.metrics.json",
+      "examples": 5,
+      "wer": 0.35,
+      "cer": 0.358695652173913,
+      "datasets": {
+        "AGFarsdat_test_normalized": {
+          "examples": 1,
+          "wer": 0.5,
+          "cer": 0.5555555555555556
+        },
+        "cv-corpus-25.0": {
+          "examples": 1,
+          "wer": 0.25,
+          "cer": 0.23529411764705882
+        },
+        "fleurs-normalized": {
+          "examples": 1,
+          "wer": 0.4,
+          "cer": 0.4583333333333333
+        },
+        "PersianSpeech_test": {
+          "examples": 1,
+          "wer": 0.25,
+          "cer": 0.2631578947368421
+        },
+        "persian-speech-corpus-test": {
+          "examples": 1,
+          "wer": 0.4,
+          "cer": 0.34782608695652173
+        }
+      },
+      "matched_current_test_set": true
+    },
+    {
+      "model": "archive/fastconformer",
+      "source": "report/fastconformer/metrics.json",
+      "examples": 21854,
+      "wer": 0.22733278618867178,
+      "cer": 0.1478705526366722,
+      "datasets": {
+        "AGFarsdat_test_normalized": {
+          "examples": 10044,
+          "wer": 0.31073150444386255,
+          "cer": 0.14805655590838937
+        },
+        "cv-corpus-25.0": {
+          "examples": 10519,
+          "wer": 0.11684804733085462,
+          "cer": 0.16460831496572503
+        },
+        "fleurs-normalized": {
+          "examples": 871,
+          "wer": 0.29224017554358667,
+          "cer": 0.09944347520979328
+        },
+        "PersianSpeech_test": {
+          "examples": 24,
+          "wer": 0.3069544364508393,
+          "cer": 0.13503253796095444
+        },
+        "persian-speech-corpus-test": {
+          "examples": 396,
+          "wer": 0.33687190375088466,
+          "cer": 0.12216924910607867
+        }
+      },
+      "matched_current_test_set": false
+    },
+    {
+      "model": "archive/fastconformer-deg",
+      "source": "report/fastconformer-deg/metrics.json",
+      "examples": 21854,
+      "wer": 0.2180837131332181,
+      "cer": 0.14448118618384717,
+      "datasets": {
+        "AGFarsdat_test_normalized": {
+          "examples": 10044,
+          "wer": 0.3048166232806026,
+          "cer": 0.14088949599957423
+        },
+        "cv-corpus-25.0": {
+          "examples": 10519,
+          "wer": 0.10013026840719733,
+          "cer": 0.16095838472893453
+        },
+        "fleurs-normalized": {
+          "examples": 871,
+          "wer": 0.2940355076800319,
+          "cer": 0.10224071890137523
+        },
+        "PersianSpeech_test": {
+          "examples": 24,
+          "wer": 0.31414868105515587,
+          "cer": 0.13557483731019523
+        },
+        "persian-speech-corpus-test": {
+          "examples": 396,
+          "wer": 0.33592828497287097,
+          "cer": 0.12681458390635983
+        }
+      },
+      "matched_current_test_set": false
+    },
+    {
+      "model": "archive/whisper",
+      "source": "report/whisper/metrics.json",
+      "examples": 21848,
+      "wer": 0.23265509155079708,
+      "cer": 0.10839705519850981,
+      "datasets": {
+        "AGFarsdat_test_normalized": {
+          "examples": 10044,
+          "wer": 0.3563407834136874,
+          "cer": 0.19729283826216537
+        },
+        "cv-corpus-25.0": {
+          "examples": 10518,
+          "wer": 0.11515750772915913,
+          "cer": 0.040613768721853044
+        },
+        "fleurs-normalized": {
+          "examples": 871,
+          "wer": 0.2104528226610812,
+          "cer": 0.06134443134082514
+        },
+        "PersianSpeech_test": {
+          "examples": 24,
+          "wer": 0.34532374100719426,
+          "cer": 0.1621475054229935
+        },
+        "persian-speech-corpus-test": {
+          "examples": 391,
+          "wer": 0.3016620973269363,
+          "cer": 0.15477880392124116
+        }
+      },
+      "matched_current_test_set": false
+    },
+    {
+      "model": "archive/whisper-deg",
+      "source": "report/whisper-deg/metrics.json",
+      "examples": 21848,
+      "wer": 0.1782753393182841,
+      "cer": 0.07934801668077061,
+      "datasets": {
+        "AGFarsdat_test_normalized": {
+          "examples": 10044,
+          "wer": 0.25799048073812786,
+          "cer": 0.1261508985435257
+        },
+        "cv-corpus-25.0": {
+          "examples": 10518,
+          "wer": 0.07837785143302788,
+          "cer": 0.03217884962372926
+        },
+        "fleurs-normalized": {
+          "examples": 871,
+          "wer": 0.19818471972870536,
+          "cer": 0.06357637839787136
+        },
+        "PersianSpeech_test": {
+          "examples": 24,
+          "wer": 0.35251798561151076,
+          "cer": 0.1561822125813449
+        },
+        "persian-speech-corpus-test": {
+          "examples": 391,
+          "wer": 0.3090301576422207,
+          "cer": 0.15220695068387916
+        }
+      },
+      "matched_current_test_set": false
+    },
+    {
+      "model": "archive/whisper-fusion-v1",
+      "source": "report/whisper-fusion-v1/metrics.json",
+      "examples": 21854,
+      "wer": 0.2434793743924657,
+      "cer": 0.15458319761705824,
+      "datasets": {
+        "AGFarsdat_test_normalized": {
+          "examples": 10044,
+          "wer": 0.29446558124489763,
+          "cer": 0.13794106689847258
+        },
+        "cv-corpus-25.0": {
+          "examples": 10519,
+          "wer": 0.18365131489673514,
+          "cer": 0.1787126160192506
+        },
+        "fleurs-normalized": {
+          "examples": 871,
+          "wer": 0.21548972671055255,
+          "cer": 0.06682196079960234
+        },
+        "PersianSpeech_test": {
+          "examples": 24,
+          "wer": 0.28776978417266186,
+          "cer": 0.11334056399132321
+        },
+        "persian-speech-corpus-test": {
+          "examples": 396,
+          "wer": 0.372572147519069,
+          "cer": 0.219140613061948
+        }
+      },
+      "matched_current_test_set": false
+    },
+    {
+      "model": "archive/whisper-fusion-v2",
+      "source": "report/whisper-fusion-v2/metrics.json",
+      "examples": 21848,
+      "wer": 0.18444595782329556,
+      "cer": 0.14036013198702788,
+      "datasets": {
+        "AGFarsdat_test_normalized": {
+          "examples": 10044,
+          "wer": 0.25375456323839746,
+          "cer": 0.12384111834518974
+        },
+        "cv-corpus-25.0": {
+          "examples": 10519,
+          "wer": 0.09063153038239205,
+          "cer": 0.16080167027278425
+        },
+        "fleurs-normalized": {
+          "examples": 871,
+          "wer": 0.19614003590664272,
+          "cer": 0.06227034824221986
+        },
+        "PersianSpeech_test": {
+          "examples": 24,
+          "wer": 0.3117505995203837,
+          "cer": 0.12906724511930587
+        },
+        "persian-speech-corpus-test": {
+          "examples": 396,
+          "wer": 0.3516552646064323,
+          "cer": 0.21067510161669875
+        }
+      },
+      "matched_current_test_set": false
+    },
+    {
+      "model": "archive/whisper-iranseda",
+      "source": "report/whisper-iranseda/metrics.json",
+      "examples": 21848,
+      "wer": 0.17222919676907408,
+      "cer": 0.07701896027262539,
+      "datasets": {
+        "AGFarsdat_test_normalized": {
+          "examples": 10044,
+          "wer": 0.26661634910121534,
+          "cer": 0.12962443896467918
+        },
+        "cv-corpus-25.0": {
+          "examples": 10518,
+          "wer": 0.08188730746734256,
+          "cer": 0.03294165969869002
+        },
+        "fleurs-normalized": {
+          "examples": 871,
+          "wer": 0.13779174147217235,
+          "cer": 0.04089628756055009
+        },
+        "PersianSpeech_test": {
+          "examples": 24,
+          "wer": 0.2685851318944844,
+          "cer": 0.09815618221258135
+        },
+        "persian-speech-corpus-test": {
+          "examples": 391,
+          "wer": 0.2587388622344071,
+          "cer": 0.14155213012909368
+        }
+      },
+      "matched_current_test_set": false
+    },
+    {
+      "model": "archive/whisper-medium",
+      "source": "report/whisper-medium/metrics.json",
+      "examples": 21848,
+      "wer": 0.14356183527962668,
+      "cer": 0.06680948496468932,
+      "datasets": {
+        "AGFarsdat_test_normalized": {
+          "examples": 10044,
+          "wer": 0.21991343324964188,
+          "cer": 0.10922315457077472
+        },
+        "cv-corpus-25.0": {
+          "examples": 10518,
+          "wer": 0.03843689942344651,
+          "cer": 0.016500168698381962
+        },
+        "fleurs-normalized": {
+          "examples": 871,
+          "wer": 0.17135447835627368,
+          "cer": 0.054200251459537434
+        },
+        "PersianSpeech_test": {
+          "examples": 24,
+          "wer": 0.31654676258992803,
+          "cer": 0.1399132321041215
+        },
+        "persian-speech-corpus-test": {
+          "examples": 391,
+          "wer": 0.3116860863605209,
+          "cer": 0.17289867900265535
+        }
+      },
+      "matched_current_test_set": false
+    },
+    {
+      "model": "archive/whisper-small-noise-only",
+      "source": "report/whisper-small-noise-only/metrics.json",
+      "examples": 21848,
+      "wer": 0.20378638936921145,
+      "cer": 0.09588520661640072,
+      "datasets": {
+        "AGFarsdat_test_normalized": {
+          "examples": 10044,
+          "wer": 0.326658554242849,
+          "cer": 0.17487980982454895
+        },
+        "cv-corpus-25.0": {
+          "examples": 10518,
+          "wer": 0.07864245327688495,
+          "cer": 0.0317270313485602
+        },
+        "fleurs-normalized": {
+          "examples": 871,
+          "wer": 0.19259924197087572,
+          "cer": 0.05720217151879611
+        },
+        "PersianSpeech_test": {
+          "examples": 24,
+          "wer": 0.33573141486810554,
+          "cer": 0.14642082429501085
+        },
+        "persian-speech-corpus-test": {
+          "examples": 391,
+          "wer": 0.3047464016449623,
+          "cer": 0.15399388767347483
+        }
+      },
+      "matched_current_test_set": false
+    },
+    {
+      "model": "archive/whisper-small-pmct",
+      "source": "report/whisper-small-pmct/metrics.json",
+      "examples": 21848,
+      "wer": 0.19210270744013075,
+      "cer": 0.0890899018314795,
+      "datasets": {
+        "AGFarsdat_test_normalized": {
+          "examples": 10044,
+          "wer": 0.30011860568999243,
+          "cer": 0.15977576327414003
+        },
+        "cv-corpus-25.0": {
+          "examples": 10518,
+          "wer": 0.07252875804250342,
+          "cer": 0.02792471651337118
+        },
+        "fleurs-normalized": {
+          "examples": 871,
+          "wer": 0.20227408737283065,
+          "cer": 0.06152961472110408
+        },
+        "PersianSpeech_test": {
+          "examples": 24,
+          "wer": 0.31654676258992803,
+          "cer": 0.10574837310195227
+        },
+        "persian-speech-corpus-test": {
+          "examples": 391,
+          "wer": 0.3050034270047978,
+          "cer": 0.15125503097914128
+        }
+      },
+      "matched_current_test_set": false
+    }
+  ]
+}

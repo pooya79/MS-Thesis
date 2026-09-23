@@ -1,0 +1,24 @@
+data:
+  root_dir: /home/mint/MS-Thesis/data
+  datasets:
+  - AGFarsdat_test_normalized
+  - cv-corpus-25.0
+  - fleurs-normalized
+  - PersianSpeech_test
+  - persian-speech-corpus-test
+  split: test
+asr_checkpoint: models/asr/whisper-small-deg-v2/runs/whisper-small-fa/best
+processor: openai/whisper-small
+max_new_tokens: 225
+bridge_enhanced_root: artifacts/bridge-small/inputs/test-enhanced
+bridge_enhancer_id: PREVIEW_ONLY:frozen-frcrn
+methods:
+  baseline:
+    kind: asr
+  bridge:
+    kind: bridge
+    checkpoint: models/asr/bridge-small/best.pt
+  enhanced_only:
+    kind: bridge
+    checkpoint: models/asr/bridge-small/best.pt
+    omega: 0

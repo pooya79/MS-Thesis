@@ -215,8 +215,8 @@ and epoch. See [training budget semantics](enhancement-and-fusion.md#epoch-budge
 The latter two variants skip only the shared warm-up computation. Each saves
 its final dev-selected checkpoint at `checkpoints/stage2_joint/best.pt`.
 The residual variant uses ordinary ASR + Mel loss, without recognition-benefit
-gate supervision. The bridge keeps its published 45-epoch frozen-ASR recipe;
-matching epoch units does not make its compute or trainable parameters equal to
+gate supervision. The paper reports up to 45 bridge epochs; this Tiny pilot uses 5 with frozen ASR.
+Matching epoch units does not make its compute or trainable parameters equal to
 fusion. These remain pilot budgets, not a converged recipe.
 
 ## 7. Decode the bridge variants on dev

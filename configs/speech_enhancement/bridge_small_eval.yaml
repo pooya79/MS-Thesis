@@ -1,0 +1,20 @@
+# Evaluate the bridge and both endpoints on the same five test datasets.
+model:
+  asr_checkpoint: models/asr/whisper-small-deg-v2/runs/whisper-small-fa/best
+  bridge_checkpoint: models/asr/bridge-small/best.pt
+  processor: openai/whisper-small
+data:
+  root_dir: data
+  datasets:
+    - AGFarsdat_test_normalized
+    - cv-corpus-25.0
+    - fleurs-normalized
+    - PersianSpeech_test
+    - persian-speech-corpus-test
+  split: test
+eval:
+  inputs_dir: artifacts/bridge-small/inputs
+  output_dir: artifacts/bridge-small/evals
+  name: bridge-small-test
+  device: cuda
+  max_new_tokens: 225

@@ -1,0 +1,13 @@
+{
+  "label": "final-evaluation",
+  "state": "completed",
+  "started_at": "2026-09-23T14:53:25.620994+03:30",
+  "updated_at": "2026-09-23T14:53:25.871345+03:30",
+  "completed": 15,
+  "total": 15,
+  "remaining": 0,
+  "elapsed_seconds": 0.25,
+  "items_per_second": 59.915896,
+  "eta_seconds": 0.0,
+  "estimated_finish_at": "2026-09-23T14:53:25.871345+03:30"
+}

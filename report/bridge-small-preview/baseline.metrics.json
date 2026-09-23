@@ -1,0 +1,37 @@
+{
+  "examples": 5,
+  "wer": 0.15,
+  "cer": 0.17391304347826086,
+  "skipped_inputs": 0,
+  "test_manifest_sha256": "c41c67bd84f31bd95a539aeb834b6d83663bf9e46ddd117fe52eb8543ea50d7a",
+  "method": {
+    "kind": "asr"
+  },
+  "dataset_metrics": {
+    "AGFarsdat_test_normalized": {
+      "examples": 1,
+      "wer": 0.5,
+      "cer": 0.5555555555555556
+    },
+    "cv-corpus-25.0": {
+      "examples": 1,
+      "wer": 0.0,
+      "cer": 0.0
+    },
+    "fleurs-normalized": {
+      "examples": 1,
+      "wer": 0.2,
+      "cer": 0.3333333333333333
+    },
+    "PersianSpeech_test": {
+      "examples": 1,
+      "wer": 0.0,
+      "cer": 0.0
+    },
+    "persian-speech-corpus-test": {
+      "examples": 1,
+      "wer": 0.2,
+      "cer": 0.13043478260869565
+    }
+  }
+}
