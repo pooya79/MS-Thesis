@@ -1,0 +1,30 @@
+{
+  "best_checkpoint": "models/asr/cv25-tiny-official/baseline/best",
+  "completed_at": "2026-09-13T12:47:32.958540+00:00",
+  "config_path": "configs/speech_enhancement/cv25_tiny/baseline.yaml",
+  "datasets": [
+    "data/cv25-official/cv-corpus-25.0",
+    "data/cv25-official/cv-corpus-25.0-degraded-v2"
+  ],
+  "effective_config_path": "models/asr/cv25-tiny-official/baseline/config/training.yaml",
+  "error": null,
+  "eval_examples": 30464,
+  "eval_splits": {
+    "/home/user01/MS-Thesis/data/cv25-official/cv-corpus-25.0": "dev",
+    "/home/user01/MS-Thesis/data/cv25-official/cv-corpus-25.0-degraded-v2": "dev"
+  },
+  "final_model": "models/asr/cv25-tiny-official/baseline/final",
+  "latest_checkpoint": "models/asr/cv25-tiny-official/baseline/checkpoints/checkpoint-5487",
+  "max_label_tokens": 448,
+  "pretrained_model": "openai/whisper-tiny",
+  "resume_from_checkpoint": null,
+  "run_id": "baseline",
+  "skipped_eval_examples": 2,
+  "skipped_train_examples": 0,
+  "skipped_unreadable_eval_examples": 0,
+  "skipped_unreadable_train_examples": 0,
+  "started_at": "2026-09-13T11:02:13.024461+00:00",
+  "status": "completed",
+  "train_examples": 87789,
+  "updated_at": "2026-09-13T12:47:32.958952+00:00"
+}

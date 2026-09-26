@@ -1,0 +1,7 @@
+{
+  "data_root": "/home/user01/MS-Thesis/data/cv25-official",
+  "seed": 1337,
+  "max_per_split": null,
+  "batch_size": 16,
+  "preparation_version": 2
+}

@@ -1,0 +1,78 @@
+run_dir: models/asr/cv25-tiny-official/gated
+base_asr_checkpoint: models/asr/cv25-tiny-official/baseline/best
+datasets:
+- data/cv25-official/cv-corpus-25.0-degraded-v2
+- data/cv25-official/cv-corpus-25.0
+dataset_dir: data/cv-corpus-25.0-degraded
+sample_rate: 16000
+train_split: train
+valid_split: dev
+clean_target: bandwidth_aligned
+model_name: openai/whisper-tiny
+language: Persian
+task: transcribe
+generation_max_length: 225
+mixed_precision: auto
+device: auto
+seed: 1337
+resume_from_stage: fusion
+enhancer:
+  type: residual_unet
+  base_channels: 32
+  depth: 3
+  bottleneck: none
+fusion:
+  type: gated
+stages:
+  warmup:
+    max_steps: null
+    batch_size: 8
+    segment_seconds: 4.0
+    lr_enhancer: 0.0002
+    lr_scheduler: cosine
+    warmup_steps: null
+    lambda: 0.5
+    feature_match_weight: 0.5
+    num_workers: 4
+    log_every: 50
+    eval_every: 1000
+    save_every: 1000
+    eval_max_batches: null
+    num_train_epochs: 1
+    eval_save_at_epoch_end: true
+    gradient_accumulation_steps: 2
+    eval_batch_size: 128
+    warmup_ratio: 0.05
+  fusion:
+    max_steps: null
+    batch_size: 8
+    lr_frontend: 0.0002
+    lr_scheduler: cosine
+    warmup_steps: null
+    lambda: 0.3
+    eval_every: 1000
+    save_every: 1000
+    eval_max_batches: null
+    num_train_epochs: 1
+    eval_save_at_epoch_end: true
+    gradient_accumulation_steps: 2
+    eval_batch_size: 128
+    warmup_ratio: 0.05
+    grad_clip: 1.0
+  joint:
+    max_steps: null
+    batch_size: 8
+    lr_frontend: 0.0001
+    lr_whisper: 1.0e-05
+    lr_scheduler: cosine
+    warmup_steps: null
+    lambda: 0.1
+    eval_every: 1000
+    save_every: 1000
+    eval_max_batches: null
+    num_train_epochs: 1
+    eval_save_at_epoch_end: true
+    gradient_accumulation_steps: 2
+    eval_batch_size: 128
+    warmup_ratio: 0.05
+    grad_clip: 1.0

@@ -1,0 +1,35 @@
+{
+  "wer": 0.8207669586299919,
+  "cer": 0.3734308192535277,
+  "examples": 20012,
+  "split": "dev",
+  "skipped_inputs": 0,
+  "omega_override": 1.0,
+  "batch_size": 8,
+  "provenance": {
+    "paper": "2501.02452v1",
+    "asr_checkpoint": "models/asr/cv25-tiny-official/baseline/best",
+    "enhancer_id": "alibabasglab/FRCRN_SE_16K@3766e6a64b0d8cb58f08d913d617bf129f11ed53:sha256:b22256adbb91b68cf5a3db8f6657a4fb17066eecd5f069803e59c186c1cf3ebb:clearvoice-0.1.2:direct-v1:batch-pad-v1:size-16",
+    "dnsmos_id": "DNSMOS-P835-nonpersonalized:sha256:269fbebdb513aa23cddfbb593542ecc540284a91849ac50516870e1ac78f6edd",
+    "coefficients": [
+      1.0,
+      0.9,
+      0.8,
+      0.7,
+      0.6,
+      0.5,
+      0.4,
+      0.3,
+      0.2,
+      0.1,
+      0.0
+    ],
+    "max_tokens": 225,
+    "manifest_sha256": "a4e8370e03e393f848f8768c728cae3d47c92d39f6996fedbd06d43e48b12f3d",
+    "skipped_inputs": 0,
+    "text_policy": "strip_only; normalize all input references upstream identically",
+    "implementation": "independent reconstruction; see docs/script-guides/bridging-baseline.md"
+  },
+  "checkpoint": "models/asr/cv25-tiny-official/bridge/best.pt",
+  "manifest_sha256": "375ba047e8f5793f09a7b63c81fb8e4f16cf245f460b6ddec922e86ba2dbbf5f"
+}

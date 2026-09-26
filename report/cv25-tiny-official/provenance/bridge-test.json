@@ -1,0 +1,7 @@
+{
+  "enhancer_id": "alibabasglab/FRCRN_SE_16K@3766e6a64b0d8cb58f08d913d617bf129f11ed53:sha256:b22256adbb91b68cf5a3db8f6657a4fb17066eecd5f069803e59c186c1cf3ebb:clearvoice-0.1.2:direct-v1:batch-pad-v1:size-16",
+  "dnsmos_id": "DNSMOS-P835-nonpersonalized:sha256:269fbebdb513aa23cddfbb593542ecc540284a91849ac50516870e1ac78f6edd",
+  "preparation_version": 2,
+  "batch_size": 16,
+  "manifest_sha256": "006cc67c5afe0a1bb62a9033f2c795bbe2fdb4cb4c7bd6893e6adfa0921540a0"
+}

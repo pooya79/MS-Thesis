@@ -1,0 +1,9 @@
+{
+  "batch_size": 8,
+  "gradient_accumulation_steps": 2,
+  "max_optimizer_steps": 3606,
+  "microbatches_per_epoch": 7211,
+  "num_train_epochs": 1,
+  "optimizer_steps_per_epoch": 3606,
+  "train_examples": 57684
+}

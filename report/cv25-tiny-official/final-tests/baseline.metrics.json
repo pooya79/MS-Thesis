@@ -1,0 +1,22 @@
+{
+  "examples": 20563,
+  "wer": 0.7582346423380772,
+  "cer": 0.36797134413479476,
+  "skipped_inputs": 0,
+  "test_manifest_sha256": "5997ce573bea7139c216ab48fff2ef35d3f5d67ab8038c777eaf34def3a6ec22",
+  "method": {
+    "kind": "asr"
+  },
+  "dataset_metrics": {
+    "cv-corpus-25.0": {
+      "examples": 10519,
+      "wer": 0.749247282792142,
+      "cer": 0.3802608445164046
+    },
+    "AGFarsdat_test_normalized": {
+      "examples": 10044,
+      "wer": 0.768487854469278,
+      "cer": 0.35041246074970284
+    }
+  }
+}

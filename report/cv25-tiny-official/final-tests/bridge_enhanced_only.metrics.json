@@ -1,0 +1,24 @@
+{
+  "examples": 20563,
+  "wer": 0.7672787187198711,
+  "cer": 0.3744866968476503,
+  "skipped_inputs": 0,
+  "test_manifest_sha256": "5997ce573bea7139c216ab48fff2ef35d3f5d67ab8038c777eaf34def3a6ec22",
+  "method": {
+    "kind": "bridge",
+    "checkpoint": "models/asr/cv25-tiny-official/bridge/best.pt",
+    "omega": 0.0
+  },
+  "dataset_metrics": {
+    "cv-corpus-25.0": {
+      "examples": 10519,
+      "wer": 0.7589819752919733,
+      "cer": 0.3879019200778759
+    },
+    "AGFarsdat_test_normalized": {
+      "examples": 10044,
+      "wer": 0.7767440427596617,
+      "cer": 0.35531941315261933
+    }
+  }
+}

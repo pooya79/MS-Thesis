@@ -1,0 +1,24 @@
+{
+  "examples": 20563,
+  "wer": 0.6649374757169787,
+  "cer": 0.3204647813047359,
+  "skipped_inputs": 0,
+  "test_manifest_sha256": "5997ce573bea7139c216ab48fff2ef35d3f5d67ab8038c777eaf34def3a6ec22",
+  "method": {
+    "kind": "fusion",
+    "checkpoint": "models/asr/cv25-tiny-official/cross_attention/checkpoints/stage2_joint/best.pt",
+    "view_mode": "noisy"
+  },
+  "dataset_metrics": {
+    "cv-corpus-25.0": {
+      "examples": 10519,
+      "wer": 0.6409775197461689,
+      "cer": 0.33209003407070414
+    },
+    "AGFarsdat_test_normalized": {
+      "examples": 10044,
+      "wer": 0.6922721461468554,
+      "cer": 0.30385495573808297
+    }
+  }
+}
