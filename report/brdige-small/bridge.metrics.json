@@ -1,0 +1,37 @@
+{
+  "examples": 21854,
+  "wer": 0.1774226168648611,
+  "cer": 0.07995652173913043,
+  "skipped_inputs": 0,
+  "method": {
+    "kind": "bridge",
+    "checkpoint": "models/asr/bridge-small/best.pt"
+  },
+  "dataset_metrics": {
+    "AGFarsdat_test_normalized": {
+      "examples": 10044,
+      "wer": 0.25839462849923911,
+      "cer": 0.12593259867348118
+    },
+    "cv-corpus-25.0": {
+      "examples": 10519,
+      "wer": 0.07631334132345960,
+      "cer": 0.03256231394851934
+    },
+    "fleurs-normalized": {
+      "examples": 871,
+      "wer": 0.19734529408458230,
+      "cer": 0.06392248799120032
+    },
+    "PersianSpeech_test": {
+      "examples": 24,
+      "wer": 0.35094023748633823,
+      "cer": 0.15532487094753437
+    },
+    "persian-speech-corpus-test": {
+      "examples": 396,
+      "wer": 0.32323435589473871,
+      "cer": 0.17023481864896147
+    }
+  }
+}

@@ -1,0 +1,38 @@
+# PQ+RI bridge with the seven-dataset Whisper Small training mixture.
+model:
+  asr_checkpoint: models/asr/whisper-small-deg-v2/runs/whisper-small-fa/best
+  bridge_checkpoint: models/asr/bridge-small/best.pt
+data:
+  root_dir: data
+  datasets:
+    - cv-corpus-25.0
+    - cv-corpus-25.0-degraded-v2
+    - FarsSpon_train_dev
+    - cv-corpus-25.0-long
+    - FarsSpon_train_dev-long
+    - cv-corpus-25.0-degraded-long-v2
+    - fleurs-normalized
+  test_datasets:
+    - AGFarsdat_test_normalized
+    - cv-corpus-25.0
+    - fleurs-normalized
+    - PersianSpeech_test
+    - persian-speech-corpus-test
+run:
+  inputs_dir: artifacts/bridge-small/inputs
+  cache_dir: artifacts/bridge-small/cache
+  output_dir: models/asr/bridge-small
+preparation:
+  batch_size: 4
+  workers: 4
+cache:
+  batch_size: 8
+  workers: 8
+training:
+  seed: 1337
+  epochs: 5
+  learning_rate: 0.0005
+  batch_size: 4
+  accumulation: 8
+  workers: 4
+  eval_max_batches: 4

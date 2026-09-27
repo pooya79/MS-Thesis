@@ -1,0 +1,63 @@
+{
+  "backbone_from_checkpoint": true,
+  "base_asr_checkpoint": "openai/whisper-small",
+  "cer": 0.07847632400077417,
+  "checkpoint": "/home/user01/MS-Thesis/models/asr/fusion/run_005_compact/checkpoints/stage2_joint/last.pt",
+  "config_path": "configs/speech_enhancement/fusion_eval_compact.yaml",
+  "created_at": "2026-09-27T08:01:43.696497+00:00",
+  "dataset_metrics": [
+    {
+      "cer": 0.12394920967198284,
+      "dataset": "/home/user01/MS-Thesis/data/AGFarsdat_test_normalized",
+      "examples": 10044,
+      "wer": 0.253660125383158
+    },
+    {
+      "cer": 0.03129931450063697,
+      "dataset": "/home/user01/MS-Thesis/data/cv-corpus-25.0",
+      "examples": 10519,
+      "wer": 0.07532135587700491
+    },
+    {
+      "cer": 0.06292518591436731,
+      "dataset": "/home/user01/MS-Thesis/data/fleurs-normalized",
+      "examples": 871,
+      "wer": 0.1966523040095751
+    },
+    {
+      "cer": 0.12949023861171366,
+      "dataset": "/home/user01/MS-Thesis/data/PersianSpeech_test",
+      "examples": 24,
+      "wer": 0.3181294964028777
+    },
+    {
+      "cer": 0.19949206931328505,
+      "dataset": "/home/user01/MS-Thesis/data/persian-speech-corpus-test",
+      "examples": 396,
+      "wer": 0.33824722811983956
+    }
+  ],
+  "datasets": [
+    "data/AGFarsdat_test_normalized",
+    "data/cv-corpus-25.0",
+    "data/fleurs-normalized",
+    "data/PersianSpeech_test",
+    "data/persian-speech-corpus-test"
+  ],
+  "device": "cuda",
+  "effective_config_path": "models/asr/fusion/evals/compact/20260927-071050/config/eval.yaml",
+  "examples": 21854,
+  "gate_interpretation": "post-fusion blend weight; not causal enhanced information fraction",
+  "gate_override": null,
+  "processor": "openai/whisper-small",
+  "split": "test",
+  "view_mode": "fusion",
+  "view_usage": {
+    "clean_view_weight_mean": 0.6784574233027557,
+    "clean_view_weight_median": 0.692957192659378,
+    "examples": 21854,
+    "noisy_view_weight_mean": 0.3215425766972443,
+    "noisy_view_weight_median": 0.30704280734062195
+  },
+  "wer": 0.1764226168648611
+}
