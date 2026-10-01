@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dual-view Whisper fusion architecture</title>
+<style>
+  html,body{margin:0;background:#f7f6f2}
+  svg{display:block;width:100%;height:auto;background:#f7f6f2}
+</style>
+</head>
+<body>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1700 1110" role="img" aria-labelledby="architecture-title architecture-desc">
+<title id="architecture-title">Dual-view Whisper fusion architecture</title>
+<desc id="architecture-desc">Left-to-right speech recognition architecture. Noisy log-Mel features travel directly to a shared Whisper encoder and through a three-level residual U-Net to an enhanced view. One bidirectional cross-attention layer and a time-feature gate fuse the two encoded views before the Whisper decoder. Below, three training stages show the trainable components and their loss functions.</desc>
+<defs>
+  <marker id="arrow" markerWidth="10" markerHeight="10" refX="8.5" refY="5" orient="auto" markerUnits="strokeWidth"><path d="M1 1 L9 5 L1 9" fill="none" stroke="#52606d" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></marker>
+  <marker id="accent-arrow" markerWidth="10" markerHeight="10" refX="8.5" refY="5" orient="auto" markerUnits="strokeWidth"><path d="M1 1 L9 5 L1 9" fill="none" stroke="#1d6f8a" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></marker>
+  <style>
+    .paper{fill:#f7f6f2}.ink{fill:#1f2933}.muted{fill:#52606d}.soft{fill:#7b8794}
+    .eyebrow{font:600 19px Arial,Helvetica,sans-serif;letter-spacing:2.4px}
+    .title{font:600 32px Arial,Helvetica,sans-serif}
+    .label{font:600 26px Arial,Helvetica,sans-serif}
+    .detail{font:400 22px Arial,Helvetica,sans-serif}
+    .small{font:500 19px Arial,Helvetica,sans-serif}
+    .training-eyebrow{font:600 22px Arial,Helvetica,sans-serif;letter-spacing:2px}
+    .training-title{font:600 30px Arial,Helvetica,sans-serif}
+    .training-loss{font:500 29px Arial,Helvetica,sans-serif}
+    .training-note{font:500 23px Arial,Helvetica,sans-serif}
+    .training-legend{font:500 32px Arial,Helvetica,sans-serif}
+    .path{fill:none;stroke:#52606d;stroke-width:2.3;stroke-linecap:round;stroke-linejoin:round;marker-end:url(#arrow)}
+    .plain{fill:none;stroke:#52606d;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+    .accent-path{fill:none;stroke:#1d6f8a;stroke-width:2.5;stroke-linecap:round;stroke-linejoin:round;marker-end:url(#accent-arrow)}
+    .box{fill:#fff;stroke:#52606d;stroke-width:1.8}
+    .view{fill:#edf1f3;stroke:#52606d;stroke-width:1.8}
+    .out{fill:#eef4ef;stroke:#52606d;stroke-width:1.8}
+  </style>
+</defs>
+<rect width="1700" height="1110" class="paper"/>
+<text x="54" y="66" class="eyebrow soft">DUAL-VIEW WHISPER</text>
+<line x1="54" y1="84" x2="1646" y2="84" stroke="rgba(31,41,51,.18)" stroke-width="1"/>
+
+<!-- Primary paths; all connectors are orthogonal and drawn behind components. -->
+<path class="path" d="M260 328 H858 Q870 328 870 316 V287 H895"/>
+<path class="path" d="M155 394 V532 Q155 544 167 544 H298"/>
+<path class="path" d="M598 544 H638"/>
+<path class="path" d="M838 544 H862 Q874 544 874 532 V518 H895"/>
+<path class="path" d="M1135 287 H1160 Q1172 287 1172 299 V330 H1202"/>
+<path class="path" d="M1135 518 H1150 Q1162 518 1162 506 V404 H1202"/>
+<path class="accent-path" d="M1444 533 H1461 Q1473 533 1473 521 V426 H1495"/>
+
+<!-- Input. -->
+<rect x="52" y="263" width="208" height="131" rx="8" class="view"/>
+<text x="78" y="309" class="title ink">Noisy</text>
+<text x="78" y="346" class="title ink">log-Mel</text>
+<text x="78" y="372" class="small muted">80 bands</text>
+
+<!-- U-Net: structural thumbnail, not an extra model stage. -->
+<rect x="298" y="408" width="300" height="272" rx="8" class="box"/>
+<text x="323" y="454" class="title ink">Residual U-Net</text>
+<text x="323" y="484" class="small muted">3 down · 3 up · skip paths</text>
+<rect x="329" y="515" width="79" height="29" rx="4" fill="#edf1f3" stroke="#52606d" stroke-width="1.3"/>
+<rect x="344" y="557" width="64" height="29" rx="4" fill="#edf1f3" stroke="#52606d" stroke-width="1.3"/>
+<rect x="359" y="599" width="49" height="29" rx="4" fill="#edf1f3" stroke="#52606d" stroke-width="1.3"/>
+<rect x="489" y="515" width="79" height="29" rx="4" fill="#edf1f3" stroke="#52606d" stroke-width="1.3"/>
+<rect x="489" y="557" width="64" height="29" rx="4" fill="#edf1f3" stroke="#52606d" stroke-width="1.3"/>
+<rect x="489" y="599" width="49" height="29" rx="4" fill="#edf1f3" stroke="#52606d" stroke-width="1.3"/>
+<path d="M408 529 H489 M408 571 H489" class="plain" stroke-dasharray="5 5"/>
+<path d="M408 613 H489" class="plain"/>
+<path d="M368 544 V557 M376 586 V599 M528 599 V586 M520 557 V544" class="plain"/>
+<text x="329" y="654" class="small muted">downsample</text>
+<text x="489" y="654" class="small muted">upsample</text>
+
+<!-- Enhanced representation. -->
+<rect x="638" y="471" width="200" height="146" rx="8" class="view"/>
+<text x="660" y="523" class="label ink">Enhanced</text>
+<text x="660" y="559" class="label ink">log-Mel</text>
+<text x="660" y="590" class="small muted">residual view</text>
+
+<!-- One shared encoder, displayed as two passes. -->
+<rect x="895" y="156" width="240" height="516" rx="8" class="box"/>
+<text x="919" y="207" class="title ink">Whisper</text>
+<text x="919" y="244" class="title ink">encoder</text>
+<line x1="919" y1="264" x2="1111" y2="264" stroke="rgba(31,41,51,.18)"/>
+<rect x="915" y="280" width="200" height="119" rx="6" fill="#edf1f3" stroke="rgba(31,41,51,.20)" stroke-width="1.3"/>
+<text x="936" y="330" class="label ink">Original</text>
+<text x="936" y="366" class="detail muted">pass</text>
+<rect x="915" y="458" width="200" height="119" rx="6" fill="#edf1f3" stroke="rgba(31,41,51,.20)" stroke-width="1.3"/>
+<text x="936" y="508" class="label ink">Enhanced</text>
+<text x="936" y="544" class="detail muted">pass</text>
+<text x="919" y="636" class="small soft">shared weights</text>
+
+<!-- Fusion panel: two incoming streams, explicit attention and gate. -->
+<rect x="1202" y="173" width="242" height="486" rx="8" fill="#e8f3f6" stroke="#1d6f8a" stroke-width="2"/>
+<text x="1226" y="224" class="title ink">Fusion</text>
+<text x="1226" y="255" class="small muted">after the encoder</text>
+<rect x="1221" y="291" width="204" height="142" rx="6" fill="#fff" stroke="#1d6f8a" stroke-width="1.5"/>
+<text x="1243" y="334" class="label ink">Bidirectional</text>
+<text x="1243" y="369" class="label ink">attention</text>
+<text x="1243" y="405" class="small muted">1 layer · 4 heads</text>
+<path class="accent-path" d="M1323 433 V472"/>
+<rect x="1221" y="472" width="204" height="132" rx="6" fill="#fff" stroke="#1d6f8a" stroke-width="1.5"/>
+<text x="1243" y="520" class="label ink">Time-feature</text>
+<text x="1243" y="555" class="label ink">gate</text>
+<text x="1243" y="585" class="small muted">weighted blend</text>
+
+<!-- Decoder. -->
+<rect x="1495" y="351" width="158" height="152" rx="8" class="out"/>
+<text x="1518" y="405" class="label ink">Whisper</text>
+<text x="1518" y="441" class="label ink">decoder</text>
+<text x="1518" y="475" class="small muted">Persian text</text>
+
+<!-- The same model is trained in three successive one-epoch stages. -->
+<line x1="54" y1="790" x2="1646" y2="790" stroke="rgba(31,41,51,.18)" stroke-width="1"/>
+<text x="54" y="833" class="training-eyebrow soft">THREE-STAGE TRAINING</text>
+<path class="path" d="M535 946 H600"/>
+<path class="path" d="M1090 946 H1155"/>
+
+<rect x="54" y="866" width="480" height="170" rx="8" class="box"/>
+<text x="80" y="901" class="training-eyebrow soft">01  ·  ENHANCER WARM-UP</text>
+<text x="80" y="943" class="training-title ink">Enhancer only</text>
+<text x="80" y="981" class="training-loss ink">0.5 L<tspan baseline-shift="sub" font-size="20">enh</tspan> + 0.5 L<tspan baseline-shift="sub" font-size="20">feat</tspan></text>
+<text x="80" y="1015" class="training-note muted">1 epoch · Whisper frozen</text>
+
+<rect x="600" y="866" width="490" height="170" rx="8" class="box"/>
+<text x="626" y="901" class="training-eyebrow soft">02  ·  FUSION TRAINING</text>
+<text x="626" y="943" class="training-title ink">Enhancer + fusion</text>
+<text x="626" y="981" class="training-loss ink">L<tspan baseline-shift="sub" font-size="20">ASR</tspan> + 0.3 L<tspan baseline-shift="sub" font-size="20">enh</tspan></text>
+<text x="626" y="1015" class="training-note muted">1 epoch · Whisper frozen</text>
+
+<rect x="1156" y="866" width="490" height="170" rx="8" class="box"/>
+<text x="1182" y="901" class="training-eyebrow soft">03  ·  JOINT FINE-TUNING</text>
+<text x="1182" y="943" class="training-title ink">All modules trainable</text>
+<text x="1182" y="981" class="training-loss ink">L<tspan baseline-shift="sub" font-size="20">ASR</tspan> + 0.1 L<tspan baseline-shift="sub" font-size="20">enh</tspan></text>
+<text x="1182" y="1015" class="training-note muted">1 epoch · Whisper unfrozen</text>
+
+<text x="54" y="1082" class="training-legend muted">L<tspan baseline-shift="sub" font-size="22">enh</tspan>: log-Mel reconstruction   ·   L<tspan baseline-shift="sub" font-size="22">feat</tspan>: encoder-feature matching   ·   L<tspan baseline-shift="sub" font-size="22">ASR</tspan>: transcription loss</text>
+</svg>
+</body>
+</html>

@@ -287,7 +287,7 @@ Whisper-small was chosen to balance model capacity against the cost of multiple 
 **Callout labels to add in PowerPoint**
 
 - Degraded input → original log-Mel view + enhanced log-Mel view
-- Residual U-Net enhancer with temporal bottleneck modeling
+- Residual U-Net enhancer with three down/up levels and skip connections
 - Shared Whisper encoder for both views
 - Bidirectional cross-attention exchanges information
 - Time–feature gate selects a soft mixture for decoding
@@ -313,28 +313,28 @@ Enhancement can remove noise but may also remove low-energy phonetic cues or int
 
 **Visible content**
 
-1. **Enhancer warm-up — up to 20k steps**  
+1. **Enhancer warm-up — one epoch**
    Prepare the enhancer using reconstruction and encoder-feature guidance
-2. **Fusion training with Whisper frozen — up to 30k steps**  
+2. **Fusion training with Whisper frozen — one epoch**
    Train enhancer and fusion components without destabilizing the recognizer
-3. **End-to-end joint training — up to 120k steps**  
+3. **End-to-end joint training — one epoch**
    Optimize the complete ASR system jointly
 
-**Final run improvements over the first fusion run**
+**Reported fusion configuration**
 
 - Initialize from multi-condition Persian Whisper
-- Add a two-layer transformer at the enhancer bottleneck
-- Add encoder-feature matching during warm-up
-- Increase joint-training ceiling from 50k to 120k steps
+- Use a three-level residual U-Net with 32 base channels and no transformer bottleneck
+- Use one bidirectional cross-attention layer with four heads
+- In joint training, sample every degraded row and 25% of pooled clean rows
 
 **Visual / layout**
 
 - Horizontal three-stage timeline with lock/unlock icons for Whisper.
-- Put the final-run changes in a small right-side panel.
+- Put the reported configuration in a small right-side panel.
 
 **Speaker notes**
 
-The final fusion model was not simply a longer copy of the first run: several factors changed simultaneously. Consequently, the improvement between fusion versions cannot be attributed to one component. This distinction matters later when interpreting the development result.
+The reported fusion model uses one epoch per stage. The enhancer and fusion modules are smaller than in the earlier experiment, while the final stage jointly tunes Whisper. The result describes this complete configuration; it does not isolate the effect of any single design choice.
 
 **Timing:** 55 seconds
 
@@ -720,7 +720,7 @@ The final conclusion is deliberately simple: for robust Persian ASR under teleph
 | Asset | Source in thesis | Used on slide | Treatment |
 |---|---|---:|---|
 | [`assets/degradation-pipeline-architecture.png`](assets/degradation-pipeline-architecture.png) | `Thesis/figs/degradation-pipeline-architecture.png` | 7 | Use uncropped; preserve aspect ratio |
-| [`assets/fusion-model-architecture.png`](assets/fusion-model-architecture.png) | `Thesis/figs/fusion-model-architecture.png` | 9 | Use uncropped; preserve transparency and aspect ratio |
+| [`assets/fusion-model-architecture.png`](assets/fusion-model-architecture.png) | `Thesis/figs/fusion-model-architecture-left-to-right.png` | 9 | Use uncropped; preserve aspect ratio |
 
 ## Final production checklist
 
