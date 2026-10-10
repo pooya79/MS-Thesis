@@ -1,734 +1,632 @@
 # Robust Speech Recognition in Persian Language
 
-Slide-content specification for a 20-minute M.Sc. thesis defense.
+Replacement defense presentation based on the current thesis chapters. English, 16:9. **20 main slides plus 10 hidden backup slides.** Main speaking budget: 19:05, leaving 55 seconds for transitions in a 20-minute slot.
 
-## Deck-wide guidance
+## Recommended organization
 
-- **Language:** English. Keep established names and acronyms such as Whisper-small, VoIP, WER, CER, FFmpeg, PLC, log-Mel, and JSONL unchanged.
-- **Format:** 16:9 widescreen. Use a clean academic theme with high contrast and one accent color for the proposed/selected method.
-- **Narrative:** domain mismatch → reproducible telecom simulation → three compared systems → results → interpretation and limitations.
-- **Visual rule:** keep one main claim per slide. Prefer charts, diagrams, and short labels over paragraphs.
-- **Results colors:** ordinary Whisper = gray; multi-condition Whisper = blue; dual-stream fusion = orange. Use the same mapping on every chart.
-- **Metric rule:** lower WER/CER is better. Always distinguish percentage points from relative percentages.
-- **Caution rule:** boldface indicates the lowest observed value, not statistical significance.
-- **Asset paths:** all paths below are relative to this Markdown file.
+Organize the defense around the experiments, rather than repeating the thesis chapter order. Introduce only the background needed to explain each comparison. Present each method immediately before its evidence. Spend the most time on the real-call transfer result and the domain trade-off after adding IranSeda.
 
----
+| Slides | Topic | Why it belongs here |
+|---|---|---|
+| 1–5 | Problem, comparisons, data and evaluation | Establish the question and the controls before results |
+| 6–8 | Telecom augmentation and real-call transfer | Present the largest controlled robustness gain first |
+| 9–12 | Fusion, training, results and Tiny ablations | Explain the architecture and bound its small-model evidence |
+| 13–15 | Audiobook preparation, curation and domain effects | Connect label quality and data relevance to the final experiment |
+| 16–17 | Main comparison and Medium context | Separate Whisper-small comparisons from capacity changes |
+| 18–20 | Contributions, limits and conclusion | State what the evidence establishes and what remains open |
+| 21–30 | Hidden backup material | Keep full tables and detailed figures available for questions |
 
-## Slide 1 — Robust Speech Recognition in Persian Language
+## Presentation choices
 
-**Purpose:** Introduce the thesis and establish the application domain.
+- Keep the official thesis title. Do not invent a new defense date.
+- Explain WER once. Use CER as corroborating evidence rather than a second full narration.
+- Make real AGFarsdat speech the central robustness test.
+- Fusion and IranSeda are separate experiments from the multi-condition reference. No fusion-plus-IranSeda result exists in the current thesis.
+- Use “numerical improvement” for small margins. The thesis does not establish statistical significance.
+- End on the conclusion slide. Slides 21–30 are hidden during slideshow playback and can be opened for questions.
+- Use the detailed architecture figures in the appendix when the committee asks about implementation. Main slides keep the mechanism in readable text and editable tables.
 
-**Visible content**
+## Source precedence and issues to resolve before defense
 
-> **Robust Speech Recognition in Persian Language**  
-> Adapting Whisper-small to Telephone and VoIP Degradations
+The current `.tex` chapters and English abstract are the sources for this presentation. Outdated claims about unsuccessful fusion, a collapsed gate and a pending IranSeda experiment are excluded. The thesis source itself has not been changed.
 
-- Pouya Fallah Sichani
-- M.Sc. Thesis in Computer Engineering
-- Supervisor: Dr. Hosein Sameti
-- Sharif University of Technology · February 2026
+- Current fusion: aggregate WER/CER **17.64% / 7.85%**. Enhanced-stream gate mean **0.6785**, median **0.6930**. Do not repeat 18.44% WER, 14.04% CER or 0.0039 gate weight from old material.
+- IranSeda training and evaluation are complete: **17.22% WER / 7.70% CER**. The accepted corpus is **218.564 hours**, distinct from the **250-hour raw subset** selected for preparation.
+- Differences calculated from displayed scores: 17.83 − 17.22 = **0.61** WER points, 23.27 − 17.22 = **6.05** points, 12.96 − 12.62 = **0.34** CER points, and 3.29 − 3.22 = **0.07** CER points. Thesis prose/table deltas sometimes report 0.60, 6.04, 0.35 and 0.08 respectively. This deck preserves endpoint scores and uses arithmetic from the displayed values. Raw unrounded counts would be needed to reconcile the original deltas.
+- The thesis explicitly establishes **21,848 common eligible examples** for the paired single-stream comparisons. Its dataset table gives **391–396** Persian Speech Corpus examples across systems. Confirm exact paired eligibility for fusion/bridge comparisons before treating small ranking differences as controlled effects. Do not carry forward the old deck’s unverified six-extra-samples claim.
+- The selected IranSeda subset is 250 raw hours. Do not claim that 6,300 hours or all 3,777 books entered training.
+- Qwen permits conservative, context-supported ASR substitutions as well as orthographic cleanup. It is text-only. Do not describe its changes as human-verified transcription.
 
-**Visual / layout**
+## Slide-by-slide rehearsal guide
 
-- Center the title and subtitle in the upper two-thirds.
-- Place author, supervisor, institution, and date in a compact footer block.
-- Optional subtle background motif: a clean waveform gradually becoming band-limited; do not imply experimental data.
+### 1. Robust Speech Recognition in Persian Language
 
-**Speaker notes**
+Timing: 25 seconds.
 
-This thesis studies robust Persian automatic speech recognition under telephone and Voice over IP conditions. The central question is whether carefully simulated, traceable telecom degradations can reduce the mismatch between ordinary Persian speech data and real calls—and whether a more complex enhancement-and-fusion model improves further over a strong multi-condition baseline.
+Pouya Fallah Sichani
 
-**Timing:** 25 seconds
+Supervisor: Dr. Hosein Sameti
 
-**Thesis sources:** `front/info.tex`; `front/abstract-eng.tex`
-
----
-
-## Slide 2 — The Deployment Mismatch
-
-**Purpose:** Motivate why ordinary ASR training is insufficient for calls.
-
-**Visible content**
-
-### Models usually see
-
-- Relatively clean, wideband speech
-- Short, read utterances
-- Public speech corpora
-
-### Real calls may contain
-
-- Environmental noise and gain variation
-- Telephone bandwidth restriction
-- Codec artifacts and packet loss
-- Spontaneous, continuous speech
-
-**Takeaway:** A Persian ASR model trained mainly on ordinary speech may lose substantial accuracy on real telephone and VoIP audio.
-
-**Visual / layout**
-
-- Two-column “training” versus “deployment” comparison.
-- Between the columns, show a mismatch arrow labelled **domain shift**.
-- Use simple icons only; do not add unreported quantitative claims.
+Sharif University of Technology
 
 **Speaker notes**
 
-ASR accuracy depends not only on language and content, but also on how closely training conditions match deployment. This mismatch is especially important for Persian because public resources are more limited, while collecting and transcribing real calls is expensive and raises privacy and legal concerns. Controlled simulation is therefore attractive, but it must transfer to real—not only synthetic—channels.
+This thesis studies Persian ASR under telephone and VoIP conditions. I compare improvements from matching training conditions, adding an enhancement-fusion architecture, and expanding training data with pseudo-labelled audiobooks. The largest controlled robustness gain comes from telecom-oriented multi-condition training. The later experiments show smaller and domain-dependent gains.
 
-**Timing:** 50 seconds
+**Sources:** `Thesis/front/info.tex`, `Thesis/front/abstract-eng.tex`
 
-**Thesis sources:** `chapters/introduction.tex`, sections “Problem Definition” and “Importance and Scope”
+### 2. The mismatch in Persian telephone ASR
 
----
+Timing: 50 seconds.
 
-## Slide 3 — Research Questions
+Available speech: General Persian corpora, many short clips, varied recording conditions
 
-**Purpose:** State the decisions the experiments were designed to support.
+Target speech: Telephone and VoIP with noise, limited bandwidth, codecs and packet loss
 
-**Visible content**
+Research objective: Improve real-call recognition using existing speech and unlabelled audio
 
-1. Does adding synthetically degraded speech reduce Whisper-small error relative to ordinary fine-tuning?
-2. Does this benefit transfer to real telephone and VoIP speech without a broad loss on general Persian speech?
-3. Does fusing original and enhanced representations beat both ordinary and multi-condition Whisper?
-4. Does the learned gate actually use both streams?
-
-**Visual / layout**
-
-- Present the questions as four numbered cards.
-- Group Questions 1–2 under **Data strategy** and Questions 3–4 under **Model strategy**.
+The test must include real calls that the simulator never generated.
 
 **Speaker notes**
 
-The evaluation was deliberately designed to permit a negative answer for the proposed fusion architecture. The relevant comparison is not merely against ordinary Whisper, but against a simpler model exposed to the same degradation knowledge through multi-condition training.
+Persian training data includes read and spontaneous speech, but does not fully cover real telecom channels. A call can combine environmental noise, bandwidth restriction, codec distortion, gain changes and packet loss. Collecting large quantities of transcribed calls is expensive and privacy-sensitive. The goal is to improve recognition on real calls while monitoring performance on general Persian speech.
 
-**Timing:** 45 seconds
+**Sources:** `Thesis/chapters/introduction.tex`, `Thesis/chapters/preliminaries.tex`
 
-**Thesis sources:** `chapters/introduction.tex`, section “Research Questions”
+### 3. Research design
 
----
+Timing: 55 seconds.
 
-## Slide 4 — Proposed Approach at a Glance
+| Comparison | What changes | Reference |
+|---|---|---|
+| Telecom augmentation | Add degraded speech | Ordinary Whisper-small |
+| Enhancement and fusion | Add dual streams and staged training | Multi-condition Whisper-small |
+| Audiobook data | Add accepted IranSeda clips | Multi-condition Whisper-small |
 
-**Purpose:** Give the audience a map of the work before technical detail.
-
-**Visible content**
-
-1. **Unify Persian corpora**  
-   Common TSV contract, 16 kHz mono audio, shared text normalization
-2. **Generate traceable degradations**  
-   Aligned clean–degraded pairs with deterministic seeds and metadata
-3. **Train three systems**  
-   Ordinary Whisper · Multi-condition Whisper · Dual-stream fusion
-4. **Evaluate synthetic-to-real transfer**  
-   Five held-out test sets, including real AGFarsdat calls
-
-**Visual / layout**
-
-- Horizontal four-stage pipeline with one icon per stage.
-- Highlight Stage 2 as the data contribution and Stage 3 as the model comparison.
+Whisper-small remains the recognizer for the main comparisons.
+Whisper Medium and Fast Conformer provide additional context.
 
 **Speaker notes**
 
-The method operates at three levels: consistent data preparation, reproducible telecom simulation, and model training. The main experimental logic is to first isolate the effect of degraded training data in a controlled single-stream comparison, then test whether a dual-stream enhancement pathway provides additional useful information.
+The ordinary Whisper-small baseline includes original and constructed long examples. The multi-condition baseline adds degraded speech. It becomes the reference for both later comparisons. Fusion changes the system architecture and training schedule. The IranSeda experiment retains the complete multi-condition mixture and adds accepted audiobook clips. Fusion and IranSeda are separate branches. I did not train a combined fusion-plus-IranSeda system.
 
-**Timing:** 45 seconds
+**Sources:** `Thesis/chapters/work.tex`
 
-**Thesis sources:** `chapters/work.tex`, opening and “Solution Overview”
+### 4. A shared Persian training foundation
 
----
+Timing: 55 seconds.
 
-## Slide 5 — Data: Training Diversity and Held-Out Evaluation
+| Base corpus | Training clips | Validation clips |
+|---|---|---|
+| Common Voice Persian 25 | 299,430 | 10,006 |
+| FarsSpon, limited subset | 600,672 | 6,044 |
+| FLEURS Persian | 3,019 | 362 |
 
-**Purpose:** Show the data roles and why AGFarsdat is central.
+Mono 16 kHz audio and one Persian text normalizer
 
-**Visible content**
-
-### Training and validation
-
-| Dataset | Train | Validation | Role |
-|---|---:|---:|---|
-| Common Voice Persian 25 | 299,430 | 10,006 | General speech + degradation source |
-| FarsSpon (restricted) | 600,672 | 6,044 | Spontaneous Persian speech |
-| FLEURS Persian | 3,019 | 362 | Read speech + domain diversity |
-
-### Held-out test sets
-
-| Test set | Evaluated samples | Main characteristic |
-|---|---:|---|
-| **AGFarsdat normalized** | **10,044** | **Real telephone and VoIP** |
-| Common Voice Persian 25 | ≈10,518 | Crowdsourced general speech |
-| FLEURS Persian | 871 | Multi-domain read speech |
-| PersianSpeech | 24 | Small public Persian test set |
-| Persian Speech Corpus | 391–396 | Out-of-domain Persian speech |
-
-**Visual / layout**
-
-- Use two compact table panels; emphasize the AGFarsdat row with the accent color.
-- Add a small “not generated by our simulator” badge beside AGFarsdat.
+Long variants join 2–4 clips within a split, with durations above 5 and at most 20 seconds.
 
 **Speaker notes**
 
-All datasets follow the same TSV contract and audio/text preprocessing. Longer variants were also produced by concatenating two to four clips into 5–20 second examples. AGFarsdat is the most important application-domain test because it contains real telephone and VoIP speech and was not used to generate synthetic training samples. Test counts can vary slightly when references exceed Whisper’s token limit.
+The base corpora are Common Voice Persian 25, FarsSpon and FLEURS Persian. All audio uses mono 16 kHz and transcripts share deterministic Persian normalization. Constructed long examples concatenate two to four clips within the same split, with final duration above five and at most twenty seconds. Every main model uses these long variants. Multi-condition training additionally uses two independent degraded variants for each Common Voice clip and its long variant. These counts describe base examples before derived data and IranSeda.
 
-**Timing:** 65 seconds
+**Sources:** `Thesis/chapters/work.tex`
 
-**Thesis sources:** `chapters/work.tex`, tables “Main training and validation datasets” and “Held-out test sets”
+### 5. Evaluation on real calls and general speech
 
----
+Timing: 60 seconds.
 
-## Slide 6 — Reproducible Paired-Data Generation
+| Test set | Examples | Role |
+|---|---|---|
+| AGFarsdat | 10,044 | Real telephone and VoIP |
+| Common Voice Persian 25 | ~10,518 | Crowdsourced general speech |
+| FLEURS Persian | 871 | Read speech across domains |
+| PersianSpeech | 24 | Small supplementary test |
+| Persian Speech Corpus | 391–396 | Studio speech outside training domain |
 
-**Purpose:** Explain what makes the augmentation traceable and suitable for enhancement training.
-
-**Visible content**
-
-### For every clean utterance
-
-- Generate **two independent degraded variants**
-- Derive the seed deterministically from the tuple: `(1337, split, source ID, variant ID)`
-- Align clean and degraded waveforms in time and length
-- Build a clean target with the **same channel bandwidth**
-
-### Save more than audio
-
-- New split TSV files
-- `degraded_to_clean.jsonl`
-- `degradation_metadata.jsonl`
-- Profile, noise, SNR, gain, codec, bitrate, delay, packet loss, and normalization metadata
-
-**Takeaway:** Every sample can be reproduced, audited, and grouped by degradation condition.
-
-**Visual / layout**
-
-- Left: one clean clip branching to two degraded variants.
-- Right: a metadata record icon pointing back to source and parameters.
+WER = (substitutions + deletions + insertions) / reference words
+CER counts characters. Aggregate scores pool counts. Lower is better.
 
 **Speaker notes**
 
-Randomness is controlled per sample, so changing processing order does not change a clip’s degradation. Codec delay is estimated and compensated, and pair lengths are aligned. For narrowband paths, the clean enhancement target is also band-limited; the enhancer is therefore not penalized for failing to reconstruct frequencies fundamentally removed by the channel.
+WER is substitutions plus deletions plus insertions divided by reference words. CER uses the same calculation over characters. Lower is better. All main systems use greedy decoding and identical Persian normalization. Aggregate metrics pool error counts and reference units rather than average dataset percentages. The paired single-stream comparisons use 21,848 common eligible examples. The thesis lists a 391 to 396 range for Persian Speech Corpus across models, so model-wide rankings require care about eligibility. AGFarsdat is held out from training and model selection.
 
-**Timing:** 60 seconds
+**Sources:** `Thesis/chapters/work.tex`, `Thesis/chapters/results.tex`, `Thesis/chapters/conclusions.tex`
 
-**Thesis sources:** `chapters/work.tex`, subsection “Reproducibility and Outputs” and subsection “Channel, Codec, and Network Chain”
+### 6. Reproducible telecom augmentation
 
----
+Timing: 75 seconds.
 
-## Slide 7 — Telecom Degradation Pipeline
+| Stage | Implementation |
+|---|---|
+| Noise and gain | DEMAND noise, SNR from −5 to 15 dB, gain ±6 dB |
+| Channel and codec | Narrowband / wideband, real codec encode–decode |
+| Network effects | Opus packet loss + PLC, waveform-dropout approximation elsewhere |
+| Aligned output | 16 kHz pair, matched bandwidth target, saved seed and metadata |
 
-**Purpose:** Present the complete simulation pipeline using the thesis diagram.
-
-**Visible content**
-
-![Degradation pipeline architecture](assets/degradation-pipeline-architecture.png)
-
-**Callout labels to add in PowerPoint**
-
-- Four interpretable profiles: clean telephone, noisy telephone, lossy VoIP, mobile wideband
-- DEMAND noise; SNR sampled from −5 to 15 dB; gain from −6 to +6 dB
-- Narrowband or wideband channel filtering
-- Real FFmpeg codec round-trips
-- Burst packet loss; packet-level Opus loss with decoder PLC
-- Delay compensation, length alignment, and shared pair normalization
-
-**Visual / layout**
-
-- Use the diagram nearly full-slide, preserving aspect ratio.
-- Reveal or discuss it left to right; avoid shrinking it to make room for paragraph text.
-- Add no more than three small callouts at once if animation is available.
+G.711, GSM, AMR-NB, AMR-WB and Opus cover the implemented codec paths.
 
 **Speaker notes**
 
-The order is intentional: noise and gain occur before channel and codec processing, while network impairment occurs after encoding. Supported codecs include G.711 A-law and μ-law, GSM, AMR-NB, AMR-WB, and narrowband or wideband Opus. Opus packets can be removed before decoding so the decoder’s own packet-loss concealment is exercised. For non-Opus codecs, decoded-waveform frame dropout is explicitly recorded as an approximation rather than exact network simulation.
+Four sampled profiles cover clean telephone, noisy telephone, lossy VoIP and mobile wideband. Their weights describe a designed training distribution, not measured operator traffic. Noise and gain changes precede channel filtering and codec processing. FFmpeg round-trips model codec distortion. Native Opus supports packet loss and decoder PLC. Other paths approximate loss through waveform dropouts. The final aligned pair has a shared transcript, compensated delay and a common peak scale. The clean enhancement target has the same bandwidth as its degraded input. Seeds and settings make each example traceable.
 
-**Timing:** 85 seconds
+**Sources:** `Thesis/chapters/work.tex`
 
-**Thesis sources:** `chapters/work.tex`, “Degradation Profiles” and “Channel, Codec, and Network Chain”; thesis Figure “Architecture of the clean–degraded pair generation pipeline”
+### 7. Synthetic training transfers to real calls
 
----
+Timing: 70 seconds.
 
-## Slide 8 — Three Systems, One Key Controlled Comparison
+WER (%) on the aggregate evaluation and held-out real calls. Lower is better.
 
-**Purpose:** Define the model variants and the experimental logic.
+| Category | Ordinary Whisper-small | Multi-condition Whisper-small |
+|---|---|---|
+| Aggregate | 23.27% | 17.83% |
+| AGFarsdat | 35.63% | 25.80% |
 
-**Visible content**
+5.44 points lower overall                         9.83 points lower on real calls
 
-| System | Training input | Added architecture | Main question |
+**Speaker notes**
+
+This is the main robustness result. Multi-condition training lowers aggregate WER by 5.44 percentage points, a 23.4 percent relative reduction. On AGFarsdat, WER falls by 9.83 points, a 27.6 percent relative reduction. AGFarsdat contains real telephone and VoIP recordings and did not participate in training or simulator construction. This is evidence of transfer to the target channel. It does not establish uniform improvement across every general speech dataset.
+
+**Sources:** `Thesis/chapters/results.tex`
+
+### 8. Noise alone leaves part of the gap
+
+Timing: 55 seconds.
+
+| Whisper-small training | Aggregate WER | AGFarsdat WER |
+|---|---|---|
+| Ordinary | 23.27% | 35.63% |
+| Noise only | 20.38% | 32.67% |
+| pMCT, clean/noisy segment mixing | 19.21% | 30.01% |
+| Full telecom multi-condition | 17.83% | 25.80% |
+
+Lower is better. The full pipeline adds bandwidth, codec and network effects.
+
+**Speaker notes**
+
+Both noise-only augmentation and pMCT improve over the ordinary baseline. In the implemented pMCT comparison, aligned clean and noisy examples are divided into one-second pieces, then each piece is selected from either view with equal probability. The full telecom pipeline gives the lowest aggregate and AGFarsdat WER of these augmentation experiments. This supports modelling more than noise. It does not isolate the contribution of each codec or loss mechanism, since those components were not individually ablated.
+
+**Sources:** `Thesis/chapters/results.tex`
+
+### 9. Dual-stream enhancement and fusion
+
+Timing: 80 seconds.
+
+Two views: Original log-Mel and a residual U-Net enhanced view
+
+Shared encoding: One Whisper encoder, two passes with shared weights
+
+Learned combination: Bidirectional cross-attention, then a gate per time and feature
+
+Fused = g ⊙ Enhanced′ + (1 − g) ⊙ Original′
+
+**Speaker notes**
+
+The hypothesis is that a learned enhanced view may complement the original observation. A residual U-Net modifies 80-band log-Mel features without reconstructing a waveform. Original and enhanced features pass through the same Whisper encoder in two passes with shared parameters. One layer of bidirectional cross-attention with four heads exchanges information between streams. A time-feature gate then combines the outputs before the Whisper decoder. Starting from the multi-condition checkpoint makes the comparison more demanding than starting from ordinary Whisper. The diagram in the appendix contains the complete architecture.
+
+**Sources:** `Thesis/chapters/work.tex`
+
+### 10. Three-stage fusion training
+
+Timing: 50 seconds.
+
+| Stage | Trainable components | Objective |
+|---|---|---|
+| 1. Enhancer warm-up | Enhancer only | 0.5 enhancement + 0.5 feature |
+| 2. Frozen recognizer | Enhancer and fusion | ASR + 0.3 enhancement |
+| 3. Joint training | All components | ASR + 0.1 enhancement |
+
+One epoch per stage. Final learning rates: added modules 10⁻⁴, Whisper 5 × 10⁻⁶.
+Fusion changes both architecture and the training schedule.
+
+**Speaker notes**
+
+Every stage runs for one epoch. Warm-up trains the enhancer using equal-weight log-Mel reconstruction and encoder-feature matching, while Whisper remains frozen. Stage two trains enhancer and fusion with ASR loss plus 0.3 enhancement loss, again with frozen Whisper. Stage three unfreezes the whole model with ASR loss plus 0.1 enhancement loss. The additional modules use a higher learning rate than Whisper. The last stage includes degraded examples, long examples and a randomly selected 25 percent of clean data. Fusion therefore has extra recognizer training relative to the single-stream baseline.
+
+**Sources:** `Thesis/chapters/work.tex`
+
+### 11. Fusion gives a small numerical improvement
+
+Timing: 65 seconds.
+
+| System | Aggregate WER | Aggregate CER | AGFarsdat WER |
 |---|---|---|---|
-| **Ordinary Whisper** | Ordinary Persian + long variants | None | Language adaptation baseline |
-| **Multi-condition Whisper** | Ordinary + long + degraded variants | None | Effect of degraded training data |
-| **Dual-stream fusion** | Original and enhanced views | Enhancer + cross-attention + gate | Added value beyond multi-condition training |
+| Multi-condition | 17.83% | 7.93% | 25.80% |
+| Dual-stream fusion | 17.64% | 7.85% | 25.37% |
+| Adaptive bridge, independent | 17.74% | 8.00% | 25.84% |
 
-**Controlled evidence:** The two single-stream Whisper runs use the same seed, optimizer settings, evaluation data, and decoding setup; their key difference is data composition.
+Mean enhanced-stream gate weight: 0.6785
 
-**Visual / layout**
-
-- Use the table as the main visual.
-- Draw a bracket around the first two rows labelled **controlled data comparison**.
+Gate weights do not measure independent causal contribution.
+Small margins lack confidence intervals and repeated-seed evidence.
 
 **Speaker notes**
 
-Whisper-small was chosen to balance model capacity against the cost of multiple training runs. The ordinary and multi-condition systems are the cleanest causal comparison in the thesis. The fusion model changes both architecture and training schedule, so its comparison is informative but not as tightly controlled.
+Fusion lowers aggregate WER from 17.83 to 17.64 percent, a 0.19-point gain, and AGFarsdat WER from 25.80 to 25.37 percent. The independently implemented adaptive bridge combines original and FRCRN-enhanced waveforms before frozen Whisper, rather than encoder representations. It improves aggregate WER slightly but increases CER. Fusion’s mean gate weight for the enhanced stream is 0.6785, with median 0.6930. Because cross-attention already exchanged information, this weight is not a causal contribution estimate. Different enhancers and training schedules prevent isolating the fusion mechanism from the bridge comparison. No significance test establishes reliability of the small margins.
 
-**Timing:** 55 seconds
+**Sources:** `Thesis/chapters/results.tex`, `Thesis/chapters/work.tex`
 
-**Thesis sources:** `chapters/work.tex`, sections “Fine-tuning Whisper-small” and “Dual-stream Fusion Model for Whisper”; `chapters/results.tex`, “Evaluation Protocol”
+### 12. Tiny-model ablations support using both views
 
----
+Timing: 65 seconds.
 
-## Slide 9 — Dual-Stream Enhancement and Fusion
+| Whisper Tiny configuration | CV25 WER | AGFarsdat WER |
+|---|---|---|
+| Multi-condition baseline | 74.92% | 76.85% |
+| Bidirectional cross-attention fusion | 57.82% | 63.50% |
+| Gate only, without cross-attention | 62.35% | 65.88% |
+| Original representation only¹ | 64.10% | 69.23% |
+| Enhanced representation only¹ | 63.81% | 69.69% |
 
-**Purpose:** Explain the proposed architecture and its intended advantage.
-
-**Visible content**
-
-![Dual-stream fusion model architecture](assets/fusion-model-architecture.png)
-
-**Callout labels to add in PowerPoint**
-
-- Degraded input → original log-Mel view + enhanced log-Mel view
-- Residual U-Net enhancer with three down/up levels and skip connections
-- Shared Whisper encoder for both views
-- Bidirectional cross-attention exchanges information
-- Time–feature gate selects a soft mixture for decoding
-
-**Visual / layout**
-
-- Use the diagram full-width and preserve aspect ratio.
-- Highlight the two parallel streams first, then the fusion/gate block.
+¹ Inference-time removal from the trained fusion checkpoint. Lower is better.
+Separate Tiny experiment. Extra training and unequal capacity limit attribution.
 
 **Speaker notes**
 
-Enhancement can remove noise but may also remove low-energy phonetic cues or introduce artifacts. The architecture therefore keeps the original representation rather than replacing it. Both views pass through a shared encoder, exchange information using bidirectional cross-attention, and are combined by a learned gate that can, in principle, select the more useful view at each time–feature location.
+These are separate experiments with Whisper Tiny and Common Voice training only. They are not additional rows in the Whisper-small benchmark. Full bidirectional fusion performs best among these variants on both tests. Removing attention or using either stream alone raises WER. The single-view conditions bypass fusion at inference using the same trained checkpoint. They do not represent separately trained single-stream controls. Fusion also receives an extra joint ASR training stage, so the large gap from Tiny’s multi-condition baseline cannot be attributed to architecture alone. Full WER and CER results are in the appendix.
 
-**Timing:** 80 seconds
+**Sources:** `Thesis/chapters/results.tex`
 
-**Thesis sources:** `chapters/work.tex`, section “Dual-stream Fusion Model for Whisper”; thesis Figure “Dual-stream fusion architecture and three-stage training schedule”
+### 13. IranSeda audiobook preparation
 
----
+Timing: 65 seconds.
 
-## Slide 10 — Three-Stage Training Strategy
+Source preparation: 3,777 books, about 6,300 raw hours, 250 hours selected
 
-**Purpose:** Show how the more complex model was optimized.
+Segmentation and transcription: Silero VAD, 20-second target, Persian-adapted Whisper Medium teacher
 
-**Visible content**
+Text preparation: Persian normalization, conservative Qwen refinement, quality filtering
 
-1. **Enhancer warm-up — one epoch**
-   Prepare the enhancer using reconstruction and encoder-feature guidance
-2. **Fusion training with Whisper frozen — one epoch**
-   Train enhancer and fusion components without destabilizing the recognizer
-3. **End-to-end joint training — one epoch**
-   Optimize the complete ASR system jointly
-
-**Reported fusion configuration**
-
-- Initialize from multi-condition Persian Whisper
-- Use a three-level residual U-Net with 32 base channels and no transformer bottleneck
-- Use one bidirectional cross-attention layer with four heads
-- In joint training, sample every degraded row and 25% of pooled clean rows
-
-**Visual / layout**
-
-- Horizontal three-stage timeline with lock/unlock icons for Whisper.
-- Put the reported configuration in a small right-side panel.
+The new Whisper-small run retains ordinary, long and degraded speech.
 
 **Speaker notes**
 
-The reported fusion model uses one epoch per stage. The enhancer and fusion modules are smaller than in the earlier experiment, while the final stage jointly tunes Whisper. The result describes this complete configuration; it does not isolate the effect of any single design choice.
+The second data direction asks whether additional real Persian speech helps after multi-condition training. The acquisition contains 3,777 audiobooks and approximately 6,300 raw hours. Compute limits motivate processing a selected 250-hour subset. Silero VAD segments audio around natural boundaries, with a twenty-second target, preferred fifteen to twenty-five seconds and a hard twenty-eight-second maximum. Persian-adapted Whisper Medium generates each segment’s transcript. Deterministic normalization precedes conservative Qwen refinement and quality filtering. Accepted clips supplement all original, long and degraded data, rather than replacing any baseline component.
 
-**Timing:** 55 seconds
+**Sources:** `Thesis/chapters/work.tex`
 
-**Thesis sources:** `chapters/work.tex`, subsection “Three-stage Training Schedule”; `chapters/results.tex`, “Fusion-model Development Trend”
+### 14. 218.564 hours remain after filtering
 
----
+Timing: 60 seconds.
 
-## Slide 11 — Evaluation Protocol
+| Reviewed clips | Accepted | Rejected |
+|---|---|---|
+| 44,820 | 39,454 | 5,366 |
 
-**Purpose:** Define the metrics and comparison caveats before showing results.
+Label safeguards: Retain raw text, preserve numbers, reject uncertain or excessive edits
 
-**Visible content**
+Leakage control: Split by original book and preserve source identity, times and checksums
 
-### Error rate
-
-\[
-\mathrm{ER}=\frac{S+D+I}{N}
-\]
-
-- **WER:** substitutions, deletions, and insertions over reference words
-- **CER:** the same operations over reference characters
-- Lower is better; the two metrics expose different error patterns
-
-### Shared evaluation setup
-
-- Greedy decoding and identical Persian text normalization
-- Five test sets covering general and real telecom speech
-- Single-stream models: **21,848 identical samples**
-- Fusion model: **21,854 samples**—six more, or 0.027% of the total
-
-**Visual / layout**
-
-- Formula and metric definitions on the left; protocol facts on the right.
-- Add a caution icon beside the six-sample mismatch.
+Accepted corpus: 218.564 hours from 136 files. Forty operational failures are separate.
 
 **Speaker notes**
 
-The two single-stream runs are fully paired. The fusion aggregate is not perfectly paired because it includes one additional Common Voice and five additional Persian Speech Corpus examples. This is a very small fraction, but it reinforces why small differences involving fusion must not be presented as conclusive. No confidence intervals or significance tests were computed.
+The selected 250 raw hours must be distinguished from the final accepted corpus. Of 44,820 reviewed clips, 39,454 were accepted and 5,366 rejected. Forty operational failures were tracked separately. Accepted audio totals 218.564 hours from 136 audiobook files. Qwen receives text and context only. It may correct orthography and clearly supported substitutions, but cannot add speech or complete segments. Numeric tokens must remain unchanged. Uncertain or excessive edits are rejected. Raw teacher text and refined text remain separate. Splits operate at book level, not clip level, and provenance preserves source identity, timestamps, hashes and processing settings. There is no human transcription audit that quantifies pseudo-label or LLM correction accuracy.
 
-**Timing:** 60 seconds
+**Sources:** `Thesis/chapters/work.tex`, `Thesis/chapters/conclusions.tex`
 
-**Thesis sources:** `chapters/results.tex`, section “Evaluation Protocol”
+### 15. Audiobook gains depend on the test domain
 
----
+Timing: 85 seconds.
 
-## Slide 12 — Main Result: Multi-Condition Training Wins Overall
+Change in WER versus multi-condition Whisper-small, in percentage points
 
-**Purpose:** Deliver the principal quantitative finding.
+| Category | With IranSeda − baseline |
+|---|---|
+| AGFarsdat | 0.86 |
+| Common Voice | 0.35 |
+| FLEURS | -6.04 |
+| PersianSpeech¹ | -8.39 |
+| Persian Corpus | -5.03 |
 
-**Visible content**
-
-### Aggregate error across all test sets
-
-| System | WER | CER | WER change vs. ordinary |
-|---|---:|---:|---:|
-| Ordinary Whisper | 23.27% | 10.84% | — |
-| **Multi-condition Whisper** | **17.83%** | **7.93%** | **−5.44 pp** |
-| Dual-stream fusion | 18.44% | 14.04% | −4.82 pp |
-
-**Key result:** Multi-condition training reduces WER by **23.4% relative** and CER by **26.8% relative** compared with ordinary Whisper.
-
-**Visual / layout**
-
-- Preferred visual: two grouped bar charts, WER and CER, sharing the system color mapping.
-- Put the 23.4% relative WER reduction in a large callout above the WER chart.
-- Keep the exact values visible as data labels.
-
-**Editable chart data**
-
-```csv
-system,WER,CER
-Ordinary Whisper,23.27,10.84
-Multi-condition Whisper,17.83,7.93
-Dual-stream fusion,18.44,14.04
-```
+Negative means improvement. Aggregate WER: 17.83% to 17.22%.
+¹ Only 24 test examples. Domain effects require further analysis.
 
 **Speaker notes**
 
-This is the strongest result of the thesis. Adding degraded speech lowers aggregate WER from 23.27% to 17.83%—5.44 percentage points, or 23.4% relative. Because the single-stream runs use the same evaluation and optimization settings, this provides controlled evidence for multi-condition training. Fusion remains better than ordinary Whisper but is 0.62 percentage points worse than the multi-condition baseline and has substantially worse CER.
+Adding IranSeda lowers aggregate WER from 17.83 to 17.22 percent and CER from 7.93 to 7.70 percent. That is a 0.61-point WER reduction when calculated from displayed values. Per-domain changes are more revealing: FLEURS improves by 6.04 points, PersianSpeech by 8.39 points and Persian Speech Corpus by 5.03 points. AGFarsdat worsens by 0.86 points and Common Voice by 0.35 points. PersianSpeech has only 24 examples, so its large change is preliminary. The data improves several general domains but does not add telephone robustness. The experiment does not isolate whether style, recording conditions, label quality or sampling mixture causes this pattern.
 
-**Timing:** 80 seconds
+**Sources:** `Thesis/chapters/results.tex`
 
-**Thesis sources:** `chapters/results.tex`, table “Aggregate results of the three main methods” and section “Aggregate Results”
+### 16. Results of the main Whisper-small comparisons
 
----
+Timing: 60 seconds.
 
-## Slide 13 — Synthetic Degradations Transfer to Real Calls
+| Whisper-small system | Aggregate WER | Aggregate CER | AGFarsdat WER |
+|---|---|---|---|
+| Ordinary | 23.27% | 10.84% | 35.63% |
+| Multi-condition | 17.83% | 7.93% | 25.80% |
+| Dual-stream fusion | 17.64% | 7.85% | 25.37% |
+| Multi-condition + IranSeda | 17.22% | 7.70% | 26.66% |
 
-**Purpose:** Show that the data strategy improves the target domain, not only synthetic or general speech.
-
-**Visible content**
-
-### AGFarsdat: real telephone and VoIP speech
-
-| System | WER | Absolute change vs. ordinary |
-|---|---:|---:|
-| Ordinary Whisper | 35.63% | — |
-| Multi-condition Whisper | 25.80% | −9.83 pp |
-| Dual-stream fusion | **25.38%** | −10.25 pp |
-
-- Multi-condition training provides a **27.6% relative WER reduction**.
-- Fusion is numerically 0.42 pp lower than multi-condition Whisper.
-- **No statistical test:** the 0.42 pp difference is not evidence of a stable or conclusive fusion advantage.
-
-**Visual / layout**
-
-- Use a three-bar WER chart with a bracket from 35.63 to 25.80 labelled **−27.6% relative**.
-- Place a caution annotation over the small 25.80 versus 25.38 gap.
-
-**Editable chart data**
-
-```csv
-system,AGFarsdat_WER
-Ordinary Whisper,35.63
-Multi-condition Whisper,25.80
-Dual-stream fusion,25.38
-```
+Lower is better. The lowest aggregate score and the lowest real-call score differ.
 
 **Speaker notes**
 
-AGFarsdat was not produced by the simulator, so this reduction is evidence that synthetic telecom diversity transferred to a real channel. Fusion achieves the lowest observed WER, but its advantage over multi-condition Whisper is only 0.42 percentage points and was not tested for significance. The defensible conclusion is that fusion preserves the multi-condition model’s target-domain performance with a small numerical improvement—not that it conclusively wins.
+This table brings the primary comparisons together. Ordinary Whisper-small provides the initial reference. Multi-condition training gives the large reduction in aggregate and real-call errors. Fusion adds a small numerical improvement. Additional IranSeda speech produces the lowest aggregate WER among these Whisper-small systems but a higher AGFarsdat WER than multi-condition or fusion. The ranking depends on the application domain. These are observed values from the completed experiments rather than statistically established model rankings. The complete augmentation and bridge comparisons are in backup slides.
 
-**Timing:** 75 seconds
+**Sources:** `Thesis/chapters/results.tex`
 
-**Thesis sources:** `chapters/results.tex`, subsection “Real Telephone and VoIP Speech”
+### 17. Whisper Medium provides capacity context
 
----
+Timing: 40 seconds.
 
-## Slide 14 — Robustness Is Domain-Dependent
+| Model | Aggregate WER | Aggregate CER | AGFarsdat WER |
+|---|---|---|---|
+| Small, multi-condition | 17.83% | 7.93% | 25.80% |
+| Small, + IranSeda | 17.22% | 7.70% | 26.66% |
+| Medium, Persian-adapted | 14.36% | 6.68% | 21.99% |
 
-**Purpose:** Prevent the aggregate result from hiding regressions and small-set uncertainty.
-
-**Visible content**
-
-### WER by test set (%)
-
-| Test set | Ordinary | Multi-condition | Fusion |
-|---|---:|---:|---:|
-| AGFarsdat | 35.63 | 25.80 | **25.38** |
-| Common Voice | 11.52 | **7.84** | 9.06 |
-| FLEURS | 21.05 | 19.82 | **19.61** |
-| PersianSpeech | 34.53 | 35.25 | **31.18** |
-| Persian Speech Corpus | **30.17** | 30.90 | 35.17 |
-
-**Interpretation:** Telecom robustness does not guarantee uniform cross-domain improvement.
-
-**Visual / layout**
-
-- Preferred visual: grouped horizontal bar chart, one group per dataset.
-- Add “n = 24” beside PersianSpeech to flag its instability.
-- Mark the Persian Speech Corpus regression with a restrained warning symbol.
-
-**Editable chart data**
-
-```csv
-test_set,Ordinary,Multi-condition,Fusion
-AGFarsdat,35.63,25.80,25.38
-Common Voice,11.52,7.84,9.06
-FLEURS,21.05,19.82,19.61
-PersianSpeech,34.53,35.25,31.18
-Persian Speech Corpus,30.17,30.90,35.17
-```
+Medium is also the pseudo-label teacher.
+Changing model capacity prevents a data-only interpretation.
 
 **Speaker notes**
 
-Multi-condition training improves strongly on Common Voice and modestly on FLEURS, but not on PersianSpeech or the Persian Speech Corpus. PersianSpeech contains only 24 scored examples, so each sample has a large effect. On the Persian Speech Corpus, ordinary Whisper is best and fusion is worst. These results show that channel robustness and cross-domain generalization are related but not identical problems.
+Whisper Medium achieved the lowest overall WER and CER of the completed main evaluations. It also served as the pseudo-label teacher. Its aggregate WER is 3.47 percentage points below multi-condition Whisper-small. Its AGFarsdat WER is 21.99 percent. The single-stream models share the same 21,848 eligible examples, but model capacity and training details differ. These numbers give a useful higher-capacity reference and do not identify a data-only or architecture-only causal effect.
 
-**Timing:** 75 seconds
+**Sources:** `Thesis/chapters/results.tex`, `Thesis/chapters/work.tex`
 
-**Thesis sources:** `chapters/results.tex`, table “WER by test set” and subsection “General Speech and Domain Differences”
+### 18. Research contributions
 
----
+Timing: 40 seconds.
 
-## Slide 15 — CER Exposes a Fusion Failure Mode
+Reproducible telecom data: Aligned pairs with real codec paths and recorded augmentation settings
 
-**Purpose:** Show why WER alone gives an incomplete assessment of fusion.
+Controlled robustness evidence: Large Whisper-small gain on held-out real telephone and VoIP speech
 
-**Visible content**
+Architecture and data studies: Fusion evaluation, Tiny ablations and a curated audiobook corpus
 
-### CER by test set (%)
-
-| Test set | Ordinary | Multi-condition | Fusion |
-|---|---:|---:|---:|
-| AGFarsdat | 19.73 | 12.62 | **12.38** |
-| Common Voice | 4.06 | **3.22** | **16.08** |
-| FLEURS | **6.13** | 6.36 | 6.23 |
-| PersianSpeech | 16.21 | 15.62 | **12.91** |
-| Persian Speech Corpus | 15.48 | **15.22** | **21.07** |
-
-**Key anomaly:** Fusion reaches 9.06% WER but 16.08% CER on Common Voice.
-
-**Visual / layout**
-
-- Preferred visual: dot plot or heatmap; visually emphasize fusion’s Common Voice and Persian Speech Corpus cells.
-- Keep a small aggregate callout: ordinary 10.84%, multi-condition 7.93%, fusion 14.04%.
-
-**Editable chart data**
-
-```csv
-test_set,Ordinary,Multi-condition,Fusion
-AGFarsdat,19.73,12.62,12.38
-Common Voice,4.06,3.22,16.08
-FLEURS,6.13,6.36,6.23
-PersianSpeech,16.21,15.62,12.91
-Persian Speech Corpus,15.48,15.22,21.07
-```
+Domain-specific interpretation: Separate general-speech gains from real-call robustness
 
 **Speaker notes**
 
-Fusion performs competitively on AGFarsdat and PersianSpeech CER, but the aggregate CER is worse than both single-stream systems. The Common Voice divergence is particularly striking. Aggregate files alone cannot determine whether this comes from very long outputs, repeated characters, normalization issues, or another insertion/deletion pattern. Sample-level error decomposition is needed before claiming a cause.
+The contribution is a reproducible experimental framework, alongside the implemented systems and data preparation. It includes deterministic telecom degradation with provenance, evidence of synthetic-to-real transfer, a task-trained dual-stream system evaluated against a strong multi-condition baseline and an independently implemented waveform bridge, plus a curated audiobook corpus. The domain-specific analysis prevents treating lower aggregate WER as universal robustness. Claims of a new universal architecture or state-of-the-art Persian ASR are outside the evidence.
 
-**Timing:** 70 seconds
+**Sources:** `Thesis/chapters/introduction.tex`, `Thesis/chapters/work.tex`, `Thesis/chapters/conclusions.tex`
 
-**Thesis sources:** `chapters/results.tex`, table “CER by test set” and section “Character-error Analysis”
+### 19. Limits and the next experiments
 
----
+Timing: 45 seconds.
 
-## Slide 16 — The Learned Gate Collapsed to the Original Stream
+| Current limitation | Next experiment |
+|---|---|
+| Small margins, single runs | Repeated seeds and paired confidence intervals |
+| Fusion training differs | Match training budget and ablate modules in Whisper-small |
+| Pseudo-labels lack human audit | Audit teacher, Qwen edits and accepted text separately |
+| Domain and deployment uncertainty | Sweep data mixture, report codec/SNR errors and runtime cost |
 
-**Purpose:** Connect fusion performance to its internal behavior without overstating causality.
-
-**Visible content**
-
-### Fusion development
-
-| Run | WER | CER | Enhanced weight | Original weight |
-|---|---:|---:|---:|---:|
-| First run | 24.35% | 15.46% | 0.5154 | 0.4846 |
-| Final run | **18.44%** | **14.04%** | **0.0039** | **0.9961** |
-
-### Final gate allocation
-
-- Original representation: **99.61% mean weight**
-- Enhanced representation: **0.39% mean weight**
-
-**Interpretation:** The final model became more accurate while relying almost entirely on the original stream.
-
-**Visual / layout**
-
-- Left: compact first-versus-final WER comparison.
-- Right: 100% stacked bar showing 99.61% original versus 0.39% enhanced.
-- Do not label the enhancer “useless”; label the observation **gate collapse**.
-
-**Editable chart data**
-
-```csv
-run,WER,CER,Enhanced_weight,Original_weight
-First run,24.35,15.46,0.5154,0.4846
-Final run,18.44,14.04,0.0039,0.9961
-```
+AGFarsdat is private. PersianSpeech has 24 examples. Simulator coverage is incomplete.
 
 **Speaker notes**
 
-The final run improves WER by 5.90 percentage points over the first fusion run, but several changes were made simultaneously, so no single change receives causal credit. The gate’s mean and median are both near the same extreme, suggesting this is not driven by a few outliers. Still, gate weight alone does not prove that the enhancer contributes nothing, because cross-attention can exchange information before gating. Ablation studies are required.
+The most urgent follow-ups test reliability and explain mechanism. Repeated seeds, exact paired eligibility and bootstrap confidence intervals are necessary for small differences. Matched-budget ablations should isolate attention and enhancement at Whisper-small scale. A human audit should compare raw teacher text, Qwen refinements and retained labels. Mixture sweeps and more telephone-like unlabelled speech would test the domain trade-off. Codec- and SNR-specific analyses and measurements of latency, memory and real-time factor remain necessary before deployment decisions. AGFarsdat is private, and PersianSpeech is very small.
 
-**Timing:** 75 seconds
+**Sources:** `Thesis/chapters/results.tex`, `Thesis/chapters/conclusions.tex`
 
-**Thesis sources:** `chapters/results.tex`, table and section “Fusion-model Development Trend”
+### 20. Telecom-matched training gives the largest gain
 
----
+Timing: 45 seconds.
 
-## Slide 17 — What This Thesis Contributes
+Real-call robustness: 35.63% to 25.80% WER with multi-condition training
 
-**Purpose:** Synthesize the work into defensible technical and scientific contributions.
+Added architecture: Fusion reaches 25.37% real-call WER, a small numerical gain
 
-**Visible content**
+Added audiobook speech: 17.22% aggregate WER, with a 0.86-point real-call regression
 
-### 1. Traceable telecom data generation
-
-- Real codec round-trips, bandwidth limits, noise, gain, and packet loss
-- Deterministic seeds, aligned pairs, and auditable metadata
-
-### 2. Controlled evidence for robust Persian ASR
-
-- Multi-condition Whisper is a simple, strong baseline
-- Synthetic degradations transfer to real AGFarsdat calls
-
-### 3. Honest evaluation of dual-stream fusion
-
-- Competitive target-domain WER, but no aggregate win
-- CER anomaly and gate collapse reported as central findings
-
-**Takeaway:** In this setting, data design and a fair baseline mattered more than added architectural complexity.
-
-**Visual / layout**
-
-- Three equal contribution cards feeding into the takeaway statement.
+Questions
 
 **Speaker notes**
 
-The contribution is not only a model. It is a reproducible data workflow, controlled empirical evidence that telecom-oriented augmentation helps Persian ASR, and an evaluation framework that tests a proposed architecture against the stronger baseline it must actually beat. The negative fusion findings narrow the next research questions rather than being hidden.
+The central answer is that matching the training conditions to the target channel yields the largest controlled improvement. Multi-condition training cuts real-call WER from 35.63 to 25.80 percent without changing the Whisper-small architecture. Fusion improves it slightly further, but statistical reliability and runtime value remain open. Audiobooks lower aggregate WER to 17.22 percent while slightly worsening AGFarsdat, showing why data relevance matters alongside volume. Thank you. I am happy to discuss the experimental controls and the domain-specific results.
 
-**Timing:** 60 seconds
+**Sources:** `Thesis/chapters/results.tex`, `Thesis/chapters/conclusions.tex`
 
-**Thesis sources:** `chapters/conclusions.tex`, section “Research Contributions”
+### Backup 21. Complete aggregate results
 
----
+Timing: questions only.
 
-## Slide 18 — Limitations and Next Experiments
+| System | WER | CER |
+|---|---|---|
+| Ordinary | 23.27% | 10.84% |
+| Noise only | 20.38% | 9.59% |
+| pMCT | 19.21% | 8.91% |
+| Multi-condition | 17.83% | 7.93% |
+| Dual-stream fusion | 17.64% | 7.85% |
+| Adaptive bridge | 17.74% | 8.00% |
+| Whisper Medium | 14.36% | 6.68% |
+| Multi-condition + IranSeda | 17.22% | 7.70% |
 
-**Purpose:** Bound the claims and identify decision-relevant follow-up work.
-
-**Visible content**
-
-### Current limitations
-
-- One training seed per main configuration; no confidence intervals
-- Fusion evaluation differs by six samples
-- No WER/CER breakdown by codec, SNR, packet loss, or clip length
-- No SI-SDR, PESQ, STOI, listening test, latency, or memory measurements
-- Simulator omits reverberation, echo, jitter, long dropouts, and overlapping speakers
-
-### Highest-priority next experiments
-
-1. Re-score identical sample lists; bootstrap confidence intervals; run multiple seeds
-2. Ablate original-only, enhanced-only, cross-attention, and forced/fixed gates
-3. Analyze errors and gate weights by degradation condition
-4. Measure real-time factor, peak memory, and end-to-end latency
-
-**Visual / layout**
-
-- Two columns: limitations on the left and matched next actions on the right.
-- If space is tight, reveal the right column progressively.
+Lower is better. Confidence intervals and repeated-seed estimates are unavailable.
 
 **Speaker notes**
 
-The first priority is diagnostic evaluation, not immediate architectural expansion. A paired re-evaluation and confidence intervals would establish which differences are reliable. Ablations can then determine whether the enhanced stream, cross-attention, or gate contributes. Deployment decisions also require computational measurements because fusion runs the Whisper encoder for two views and adds enhancer and attention overhead.
+Reported aggregate scores from the current results table. All methods except Medium use Whisper-small. Adaptive bridge is an independent implementation. Lower is better. Aggregate values pool error counts and reference units.
 
-**Timing:** 70 seconds
+**Sources:** `Thesis/chapters/results.tex`
 
-**Thesis sources:** `chapters/results.tex`, “Threats to Validity”; `chapters/conclusions.tex`, “Research Limitations” and “Future Work”
+### Backup 22. WER by test domain
 
----
+Timing: questions only.
 
-## Slide 19 — Conclusion
+| System | AG | CV25 | FLEURS | PS¹ | PSC |
+|---|---|---|---|---|---|
+| Ordinary | 35.63 | 11.52 | 21.05 | 34.53 | 30.17 |
+| Noise only | 32.67 | 7.86 | 19.26 | 33.57 | 30.47 |
+| pMCT | 30.01 | 7.25 | 20.23 | 31.65 | 30.50 |
+| Multi-condition | 25.80 | 7.84 | 19.82 | 35.25 | 30.90 |
+| Dual-stream fusion | 25.37 | 7.53 | 19.67 | 31.81 | 33.82 |
+| Adaptive bridge | 25.84 | 7.63 | 19.73 | 35.09 | 32.32 |
+| Whisper Medium | 21.99 | 3.84 | 17.14 | 31.65 | 31.17 |
+| Multi-condition + IranSeda | 26.66 | 8.19 | 13.78 | 26.86 | 25.87 |
 
-**Purpose:** End with one memorable and appropriately bounded answer.
-
-**Visible content**
-
-> **Traceable telecom augmentation + multi-condition training was the most effective approach in the current experiments.**
-
-- Aggregate WER: **23.27% → 17.83%**
-- Real AGFarsdat WER: **35.63% → 25.80%**
-- Fusion was competitive, but did not beat multi-condition Whisper overall
-- The final gate assigned **99.61%** mean weight to the original stream
-
-### Best current balance
-
-**Multi-condition Whisper-small: accuracy · simplicity · interpretability**
-
-**Questions?**
-
-**Visual / layout**
-
-- Large take-home statement at the top.
-- Use the four result bullets as compact evidence, then finish with the “best balance” line.
-- Keep the Questions prompt visually quiet so the scientific conclusion remains dominant.
+All values are %. AG: AGFarsdat. PS: PersianSpeech (24 examples). PSC: Persian Speech Corpus.
 
 **Speaker notes**
 
-The final conclusion is deliberately simple: for robust Persian ASR under telephone and VoIP degradation, reproducible telecom-oriented augmentation and direct multi-condition training currently offer the strongest overall result. The fusion work remains useful because it produced a competitive model and exposed a concrete gate-collapse problem, but added complexity should be accepted only when it provides repeatable benefit over the strong baseline.
+All WER values are percentages. Lower is better. CV25 means Common Voice Persian 25, PS means PersianSpeech and PSC means Persian Speech Corpus. PersianSpeech has 24 examples. Cross-model eligibility counts vary slightly in PSC. These are the thesis table values, not simple averages of the aggregate scores.
 
-**Timing:** 40 seconds
+**Sources:** `Thesis/chapters/results.tex`
 
-**Thesis sources:** `chapters/results.tex`, “Chapter Summary”; `chapters/conclusions.tex`, “Closing Remarks”
+### Backup 23. CER by test domain
 
----
+Timing: questions only.
 
-## Timing summary
+| System | AG | CV25 | FLEURS | PS¹ | PSC |
+|---|---|---|---|---|---|
+| Ordinary | 19.73 | 4.06 | 6.13 | 16.21 | 15.48 |
+| Noise only | 17.49 | 3.17 | 5.72 | 14.64 | 15.40 |
+| pMCT | 15.98 | 2.79 | 6.15 | 10.57 | 15.13 |
+| Multi-condition | 12.62 | 3.22 | 6.36 | 15.62 | 15.22 |
+| Dual-stream fusion | 12.39 | 3.13 | 6.29 | 12.95 | 19.95 |
+| Adaptive bridge | 12.59 | 3.26 | 6.39 | 15.53 | 17.02 |
+| Whisper Medium | 10.92 | 1.65 | 5.42 | 13.99 | 17.29 |
+| Multi-condition + IranSeda | 12.96 | 3.29 | 4.09 | 9.82 | 14.16 |
 
-| Slides | Topic | Approximate time |
-|---|---|---:|
-| 1–4 | Motivation, questions, and overview | 2:45 |
-| 5–11 | Data, method, models, and evaluation | 7:40 |
-| 12–16 | Results and analysis | 6:15 |
-| 17–19 | Contributions, limitations, and conclusion | 2:50 |
-| — | Transitions and normal speaking variance | 0:30 |
-| **Total** |  | **20:00** |
+All values are %. AG: AGFarsdat. PS: PersianSpeech (24 examples). PSC: Persian Speech Corpus.
 
-## Asset manifest
+**Speaker notes**
 
-| Asset | Source in thesis | Used on slide | Treatment |
-|---|---|---:|---|
-| [`assets/degradation-pipeline-architecture.png`](assets/degradation-pipeline-architecture.png) | `Thesis/figs/degradation-pipeline-architecture.png` | 7 | Use uncropped; preserve aspect ratio |
-| [`assets/fusion-model-architecture.png`](assets/fusion-model-architecture.png) | `Thesis/figs/fusion-model-architecture-left-to-right.png` | 9 | Use uncropped; preserve aspect ratio |
+All CER values are percentages. Lower is better. CV25 means Common Voice Persian 25, PS means PersianSpeech and PSC means Persian Speech Corpus. PersianSpeech has 24 examples. Cross-model eligibility counts vary slightly in PSC. These are the thesis table values, not simple averages of the aggregate scores.
 
-## Final production checklist
+**Sources:** `Thesis/chapters/results.tex`
 
-- Confirm the defense committee’s preferred title-slide metadata before exporting the final PowerPoint.
-- Recreate result charts from the embedded CSV blocks so their text remains editable.
-- Keep all y-axes at zero for bar charts; do not visually exaggerate small differences.
-- Add “lower is better” to every WER/CER visual.
-- Do not present bolded minima as statistical significance.
-- Preserve the caveat that fusion’s aggregate evaluation includes six additional samples.
-- Test the two architecture images at full-screen presentation resolution.
-- Rehearse to the timing table and shorten speaker notes—not visible evidence—if time is exceeded.
+### Backup 24. Complete Whisper Tiny ablations
+
+Timing: questions only.
+
+| Tiny system | CV WER | CV CER | AG WER | AG CER |
+|---|---|---|---|---|
+| Multi-condition | 74.92 | 38.03 | 76.85 | 35.04 |
+| Bidirectional fusion | 57.82 | 30.57 | 63.50 | 27.02 |
+| Gate only | 62.35 | 32.87 | 65.88 | 28.42 |
+| Residual cross-attention | 60.26 | 31.90 | 65.48 | 28.35 |
+| Original only, inference | 64.10 | 33.21 | 69.23 | 30.39 |
+| Enhanced only, inference | 63.81 | 33.05 | 69.69 | 30.73 |
+| Bridge, PQ + RI | 74.40 | 37.81 | 76.81 | 34.94 |
+| Bridge, PQ only | 74.48 | 37.81 | 76.63 | 34.83 |
+| FRCRN enhanced only | 75.90 | 38.79 | 77.67 | 35.53 |
+
+All values are %. Lower is better. This study has a different scale and training mix.
+
+**Speaker notes**
+
+Separate Common Voice-only Tiny study. Original-only and enhanced-only bypass fusion at inference using one final checkpoint. Residual cross-attention, gate-only and full attention have unequal parameter counts. Fusion gets an extra ASR training stage. Adaptive bridge uses frozen FRCRN and frozen Whisper, with either perceptual quality (PQ) or PQ plus recognition information (RI). This is an independent implementation, not an author-code reproduction.
+
+**Sources:** `Thesis/chapters/results.tex`
+
+### Backup 25. Fast Conformer corroborates a smaller gain
+
+Timing: questions only.
+
+| Test set | Ord. WER | MCT WER | Ord. CER | MCT CER |
+|---|---|---|---|---|
+| Aggregate | 22.73 | 21.81 | 14.79 | 14.45 |
+| AGFarsdat | 31.07 | 30.48 | 14.81 | 14.09 |
+| Common Voice | 11.68 | 10.01 | 16.46 | 16.10 |
+| FLEURS | 29.22 | 29.40 | 9.94 | 10.22 |
+| PersianSpeech | 30.70 | 31.41 | 13.50 | 13.56 |
+| Persian Speech Corpus | 33.69 | 33.59 | 12.22 | 12.68 |
+
+All values are %. Lower is better. Aggregate WER improves by 0.92 points.
+
+**Speaker notes**
+
+The within-model comparison is the appropriate control. Ordinary and multi-condition Fast Conformer use the same number of steps and learning settings. Their absolute scores cannot isolate architecture differences relative to Whisper because pretraining, decoder and optimization differ. CER values below are transcribed from the thesis table.
+
+**Sources:** `Thesis/chapters/results.tex`
+
+### Backup 26. External-model comparison on 100 samples
+
+Timing: questions only.
+
+| Model | Aggregate WER | Aggregate CER | AG WER |
+|---|---|---|---|
+| Chirp 3 | 16.44 | 5.14 | 22.94 |
+| GPT-4o Transcribe | 18.55 | 6.94 | 48.62 |
+| Small, + IranSeda | 20.72 | 10.72 | 26.61 |
+| Whisper Medium | 23.13 | 11.24 | 24.77 |
+| Voxtral Small 24B | 26.92 | 10.75 | 45.87 |
+| Qwen3-ASR 1.7B | 36.66 | 15.68 | 63.30 |
+| Grok STT 1.0 | 40.88 | 23.68 | 67.89 |
+| Nemotron 3.5 ASR 0.6B | 98.70 | 80.86 | 104.59 |
+
+All values are %. Lower is better. Twenty examples per domain. Separate benchmark.
+
+**Speaker notes**
+
+This is a completed thesis experiment on 20 randomly selected samples from each of the five datasets, with common normalization. These scores apply only to this fixed 100-sample subset and are not directly comparable to full-test results. Chirp 3 leads this subset. The evidence is supplementary and does not support a global model ranking. Names and scores reproduce the archived experiment rather than current product specifications.
+
+**Sources:** `Thesis/chapters/results.tex`
+
+### Backup 27. Controls and attribution boundaries
+
+Timing: questions only.
+
+| Comparison | Main controls | Remaining boundary |
+|---|---|---|
+| Ordinary vs MCT | Small model, LR, step budget, tests | Composite telecom treatment |
+| MCT vs + IranSeda | Small model, full base mix, steps, tests | Data domain and labels both change |
+| MCT vs fusion | Starting checkpoint and test domains | Extra modules and ASR training |
+| Fusion vs bridge | Test domains, training data family | Enhancer and freezing differ |
+| Small vs Medium | Common single-stream eligible tests | Capacity and training differ |
+
+Small runs: learning rate 10⁻⁵, batch 4, gradient accumulation 8.
+
+**Speaker notes**
+
+Ordinary, multi-condition and multi-condition plus IranSeda use Whisper-small with the reported same main training settings and step budget. Fusion starts from multi-condition and receives an additional staged training schedule. Bridge freezes both FRCRN and Whisper, so its comparison with fusion is a system-level comparison. Medium changes capacity. Human-labelled tests and common normalization remain fixed. Exact per-model sample eligibility should be reconciled for small cross-system differences.
+
+**Sources:** `Thesis/chapters/work.tex`, `Thesis/chapters/results.tex`
+
+### Backup 28. Telecom simulator architecture
+
+Timing: questions only.
+
+Original thesis figure: figs/degradation-pipeline-architecture.png
+
+**Speaker notes**
+
+Complete source diagram. Native Opus applies packet-level loss and PLC. Other codec paths use real FFmpeg round-trips and optionally approximate network loss through waveform dropout. The aligned clean target has matched bandwidth.
+
+**Sources:** `Thesis/chapters/work.tex`, `Thesis/figs/degradation-pipeline-architecture.png`
+
+### Backup 29. Fusion architecture and training
+
+Timing: questions only.
+
+Original thesis figure: figs/fusion-model-architecture-left-to-right.png
+
+**Speaker notes**
+
+Complete source diagram. Residual U-Net, shared encoder with two passes, bidirectional attention and a time-feature gate. The lower row gives the three training stages.
+
+**Sources:** `Thesis/chapters/work.tex`, `Thesis/figs/fusion-model-architecture-left-to-right.png`
+
+### Backup 30. Long-audio construction pipeline
+
+Timing: questions only.
+
+Original thesis figure: figs/long-audio-data-creation-pipeline.png
+
+**Speaker notes**
+
+Complete source diagram. Source validation, VAD segmentation, teacher transcription, normalization, constrained Qwen refinement and filtering. Accepted speech adds to the complete baseline mixture.
+
+**Sources:** `Thesis/chapters/work.tex`, `Thesis/figs/long-audio-data-creation-pipeline.png`
+
+## Likely defense questions
+
+1. **How do you know synthetic training transfers to calls?** AGFarsdat is real telecom audio, held out from training and model selection. WER falls from 35.63% to 25.80%.
+2. **Does the gate prove enhancement helps?** No. Cross-attention mixes the streams before gating. Use ablations, and distinguish Tiny results from Whisper-small.
+3. **Why compare fusion to multi-condition Whisper?** It is the relevant stronger reference after matching training to the channel. Ordinary Whisper alone would overstate architectural benefit.
+4. **Why does IranSeda help general speech but worsen calls?** The observed effect is domain-dependent. Book style, channel, label quality and mixture proportions are plausible factors, not established causes.
+5. **Does Qwen make labels correct?** No human audit quantifies that. It performs constrained text correction, while raw labels and rejected edits remain traceable.
+6. **Why not select Medium as the only final answer?** It gives the lowest main aggregate error, but changes model capacity and does not answer the controlled data and architecture questions.
+7. **Is fusion worth deploying?** Current results lack runtime, memory and latency measurements, and its small gain lacks confidence intervals.
+8. **Does the 100-sample comparison establish model superiority?** It is a supplementary fixed-subset experiment with only 20 examples per domain. It cannot replace the full evaluation.
+
+## Source assets
+
+The original thesis figures are unchanged and appear once each on backup slides 28–30. All main tables, charts and text are editable. Existing presentation assets remain available.
