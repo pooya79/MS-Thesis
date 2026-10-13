@@ -1,0 +1,10 @@
+Vazirmatn v33.003
+
+Install Vazirmatn-Regular.ttf and Vazirmatn-Bold.ttf before opening or presenting the PowerPoint on another computer.
+On Windows: select both TTF files, right-click, and choose Install.
+On macOS: open the TTF files in Font Book and install.
+On Linux: install with the font viewer or place them in your user font directory.
+
+The companion PDF embeds its fonts and requires no installation.
+The fonts are unmodified and distributed under the included SIL Open Font License.
+Official source: https://github.com/rastikerdar/vazirmatn/tree/v33.003

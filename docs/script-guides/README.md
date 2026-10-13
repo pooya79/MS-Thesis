@@ -4,6 +4,8 @@ Every maintained Python script exposes `--help`. Use the help output before runn
 
 ## Guide index
 
+- [Persian thesis defense presentation](persian-thesis-presentation.md): rebuild the editable 20-slide Persian PowerPoint, PDF, and slide previews.
+
 - [Complete Tiny experiment command sequence](cv25-tiny-run-all.md): start-to-finish commands for input preparation, ASR, paper baseline, PQ-only ablation, three fusion variants with shared warm-up, dev decoding, and all nine final-test methods.
 
 - [Whisper Small bridge training and evaluation](bridge-small.md): PQ+RI bridge with configured training and test datasets.

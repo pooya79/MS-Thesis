@@ -1,0 +1,79 @@
+{
+  "source_deck": "Thesis/presentation/robust_persian_asr_thesis_defense_updated.pptx",
+  "source_sha256": "3d02339ad9af592901b2b568a6263dd07519bc90ee06650774347f3007040b83",
+  "description": "Exact embedded PNG bytes from the updated English deck. These images are already cropped. No translation, redrawing, or further cropping.",
+  "assets": [
+    {
+      "slide": 6,
+      "source_member": "ppt/media/image7.png",
+      "file": "degradation-preparation.png",
+      "sha256": "905d289c6b63aa1a93a1e43fe5fa6bf2ea79c91d8b2c888e411f686088aab525",
+      "width": 1800,
+      "height": 360
+    },
+    {
+      "slide": 7,
+      "source_member": "ppt/media/image9.png",
+      "file": "degradation-codecs.png",
+      "sha256": "068141b99405b9b545133862409bf4289598b00394d9f796f5419ebb9c7e18ee",
+      "width": 3035,
+      "height": 1320
+    },
+    {
+      "slide": 9,
+      "source_member": "ppt/media/image12.png",
+      "file": "fusion-architecture.png",
+      "sha256": "77b15e8026d2fc2eca1f527e37ac67f296b9bfc2a8fc519d9617b939dbb80f97",
+      "width": 3240,
+      "height": 1140
+    },
+    {
+      "slide": 10,
+      "source_member": "ppt/media/image14.png",
+      "file": "fusion-training.png",
+      "sha256": "51aaa73765794ee30141279f109fd107287a03c1c0ab692f9f0c259248fa7eed",
+      "width": 3220,
+      "height": 490
+    },
+    {
+      "slide": 14,
+      "source_member": "ppt/media/image20.png",
+      "file": "iranseda-source-segmentation.png",
+      "sha256": "fda398603ed08d8e09903d559193daaf20d540c7cbfc533eb373dbe8d14bf5f8",
+      "width": 860,
+      "height": 1015
+    },
+    {
+      "slide": 15,
+      "source_member": "ppt/media/image22.png",
+      "file": "iranseda-teacher.png",
+      "sha256": "a22091858080bc4c16bbfd6a1f49ab09898b4e945447aeb4f5ef963519846180",
+      "width": 745,
+      "height": 295
+    },
+    {
+      "slide": 15,
+      "source_member": "ppt/media/image23.png",
+      "file": "iranseda-normalization.png",
+      "sha256": "ce023326fdb9da27111cdf33bc2e8de31e1a9e5455391d4cd6e994b0d8d3e46e",
+      "width": 745,
+      "height": 295
+    },
+    {
+      "slide": 15,
+      "source_member": "ppt/media/image24.png",
+      "file": "iranseda-refinement.png",
+      "sha256": "ed7c7a9c713569081f076336a13ebfd3361d7cb96aa794f5918ef92b8380db80",
+      "width": 745,
+      "height": 295
+    },
+    {
+      "slide": 15,
+      "source_member": "ppt/media/image25.png",
+      "file": "iranseda-filtering.png",
+      "sha256": "2624f4bdb01e1635e358e754460e70d5dba22c5f92febb92be8109f0cdfe6780",
+      "width": 745,
+      "height": 350
+    }
+  ]
+}
