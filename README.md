@@ -1,133 +1,253 @@
-# MS Thesis Research Workspace
+# Persian Speech Recognition — MS Thesis Workspace
 
-Research code and experiment archive for Persian automatic speech recognition
-(ASR), speech degradation, speech enhancement, and noisy/clean feature fusion.
+Research code and experiment archive for an MS thesis on Persian automatic
+speech recognition (ASR), with a focus on recognizing noisy and degraded speech.
+The workspace brings together dataset preparation, model training and evaluation,
+enhancement/fusion experiments, and a FastAPI playground called **Persian Speech Lab**.
 
-The repository includes reproducible command-line experiments under `ml/` and a
-small FastAPI playground for running the trained ASR models on uploaded or
-browser-recorded speech.
+The main research question is whether combining the original and enhanced views
+of speech improves transcription. The repository also contains baseline models,
+waveform-bridging experiments, and tools for creating Persian speech datasets.
+Experiments share utilities, but have separate inputs, configs, and checkpoints.
 
-## What Is Implemented
+## Start here
 
-- Download and prepare Persian Common Voice, FLEURS, and evaluation datasets.
-- Normalize Persian transcripts and convert audio to the repository dataset format.
-- Generate deterministic telephony and environmental speech degradations.
-- Inspect and validate generated clean/degraded pairs.
-- Build long-utterance dataset variants.
-- Train and evaluate Whisper-small and a standalone FastConformer-CTC model.
-- Train and evaluate an enhancement plus dual-view fusion pipeline.
-- Diagnose whether a trained enhancer improves over the identity baseline.
-- Compare Whisper, Fusion, and FastConformer transcripts in a local web UI.
+| I want to… | Start with… |
+| --- | --- |
+| Download a published Persian Whisper checkpoint | [Published models](#published-persian-whisper-models) |
+| Try a model on uploaded or recorded audio | [Run the playground](#run-the-playground) |
+| Download and prepare speech datasets | [Prepare-data workflow](#1-prepare-speech-datasets) and [dataset guide](docs/script-guides/dataset-download-and-preparation.md) |
+| Create noisy or telephone-style speech | [Degradation workflow](#2-generate-and-validate-degraded-speech) |
+| Fine-tune or evaluate Whisper / FastConformer | [ASR workflow](#3-train-and-evaluate-asr-models) |
+| Understand or train enhancement and fusion | [Fusion workflow](#4-train-and-evaluate-enhancementfusion) |
+| Run the official CV25 / Whisper Tiny comparison | [Complete experiment sequence](docs/script-guides/cv25-tiny-run-all.md) |
+| Explore waveform bridging or pMCT | [Other experiment workflows](#other-experiment-workflows) |
+| Turn long recordings into labeled clips | [Long-audio pipeline](#long-audio-dataset-creation) |
+| Find recorded results | [Experiment archive](#experiment-archive-and-reproducibility) |
 
-## Repository Layout
+## Published Persian Whisper models
+
+The project's Persian Whisper checkpoints are available on Hugging Face:
+
+| Model | Repository ID and model card |
+| --- | --- |
+| Whisper Small — Persian | [Pooya-Fallah/whisper-small-fa](https://huggingface.co/Pooya-Fallah/whisper-small-fa) |
+| Whisper Medium — Persian | [Pooya-Fallah/whisper-medium-fa](https://huggingface.co/Pooya-Fallah/whisper-medium-fa) |
+
+Use the repository ID as `checkpoint` in a `whisper` entry in
+[`configs/server.yaml`](configs/server.yaml). Consult each model card for access
+requirements, inference instructions, and training provenance. For gated downloads,
+request access on the model page and authenticate with an approved Hugging Face
+account on the machine running inference.
+
+## How the pieces fit together
 
 ```text
-configs/        YAML configurations for data generation, training, and evaluation
-docs/           Script reference, pipeline notes, and experiment decisions
-ml/             Dataset, degradation, ASR, enhancement, and fusion code
-server/         FastAPI ASR playground and automated tests
-data/           Local datasets and generated audio (not committed)
-artifacts/      Local checkpoints, metrics, and reports (not committed)
-Thesis/         Thesis documents and research notes
+Speech datasets / long recordings
+    |
+    +-- prepare audio + normalize Persian transcripts --> TSV datasets
+    |                                                        |
+    |                   +------------------------------------+
+    |                   |
+    |                   +-- train/evaluate ASR baselines
+    |                   |
+    |                   +-- generate aligned degraded speech
+    |                           |
+    |                           +-- enhancement + feature fusion
+    |                           +-- waveform bridge experiments
+    |
+    +-- segment --> Whisper transcribe --> contextual text refinement
+
+Trained checkpoints --> evaluation reports / local FastAPI playground
 ```
 
-## Requirements and Installation
+The two enhancement approaches operate in different domains:
 
-- Python 3.13
-- [`uv`](https://docs.astral.sh/uv/) for dependency management
-- `ffmpeg` with the codecs needed by the degradation pipeline
-- A CUDA-capable environment for practical model training
+- **Feature fusion:** a learned enhancer estimates cleaner Whisper log-Mel
+  features. Original and enhanced features pass through a shared Whisper encoder;
+  a fusion block combines their hidden states before the decoder transcribes them.
+  This enhancer produces features for ASR, rather than restored playback audio.
+- **Waveform bridging:** a frozen FRCRN speech enhancer produces an enhanced
+  waveform. A learned bridge mixes original and enhanced audio before frozen
+  Whisper recognition. DNSMOS quality scores and recognition targets supervise
+  bridge training. This is a separate reconstruction of a published method.
 
-Install the Python dependencies:
+**WER** (word error rate) and **CER** (character error rate) are the main ASR
+metrics; lower is better. An *ablation* evaluates a reduced system, such as using
+only the original view, to measure what a component contributes.
+
+## Repository map
+
+| Path | Purpose |
+| --- | --- |
+| [`ml/speech_data/`](ml/speech_data/) | Downloads, preparation, normalization, degradation, validation, and long-audio tools |
+| [`ml/asr/`](ml/asr/) | Whisper and FastConformer training, local/external evaluation, and model publication |
+| [`ml/enhancement/`](ml/enhancement/) | Log-Mel enhancer, paired-data loading, and enhancement diagnosis |
+| [`ml/fusion/`](ml/fusion/) | Feature fusion, waveform bridging, and ablation experiments |
+| [`ml/fa_fastconformer/`](ml/fa_fastconformer/) | Standalone Persian FastConformer-CTC implementation and checkpoint conversion |
+| [`ml/pmct/`](ml/pmct/) | Isolated Patched Multi-Condition Training experiment |
+| [`configs/`](configs/) | Editable YAML recipes for datasets, training, evaluation, and the server |
+| [`server/app/`](server/app/) | FastAPI application, authentication, inference service, templates, and static assets |
+| [`server/tests/`](server/tests/) | Tests for both the server and most ML/data utilities |
+| [`docs/`](docs/) | Script guides, architecture explanations, design decisions, and diagrams |
+| [`notebooks/`](notebooks/) | Project, ASR, and IranSeda pipeline demonstrations |
+| [`report/`](report/) | Archived experiment configs, metrics, and progress reports |
+| [`Thesis/`](Thesis/) | Thesis documents and research notes |
+| `data/`, `models/`, `artifacts/` | Local datasets, checkpoints, caches, and generated outputs; ignored by Git |
+
+## Environment setup
+
+Run commands from the repository root unless a linked guide says otherwise.
+
+- **Python:** the project requires Python **3.13 or newer**; `.python-version`
+  selects 3.13.
+- **Dependency manager:** `uv`; dependencies are declared in
+  [`pyproject.toml`](pyproject.toml) and pinned in [`uv.lock`](uv.lock).
+- **Audio tools:** `ffmpeg` and `ffprobe` on `PATH`.
+- **Compute:** a CUDA-capable GPU is practical for training and large evaluations.
+  Several inference tools support CPU; the official Tiny launcher requires CUDA.
+- **Storage and downloads:** datasets, model weights, and generated audio are
+  separate from the checkout. Allow space for the inputs and outputs of your recipe.
+
+Install the locked Python environment:
 
 ```bash
-uv sync
+uv sync --locked
 ```
 
-Install `ffmpeg` on Ubuntu or Debian:
+The dependency configuration selects the PyTorch CUDA 13.0 wheel index for Torch
+and Torchvision on Linux/Windows. GPU use needs a compatible NVIDIA driver.
+The environment includes substantial ML dependencies even if you only run the UI.
+
+On Ubuntu/Debian, install the system audio tools with:
 
 ```bash
 sudo apt update
 sudo apt install ffmpeg
+ffmpeg -version
+ffprobe -version
 ```
 
-The complete degradation setup expects these encoders/codecs:
-
-- `pcm_alaw`
-- `pcm_mulaw`
-- `libgsm` (or `gsm`)
-- `libopencore_amrnb`
-- `libvo_amrwbenc`
-- `libopus`
-
-Check the local `ffmpeg` build with:
+Full telephone/VoIP degradation additionally needs the FFmpeg encoders
+`pcm_alaw`, `pcm_mulaw`, `libgsm` (or `gsm`), `libopencore_amrnb`,
+`libvo_amrwbenc`, and `libopus`. Inspect **encoders**, since decoder support alone
+is insufficient:
 
 ```bash
-ffmpeg -hide_banner -codecs | grep -Ei 'amr|gsm|opus|pcm_alaw|pcm_mulaw'
+ffmpeg -hide_banner -encoders | grep -Ei 'amr|gsm|opus|pcm_alaw|pcm_mulaw'
 ```
 
-Some distribution builds do not include the AMR encoders. Scripts check the
-required codecs before starting generation and fail with a clear error when a
-selected codec is unavailable.
+Distribution FFmpeg builds may omit AMR encoders. The generators check the codecs
+selected by the config before generating data. Opus packet-loss concealment also
+requires the system `libopus` shared library. See the
+[degradation guide](docs/script-guides/speech-degradation.md) for the workflow;
+changing the codec distribution changes the experiment recipe.
 
-## Script-First Workflow
+[`.env.example`](.env.example) lists the basic environment variables. The server
+reads exported variables and does **not** automatically load `.env`; use the
+exports below. The Common Voice downloader also supports reading its API key
+from `.env`. Other services have their own credentials, described in their guides.
 
-Every maintained script provides `--help`. The full argument and workflow
-reference is in the [script guides](docs/script-guides/README.md).
+## Run the playground
 
-### 1. Download and Prepare Datasets
+The UI lets you choose a configured model, upload audio or record from a microphone,
+preview it, and copy the transcript. It also shows duration and inference time.
 
-Download Common Voice Persian. This requires
-`MOZILLA_DATA_COLLECTIVE_API_KEY` in the environment or `.env`:
+1. Install the environment and FFmpeg as above.
+2. Edit [`configs/server.yaml`](configs/server.yaml). Point each model you want
+   to use at an available checkpoint. The checked-in config lists Whisper Small,
+   Whisper Medium, Fusion, and FastConformer; their local weights are **not bundled**.
+   For a basic Whisper trial, a `whisper` entry can use
+   `checkpoint: openai/whisper-small` and `processor: openai/whisper-small`;
+   this downloads the upstream model on first use.
+3. Export a shared password and start the development server:
+
+   ```bash
+   export APP_PASSWORD='replace-this-with-a-long-random-password'
+   make run
+   ```
+
+Open [http://localhost:8001](http://localhost:8001) and enter that password.
+A configured model can appear in the UI before its weights are available:
+loading happens on first use, so check checkpoint paths before transcribing.
+
+Useful server settings:
+
+| Setting | Default / behavior |
+| --- | --- |
+| `ASR_SERVER_CONFIG` | Optional environment variable selecting another YAML file; defaults to `configs/server.yaml` |
+| `APP_PASSWORD` | Required; one shared password, with no account or database layer |
+| `app.max_upload_mb` | 25 MB |
+| `app.max_audio_seconds` | 30 seconds |
+| `app.sample_rate` | 16,000 Hz |
+| Model `device` | `auto`; configurable per model |
+
+Local checkpoint paths resolve from the directory where the server starts.
+Models load lazily and remain cached. Uploads are size-bounded, converted by
+FFmpeg into temporary mono WAV files, and removed after the request.
+
+Authentication uses a signed HTTP-only session cookie lasting seven days;
+changing the password and restarting invalidates existing sessions. `/login`
+and `/static/*` are public; application pages and APIs require authentication.
+The APIs include `GET /api/models`, `GET /api/models/{model_id}/status`, and
+`POST /api/transcriptions` (multipart fields `model_id` and `audio`).
+
+`make run` starts Uvicorn with reload on `0.0.0.0:8001`, so it listens on all
+interfaces. Use HTTPS when exposing the playground beyond your local machine;
+browser microphone recording needs localhost or a secure context.
+
+## Core research workflows
+
+**Choose a recipe before running commands.** The configs contain concrete dataset
+names, checkpoint paths, and output directories from different experiments.
+Review those fields and the linked guide first. The examples below are entry
+points, rather than a single sequence that reproduces every archived experiment.
+Every maintained Python CLI provides `--help`; the full catalog is in
+[Script Guides](docs/script-guides/README.md).
+
+### 1. Prepare speech datasets
+
+For Common Voice Persian, set `MOZILLA_DATA_COLLECTIVE_API_KEY` in your environment
+or `.env`, download the archive, and prepare its extracted Persian directory:
 
 ```bash
 uv run python -m ml.speech_data.scripts.download_common_voice_fa \
   --output-dir data
-```
 
-Prepare Common Voice as normalized TSV splits with mono 16 kHz WAV clips:
-
-```bash
 uv run python -m ml.speech_data.scripts.prepare_common_voice_25 \
   --source-root data/cv-corpus-25.0-2026-03-09/fa \
   --output-root data/cv-corpus-25.0 \
   --workers 4
 ```
 
-Equivalent download and preparation scripts are available for FLEURS and the
-Persian evaluation sets:
+Adjust `--source-root` to match the downloaded archive's extracted layout.
+Download/preparation tools also cover FLEURS Persian, PerSets YouTube/Filimo,
+and Persian evaluation sets. See the
+[dataset download and preparation guide](docs/script-guides/dataset-download-and-preparation.md).
 
-```bash
-uv run python -m ml.speech_data.scripts.download_fleurs_persian --help
-uv run python -m ml.speech_data.scripts.prepare_fleurs_persian --help
-uv run python -m ml.speech_data.scripts.download_persian_eval_sets --help
-uv run python -m ml.speech_data.scripts.prepare_persian_eval_sets --help
-```
-
-Prepared datasets use this layout:
+The shared ASR dataset contract is:
 
 ```text
 dataset/
-├── train.tsv
-├── dev.tsv
-├── test.tsv
+├── train.tsv          # required for training
+├── dev.tsv            # used for validation/checkpoint selection
+├── test.tsv           # required for held-out evaluation
 └── clips/
+    └── example.wav    # supported formats depend on the consuming tool
 ```
 
-TSV files must contain at least `path` and `sentence` columns. A referenced
-audio path is resolved as `dataset/clips/<path>` first, then `dataset/<path>`.
+Only include the splits needed by the workflow. TSVs must have `path` and
+`sentence` columns; additional metadata columns are allowed. Audio paths resolve
+first as `<dataset>/clips/<path>`, then as `<dataset>/<path>`. Preparation tools
+normally standardize audio to mono 16 kHz and apply shared Persian text rules.
 
-To normalize an existing TSV dataset with the same Persian text rules:
+For normalization, mixed test sets, duration summaries, FLAC conversion, and
+Hugging Face dataset publication, use the
+[dataset management guide](docs/script-guides/dataset-management.md).
 
-```bash
-uv run python -m ml.speech_data.scripts.normalize_tsv_dataset \
-  --source-root data/my_dataset/raw \
-  --output-root data/my_dataset/normalized
-```
+### 2. Generate and validate degraded speech
 
-### 2. Prepare Degradation Assets
-
-Download, extract, validate, and index the DEMAND noise data:
+First download and index DEMAND environmental noise:
 
 ```bash
 uv run python -m ml.speech_data.scripts.download_degradation_assets \
@@ -136,57 +256,51 @@ uv run python -m ml.speech_data.scripts.download_degradation_assets \
   --prepare-indexes
 ```
 
-### 3. Generate and Validate Degraded Speech
-
-Generate clean/degraded training pairs:
-
-```bash
-uv run python -m ml.speech_data.generate_degraded_pairs \
-  --config configs/speech_enhancement/degradation.yaml
-```
-
-Generate a complete degraded ASR dataset with split TSV files:
+Then generate a TSV-shaped dataset from prepared Common Voice audio:
 
 ```bash
 uv run python -m ml.speech_data.generate_degraded_dataset \
   --config configs/speech_enhancement/cv25_degraded_dataset.yaml \
   --workers 4
-```
 
-Inspect a pair manifest:
-
-```bash
-uv run python -m ml.speech_data.inspect_manifest \
-  data/speech_enhancement/manifests/se_train_pairs.jsonl
-```
-
-Validate pair alignment, degradation strength, bandwidth consistency, and
-required metadata before training:
-
-```bash
 uv run python -m ml.speech_data.validate_degraded_dataset \
-  --dataset data/cv-corpus-25.0-degraded-v2 \
+  --dataset data/cv-corpus-25.0-degraded \
   --sample 300 \
   --output-dir artifacts/degraded_validation
 ```
 
-For a quick audible check, generate several degradation variants from one
-random clip under `data/`:
+The checked-in recipe generates train/dev variants under
+`data/cv-corpus-25.0-degraded`, including `degraded_to_clean.jsonl`,
+`degradation_metadata.jsonl`, and a generation report. Keep these mappings:
+paired training uses them to locate clean sources and reconstruct aligned targets.
+
+The pipeline combines environmental noise, level changes, channel bandwidth,
+codec round-trips, and configured network impairments. Random choices are seeded
+per variant and recorded. Clean targets are aligned in length and bandwidth;
+Opus supports packet-level loss concealment, while other codecs use a documented
+waveform-dropout fallback. See the
+[degradation design and metadata contract](docs/speech-degradation-pipeline.md).
+
+A separate `generate_degraded_pairs` workflow consumes **clean JSONL manifests**
+configured in `configs/speech_enhancement/degradation.yaml`. Create those manifests
+first using the schema in the design document; downloading noise does not create
+them. It writes clean/degraded pairs and `se_*_pairs.jsonl` manifests:
 
 ```bash
-uv run python -m ml.speech_data.scripts.generate_random_degraded_clip \
-  --input-root data \
-  --output-dir data/speech_enhancement/random_clip_degradations \
-  --variants 8 \
-  --seed 1337
+uv run python -m ml.speech_data.generate_degraded_pairs \
+  --config configs/speech_enhancement/degradation.yaml
+
+uv run python -m ml.speech_data.inspect_manifest \
+  data/speech_enhancement/manifests/se_train_pairs.jsonl
 ```
 
-The degradation design and metadata contract are documented in
-[docs/speech-degradation-pipeline.md](docs/speech-degradation-pipeline.md).
+Noise-only generation and single-clip audible demos are covered in the
+[speech degradation guide](docs/script-guides/speech-degradation.md).
 
-### 4. Train and Evaluate ASR Models
+### 3. Train and evaluate ASR models
 
-Whisper-small:
+Whisper Small is a useful starting point. Set the dataset list and run directory
+in its training config, then point evaluation at the resulting checkpoint:
 
 ```bash
 uv run python -m ml.asr.train_whisper_small \
@@ -197,7 +311,13 @@ uv run python -m ml.asr.eval_whisper_small \
   --config configs/whisper_small_eval.yaml
 ```
 
-Standalone FastConformer-CTC:
+The default Small training run exports to
+`models/asr/whisper-small/runs/whisper-small-fa/final`, matching the default Small
+evaluation and server entry. Whisper Medium and Large-v3-turbo have separate
+train/eval modules and configs. The historical `train_whisper_small` module also
+runs the Tiny baseline when given the Tiny configuration.
+
+FastConformer has its own training/evaluation workflow:
 
 ```bash
 uv run python -m ml.asr.train_fastconformer \
@@ -208,92 +328,119 @@ uv run python -m ml.asr.eval_fastconformer \
   --config configs/fastconformer_eval.yaml
 ```
 
-Training and evaluation outputs are written to the run directories configured
-in YAML. They include effective configs, logs, metrics, predictions, source
-manifests, and checkpoints where applicable.
+The standalone implementation uses the **CTC branch** of the Persian hybrid
+FastConformer checkpoint and loads `.nemo` or converted `.pt` weights without
+NeMo. See the [model package](ml/fa_fastconformer/README.md) and
+[ASR training/evaluation guide](docs/script-guides/asr-training-and-evaluation.md)
+for conversion, model-specific settings, and outputs. Evaluation records
+predictions and aggregate/per-dataset WER/CER.
 
-### 5. Train and Evaluate Enhancement/Fusion
+### 4. Train and evaluate enhancement/fusion
 
-Run the enhancement and dual-view fusion curriculum:
+The reusable curriculum has three stages: train the log-Mel enhancer, train fusion
+with the Whisper backbone frozen, then train the system jointly. Warm-up can also
+use Whisper encoder feature matching. Fusion supports gated and cross-attention
+variants; the YAML selects the architecture and training budget.
+
+Before starting, set `datasets`, `base_asr_checkpoint`, and `run_dir` in the
+training config. In particular, its example backbone path
+`models/asr/whisper-small/runs/best` differs from the default Small trainer's
+`whisper-small-fa` run directory; replace it with your intended saved checkpoint.
 
 ```bash
 uv run python -m ml.fusion.train_fusion \
-  --config configs/speech_enhancement/fusion_train.yaml \
-  --resume-from-stage 0
-```
+  --config configs/speech_enhancement/fusion_train.yaml
 
-Evaluate the complete system or its noisy/enhanced ablations:
-
-```bash
 uv run python -m ml.fusion.eval_fusion \
   --config configs/speech_enhancement/fusion_eval.yaml
 ```
 
-Measure how much denoising headroom an enhancer captures:
+Evaluation must select the intended fusion checkpoint and test datasets.
+Original-view, enhanced-view, and fixed-gate ablations help isolate the fusion
+contribution. `ml.enhancement.diagnose_enhancement` compares a trained enhancer
+with the identity baseline to measure how much denoising headroom it captures.
+See [training, evaluation, and diagnosis](docs/script-guides/enhancement-and-fusion.md)
+and the [architecture explanation](docs/enhancement-degradation-fusion-overview.md).
+The architecture note distinguishes recorded fusion-v2 settings from reusable defaults.
 
-```bash
-uv run python -m ml.enhancement.diagnose_enhancement \
-  --dataset data/cv-corpus-25.0-degraded-v2 \
-  --split dev \
-  --enhancer-checkpoint artifacts/.../checkpoints/stage0_warmup/enhancer.pt \
-  --output-dir artifacts/enhancement_diagnosis
-```
+## Other experiment workflows
 
-## FastAPI Server
+| Workflow | What it does / where to start |
+| --- | --- |
+| **Official CV25 / Whisper Tiny** | Isolates official splits, trains a shared baseline, reconstructs the waveform bridge, compares fusion variants, and scores nine methods on original CV25 + AGFarsdat test audio. Start with [cohort preparation](docs/script-guides/prepare-cv25-official.md), then the [ordered run guide](docs/script-guides/cv25-tiny-run-all.md). |
+| **Whisper Small waveform bridge** | Runs `prepare` → `cache` → `train`, followed by separate evaluation, using frozen FRCRN and Whisper. See [bridge-small](docs/script-guides/bridge-small.md). |
+| **Compact Whisper Small fusion** | Uses an existing Persian Small checkpoint and a smaller fusion frontend. This has its own data mixture and output directory; see [compact fusion](docs/script-guides/whisper-small-compact-fusion.md). |
+| **pMCT** | Mixes aligned clean/noisy waveform patches during training without saving patched audio. The current implementation uses additive noise; see [pMCT](ml/pmct/README.md). |
+| **External ASR comparisons** | Evaluates OpenRouter STT, ElevenLabs Scribe, and Ivira Avanegar, with prediction/cost records. Requires provider credentials and sends audio to the selected service; see [external evaluation](docs/script-guides/external-asr-evaluation.md). |
+| **Model publication** | Previews and uploads Whisper exports with model cards and access settings; see [Hugging Face model publication](docs/script-guides/huggingface-model-publication.md). |
 
-The local playground lets a user:
+The Tiny launcher at `ml/speech_data/scripts/run_cv25_tiny_official.sh` requires
+an already prepared official cohort and CUDA. Read the ordered guide before
+launching it: it runs a fixed recipe and refuses an existing launcher directory.
+Resume rules differ between preparation, caching, training, and evaluation.
 
-- choose a configured Whisper, Fusion, or FastConformer checkpoint;
-- upload an audio file or record from the browser microphone;
-- preview the audio and receive a copyable transcript;
-- see the audio duration and inference time.
+## Long-audio dataset creation
 
-Edit `configs/server.yaml` to change labels, backends, checkpoint paths, devices,
-upload limits, or generation limits. Models load lazily on first use and remain
-cached. Each upload is decoded by `ffmpeg` into a temporary mono 16 kHz WAV and
-removed when the request finishes.
+This separate pipeline turns long recordings into candidate labeled clips:
 
-Set the shared access password before starting the server:
+1. Discover/download source recordings, including IranSeda audiobooks/radio or
+   VOA Persian, using the [IranSeda guide](docs/script-guides/iranseda-scripts.md),
+   [IranSeda scraper notes](docs/scraper_guides/iranseda-scrapers.md), and
+   [VOA scraper guide](docs/scraper_guides/voa-persian-scraper.md).
+2. Segment speech with Silero VAD. Default outputs are mono 16 kHz FLAC clips,
+   with source timestamps, checksums, and audit manifests.
+3. Transcribe with Whisper and normalize Persian text.
+4. Optionally select a reproducible subset and refine transcripts with contextual
+   text cleanup through a separately running vLLM server.
 
-```bash
-export APP_PASSWORD='replace-this-with-a-long-random-password'
-```
-
-The login session lasts seven days and is invalidated when the password changes.
-To use a different configuration file, set `ASR_SERVER_CONFIG` to its path.
-
-Run the development server:
-
-```bash
-make run
-```
-
-Open `http://localhost:8001` and enter the configured password. HTTPS is still
-recommended whenever the server is exposed beyond your local machine.
+Use the [long-audio CLI guide](docs/long-audio-asr-pipeline-guide.md) for commands,
+configuration, and resume behavior. Refinement requires vLLM's native synchronous
+`/v1/chat/completions/batch` endpoint; a generic chat endpoint is insufficient.
+Segmentation/transcription/refinement do not automatically publish train/dev/test
+splits. Filtering, human audit, and leakage-safe publication are described in the
+[dataset pipeline plan](docs/iranseda-whisper-dataset-pipeline.md).
 
 ## Tests
 
-Run the complete test suite:
-
 ```bash
 make test
-```
 
-Run a focused test module:
-
-```bash
+# Focus on one module while developing:
 uv run pytest server/tests/test_degradation_pipeline.py -q
 ```
 
-Tests under `server/tests/` cover both the FastAPI behavior and the ML/data
-utilities, including script help, deterministic generation, audio safety,
-manifest fields, dataset preparation, training helpers, and model components.
+`make test` runs `uv run pytest -q`. Most tests live under `server/tests/`,
+including ML/data tests; pMCT also has tests under `ml/pmct/tests/`. Coverage
+includes authentication, HTML/static assets, uploads and duration limits,
+model adapters, CLI help, dataset preparation, deterministic seeds, codec
+round-trips, pair alignment, model components, and training helpers.
+Tests validate implementation behavior; experiment quality is assessed with
+held-out evaluation and the recorded results.
 
-## Reproducibility and Generated Files
+## Experiment archive and reproducibility
 
-- YAML files under `configs/` define the main experiment inputs.
-- Data-generation code records seeds and augmentation metadata in JSONL.
-- Dataset preparation and degradation scripts are designed to be deterministic
-  where the underlying codec/tooling permits it.
-- Do not commit generated audio, downloaded datasets, checkpoints, or large
-  reports under `data/` or `artifacts/`.
+Start with the [official Tiny results archive](report/cv25-tiny-official/README.md)
+for the nine-method comparison, metrics, effective configs, and provenance.
+Earlier progress reports are in [`report/`](report/), including
+[progress report 2](report/progress-report-2.md) and its
+[Persian version](report/progress-report-2-fa.md).
+
+Use the **saved effective config and provenance for a recorded run** when
+interpreting results. Editable recipes under `configs/` can evolve; they need
+not reproduce older runs unchanged. Architecture notes and plans also distinguish
+implemented features from proposed extensions.
+
+For a traceable experiment:
+
+- Record the Git revision, input dataset identities/splits, effective config,
+  seed, model/checkpoint identity, and relevant runtime/codec versions.
+- Keep JSONL mappings, source manifests, skipped-input audits, predictions,
+  metrics, and training logs alongside the run. Stable random choices do not
+  guarantee identical codec output across tool versions or hardware.
+- Select checkpoints and design choices on dev; reserve test splits for final
+  scoring. Follow the official-cohort guide when reproducing the Tiny study.
+- Use a new run directory when changing a recipe incompatibly. Check each CLI's
+  resume rules before reusing caches or checkpoints.
+- Keep downloaded/generated audio, model weights, and large outputs out of Git.
+  `data/`, `models/`, and `artifacts/` are ignored; `report/` holds selected compact
+  research records.
