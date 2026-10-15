@@ -10,7 +10,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(here, '../..');
 const runtime = '/home/pouya/.cache/codex-runtimes/codex-primary-runtime/dependencies';
 const defaultSkill = '/home/pouya/.codex/plugins/cache/openai-primary-runtime/presentations/26.1013.11914/skills/presentations';
-const totalSlides = 22;
+const totalSlides = 28;
 const help = `Build the ${totalSlides}-slide Persian thesis defense as editable PowerPoint and PDF.
 
 Usage: node Thesis/presentation/build_persian_deck.mjs [options]
@@ -30,6 +30,7 @@ Implementation figures reuse the exact English-deck image crops without translat
 A font installation ZIP accompanies the output for PowerPoint on other computers.
 Private staging retains the validation receipt and numbered slide previews.
 Includes two literature-review slides surveying recent methods before the experiment overview.
+Includes an appendix title and five research-detail slides after the 22-slide main talk.
 Sources: the updated English deck and current thesis literature/work/results/conclusions.
 `;
 const argv = process.argv.slice(2);
@@ -98,6 +99,25 @@ function reviewTable(s, rows, rowHeight) {
       alignment: c === 0 && r > 0 ? 'left' : 'right', verticalAlignment: 'middle',
       insets: 12, autoFit: 'none' };
   }
+}
+function researchTable(s, values, widths, { top = 190, headerHeight = 64, rowHeight = 46,
+  labelSize = 23, numberSize = 24, bestCells = [] } = {}) {
+  const table = s.tables.add({ rows: values.length, columns: widths.length, left: 72, top,
+    width: 1136, height: headerHeight + (values.length - 1) * rowHeight,
+    columnWidths: widths, values });
+  table.rows[0].height = headerHeight;
+  for (let r = 1; r < values.length; r++) table.rows[r].height = rowHeight;
+  table.borders.assign({ fill: C.rule, width: .8, style: 'solid' });
+  for (let r = 0; r < values.length; r++) for (let c = 0; c < widths.length; c++) {
+    const cell = table.getCell(r, c);
+    const best = bestCells.some(([row, col]) => row === r && col === c);
+    cell.fill = r === 0 ? C.deep : C.paper;
+    cell.text.style = { typeface: F, fontSize: r === 0 ? 22 : c === widths.length - 1 ? labelSize : numberSize,
+      color: r === 0 ? C.paper : best ? C.accent : C.ink, bold: r === 0 || best,
+      alignment: c === widths.length - 1 ? 'right' : 'center', verticalAlignment: 'middle',
+      insets: 6, autoFit: 'none' };
+  }
+  return table;
 }
 async function image(s, filename, x, y, w, h, alt) {
   const bytes = await fs.readFile(filename);
@@ -411,6 +431,107 @@ async function build() {
   txt(s, '۱۷٫۲۲٪ خطای تجمیعی\nسود وابسته به دامنه', 376, 550, 410, 82, 24, { color: '#b8d8db' });
   txt(s, 'سپاسگزارم\nپرسش‌ها', 72, 532, 214, 95, 30, { color: C.paper, bold: true, align: 'left' });
   notes(s, 'آموزش متناسب با تخریب‌های مخابراتی، بیشترین بهبود مقاومت بازشناسی فارسی را در آزمایش‌های اصلی ایجاد کرد. نرخ خطای تماس واقعی از ۳۵٫۶۳ به ۲۵٫۸۰ درصد رسید. همجوشی سود عددی کوچک‌تری اضافه کرد و به ۲۵٫۳۷ درصد رسید. داده کتاب صوتی نتیجه تجمیعی را به ۱۷٫۲۲ درصد رساند، اما سود آن به دامنه وابسته بود و به تماس واقعی منتقل نشد. این پژوهش سامانه‌های بازتولیدپذیر و شواهدی برای سازگارسازی بازشناس فارسی در شرایط محدودیت داده مخابراتی فراهم می‌کند. سپاسگزارم و آماده پاسخ‌گویی به پرسش‌ها هستم.', [source('results'), source('conclusions')], '۴۰ ثانیه');
+
+  // 23 — Appendix divider follows the main talk's existing closing slide.
+  s = base('', 'پیوست پژوهش', { dark: true });
+  txt(s, 'مطالب تکمیلی', 72, 228, 1136, 118, 70, { bold: true, color: C.paper });
+  txt(s, 'جزئیات داده‌ها و نتایج پژوهش', 72, 367, 1136, 68, 33, { color: '#b8d8db' });
+  notes(s, 'این بخش برای مراجعه هنگام پرسش و پاسخ است. اندازه پیکره‌ها و تنظیمات خط مبنا، نتایج مجموعه‌های آزمون، آزمایش فست کانفورمر، گونه‌های تکمیلی ویسپر بسیار کوچک و مقایسه صدنمونه‌ای در اسلایدهای بعد آمده‌اند.', [source('work'), source('results')], 'در صورت نیاز');
+
+  // 24 — Counts are base-corpus records, before long/degraded variants or IranSeda.
+  s = base('اندازه پیکره‌ها و تنظیمات خط مبنا', 'مطالب تکمیلی');
+  researchTable(s, [
+    ['نقش در آموزش', 'اعتبارسنجی', 'آموزش', 'پیکره پایه'],
+    ['گفتار عمومی و تولید تخریب', fa(10006), fa(299430), 'کامن‌وویس فارسی ۲۵'],
+    ['گفتار بداهه فارسی', fa(6044), fa(600672), 'فارس‌اسپان (محدود)'],
+    ['تنوع دامنه', fa(362), fa(3019), 'فلورز فارسی']
+  ], [400, 195, 195, 346], { headerHeight: 56, rowHeight: 66, labelSize: 25, numberSize: 25 });
+  txt(s, 'ویسپر کوچک تک‌جریانه', 740, 470, 468, 45, 27, { bold: true, color: C.deep });
+  txt(s, 'یک دوره، نرخ یادگیری \u20661e-5\u2069\nدسته ۴ و انباشت ۸ گام: ۳۲ نمونه', 740, 523, 468, 83, 24);
+  txt(s, 'جزئیات آزمون AGFarsdat', 72, 470, 600, 45, 27, { bold: true, color: C.deep });
+  txt(s, '۵۸۵ گوینده و ۴۹٫۹ ساعت\nصوت منبع: تک‌کاناله، ۸ کیلوهرتز، ۱۶ بیت', 72, 523, 600, 83, 24);
+  caption(s, 'تعدادها مربوط به پیکره پایه‌اند. گونه‌های بلند، تخریب‌شده و ایران‌صدا در این جدول نیستند', 632, 29);
+  notes(s, 'اعداد جدول، تعداد رکوردهای آموزش و اعتبارسنجی پیکره‌های پایه پیش از افزودن ایران‌صدا هستند و شامل شمارش گونه‌های بلند و تخریب‌شده نیستند. آموزش و ارزیابی پس از تبدیل صوت به تک‌کاناله شانزده کیلوهرتز انجام می‌شود. ویسپر کوچک معمولی و چندشرایطی هر دو یک دوره با نرخ یادگیری ده به توان منفی پنج، دسته چهار و انباشت هشت گام آموزش دیدند. AGFarsdat در منبع شامل ۱۰۰۴۴ گفته از ۵۸۵ گوینده و ۴۹٫۹ ساعت صوت هشت کیلوهرتزی است. این آزمون خصوصی است و در آموزش یا انتخاب مدل حضور ندارد. حجم محدود PersianSpeech و تفاوت تعداد نمونه واجدشرایط در پیکره گفتار فارسی باید در مقایسه‌ها لحاظ شوند.', [source('work'), 'جدول:داده-آموزش', 'جدول:داده-آزمون'], 'در صورت نیاز، حدود ۴۵ ثانیه');
+
+  // 25 — Full WER matrix from the thesis, without mixing WER and CER in a cell.
+  s = base('نرخ خطای واژه به تفکیک مجموعه', 'مطالب تکمیلی');
+  const mainWer = [
+    ['معمولی', 35.63, 11.52, 21.05, 34.53, 30.17],
+    ['داده‌افزایی نویزی', 32.67, 7.86, 19.26, 33.57, 30.47],
+    ['pMCT', 30.01, 7.25, 20.23, 31.65, 30.50],
+    ['چندشرایطی', 25.80, 7.84, 19.82, 35.25, 30.90],
+    ['همجوشی دوجریانه', 25.37, 7.53, 19.67, 31.81, 33.82],
+    ['پل تطبیقی', 25.84, 7.63, 19.73, 35.09, 32.32],
+    ['ویسپر متوسط', 21.99, 3.84, 17.14, 31.65, 31.17],
+    ['چندشرایطی و ایران‌صدا', 26.66, 8.19, 13.78, 26.86, 25.87]
+  ];
+  researchTable(s, [
+    ['پیکره گفتار\nفارسی', 'پرشین‌اسپیچ¹', 'فلورز', 'کامن‌وویس\n۲۵', 'AGFarsdat', 'سامانه'],
+    ...mainWer.map(([name, ag, cv, fleurs, ps, psc]) => [psc, ps, fleurs, cv, ag].map(percent).concat(name))
+  ], [155, 160, 140, 155, 160, 366], { top: 184, headerHeight: 70, rowHeight: 46,
+    bestCells: [[8, 0], [8, 1], [8, 2], [7, 3], [7, 4]] });
+  caption(s, 'همه اعداد WER و درصد هستند. ¹ فقط ۲۴ نمونه. تعداد واجدشرایط پیکره گفتار فارسی تغییر می‌کند', 638, 27);
+  notes(s, 'این جدول همه هشت سامانه جدول نتایج مجموعه‌ای پایان‌نامه را با WER تنها نشان می‌دهد. همه ردیف‌ها جز ردیف ویسپر متوسط از ویسپر کوچک استفاده می‌کنند. عدد کمتر بهتر است و کمینه هر ستون با رنگ مشخص شده است. ویسپر متوسط در تماس واقعی و کامن‌وویس کمترین خطا را دارد. مدل دارای ایران‌صدا در سه مجموعه دیگر بهتر است. نتایج CER در جدول اصلی پایان‌نامه آمده‌اند و ممکن است رتبه‌بندی آن‌ها متفاوت باشد. PersianSpeech فقط ۲۴ نمونه دارد و تعداد نمونه واجدشرایط Persian Speech Corpus میان سامانه‌ها یکسان نیست. بنابراین این جدول مقایسه‌ای از سامانه‌های کامل است و برای همه خانه‌ها ادعای جفت‌شدگی دقیق نمونه‌ها ندارد.', [source('results'), 'جدول:نتایج-مجموعه'], 'در صورت نیاز، حدود ۶۰ ثانیه');
+
+  // 26 — Independent recognizer-family experiment, including both error metrics.
+  s = base('آموزش چندشرایطی در فست کانفورمر', 'مطالب تکمیلی');
+  const fastConformer = [
+    ['تجمیعی', 22.73, 14.79, 21.81, 14.45],
+    ['AGFarsdat', 31.07, 14.81, 30.48, 14.09],
+    ['کامن‌وویس فارسی ۲۵', 11.68, 16.46, 10.01, 16.10],
+    ['فلورز فارسی', 29.22, 9.94, 29.40, 10.22],
+    ['پرشین‌اسپیچ', 30.70, 13.50, 31.41, 13.56],
+    ['پیکره گفتار فارسی', 33.69, 12.22, 33.59, 12.68]
+  ];
+  researchTable(s, [
+    ['CER\nچندشرایطی', 'WER\nچندشرایطی', 'CER\nمعمولی', 'WER\nمعمولی', 'مجموعه آزمون'],
+    ...fastConformer.map(([name, wer, cer, mcWer, mcCer]) => [mcCer, mcWer, cer, wer].map(percent).concat(name))
+  ], [175, 175, 175, 175, 436], { headerHeight: 70, rowHeight: 53, labelSize: 25 });
+  txt(s, 'کاهش WER تجمیعی: ۰٫۹۲ واحد درصد، حدود ۴٪ کاهش نسبی', 72, 592, 1136, 42, 27, { bold: true, color: C.accent });
+  caption(s, 'مقایسه درون فست کانفورمر است. تفاوت پیش‌آموزش و آموزش، انتساب فاصله با ویسپر را محدود می‌کند', 641, 26);
+  notes(s, 'فست کانفورمر CTC با داده‌های معمولی و چندشرایطی، تعداد گام‌های برابر و نرخ یادگیری پنج ضرب در ده به توان منفی پنج مقایسه شد. دسته هشت و انباشت چهار گام بود و رمزگشایی حریصانه انجام شد. همه مقادیر جدول درصدند. WER تجمیعی ۰٫۹۲ واحد درصد و WER تماس واقعی ۰٫۵۹ واحد درصد بهتر شد. بیشترین کاهش WER در کامن‌وویس بود، اما فلورز و پرشین‌اسپیچ اندکی بدتر شدند. بهبود تجمیعی و تماس واقعی از انتقال اثر داده‌افزایی به خانواده‌ای دیگر پشتیبانی می‌کند، با اندازه اثر کمتر در پیکربندی اجراشده. تفاوت معماری، مدل پیش‌آموزش‌دیده و برنامه آموزش اجازه نمی‌دهد مقایسه مستقیم با ویسپر را آزمون خالص معماری بدانیم.', [source('work'), source('results'), 'جدول:نتایج-فست-کانفورمر'], 'در صورت نیاز، حدود ۵۰ ثانیه');
+
+  // 27 — Complete Tiny study includes bridge controls omitted from the main talk.
+  s = base('آزمایش کامل مؤلفه‌ها در ویسپر بسیار کوچک', 'مطالب تکمیلی');
+  const tiny = [
+    ['خط مبنای چندشرایطی', 74.92, 38.03, 76.85, 35.04],
+    ['همجوشی فقط دروازه‌ای', 62.35, 32.87, 65.88, 28.42],
+    ['توجه متقاطع باقیمانده', 60.26, 31.90, 65.48, 28.35],
+    ['فقط نمای اصلی¹', 64.10, 33.21, 69.23, 30.39],
+    ['فقط نمای بهسازی‌شده¹', 63.81, 33.05, 69.69, 30.73],
+    ['همجوشی دوسویه', 57.82, 30.57, 63.50, 27.02],
+    ['پل: فقط PQ', 74.48, 37.81, 76.63, 34.83],
+    ['پل: فقط صوت بهسازی‌شده', 75.90, 38.79, 77.67, 35.53],
+    ['پل: PQ + RI', 74.40, 37.81, 76.81, 34.94]
+  ];
+  researchTable(s, [
+    ['AGFarsdat\nCER', 'AGFarsdat\nWER', 'Common Voice\nCER', 'Common Voice\nWER', 'پیکربندی'],
+    ...tiny.map(([name, cvWer, cvCer, agWer, agCer]) => [agCer, agWer, cvCer, cvWer].map(percent).concat(name))
+  ], [175, 175, 175, 175, 436], { top: 174, headerHeight: 70, rowHeight: 44, numberSize: 23,
+    bestCells: [[6, 0], [6, 1], [6, 2], [6, 3]] });
+  caption(s, '¹ حذف مسیر در استنتاج. آموزش فقط با کامن‌وویس است. بودجه آموزش و ظرفیت گونه‌ها برابر نیست', 648, 24);
+  notes(s, 'همه نه پیکربندی جدول حذف مؤلفه ویسپر بسیار کوچک نمایش داده شده‌اند. همه مقادیر درصدند. فقط نمای اصلی و فقط نمای بهسازی‌شده، حذف مسیر در استنتاج از مدل همجوشی آموزش‌دیده‌اند و مدل‌های تک‌جریانه مستقل نیستند. نسخه توجه باقیمانده، تبادل یک‌سویه و وزن مشترک گفتار دارد. PQ کیفیت ادراکی و RI اطلاعات بازشناسی است. نسخه پل با فقط صوت بهسازی‌شده، خروجی FRCRN را مستقیماً به بازشناس ثابت می‌دهد. افزودن RI در این اجرا سود روشنی نشان نداد و استفاده مستقیم از بهسازی خطا را بیشتر کرد. گونه دوسویه کمترین WER و CER را دارد، اما گونه‌ها ظرفیت یکسان ندارند و آموزش مشترک اضافی همجوشی در برابر پنج دوره آموزش پل با بازشناس ثابت، سهم مؤلفه‌ها را کاملاً جدا نمی‌کند. این مطالعه از آزمایش ویسپر کوچک مستقل است.', [source('results'), 'جدول:حذف-مولفه-ویسپر-بسیار-کوچک', 'report/cv25-tiny-official/final-tests/summary.json'], 'در صورت نیاز، حدود ۶۰ ثانیه');
+
+  // 28 — Historical thesis benchmark on one fixed subset, not a current leaderboard.
+  s = base('مقایسه مدل‌ها روی زیرمجموعه مشترک', 'مطالب تکمیلی');
+  const external = [
+    ['Chirp 3', 16.44, 5.14, 22.94],
+    ['GPT-4o Transcribe', 18.55, 6.94, 48.62],
+    ['کوچک: چندشرایطی و ایران‌صدا', 20.72, 10.72, 26.61],
+    ['همجوشی دوجریانه', 21.72, 10.97, 25.31],
+    ['ویسپر متوسط', 23.13, 11.24, 24.77],
+    ['Voxtral Small 24B', 26.92, 10.75, 45.87],
+    ['Qwen3-ASR 1.7B', 36.66, 15.68, 63.30],
+    ['Grok STT 1.0', 40.88, 23.68, 67.89],
+    ['Nemotron 3.5 ASR 0.6B', 98.70, 80.86, 104.59]
+  ];
+  researchTable(s, [
+    ['WER\nتماس واقعی', 'CER\nتجمیعی', 'WER\nتجمیعی', 'مدل'],
+    ...external.map(([name, wer, cer, agWer]) => [agWer, cer, wer].map(percent).concat(name))
+  ], [210, 185, 185, 556], { top: 174, headerHeight: 70, rowHeight: 44, labelSize: 23, numberSize: 23,
+    bestCells: [[1, 0], [1, 1], [1, 2]] });
+  caption(s, '۱۰۰ نمونه ثابت، ۲۰ نمونه از هر مجموعه. این مقایسه جایگزین ارزیابی کامل نیست', 648, 24);
+  notes(s, 'اعداد، نتایج ثبت‌شده در پایان‌نامه روی یک زیرمجموعه ثابت صدنمونه‌ای هستند. از هر یک از پنج مجموعه بیست نمونه تصادفی انتخاب شد. نرمال‌سازی مرجع و خروجی مشترک است و تجمیع از مجموع شمارش خطا و واحد مرجع انجام می‌شود. همه نه مدل جدول اصلی آمده‌اند، با WER و CER تجمیعی و WER تماس واقعی. CER تماس واقعی و نتایج چهار مجموعه دیگر در جدول پایان‌نامه موجودند. Chirp 3 در این زیرمجموعه کمترین خطا را دارد. رتبه‌بندی سه مدل پژوهش با آزمون کامل متفاوت است، بنابراین نتیجه فقط به همین زیرمجموعه تعلق دارد و رتبه‌بندی عمومی یا روزآمد مدل‌ها نیست. WER می‌تواند با زیادشدن درج‌ها از صد درصد بیشتر شود. تاریخ دقیق اجرای سرویس‌ها و جزئیات تنظیمات آن‌ها در این جدول گزارش نشده است.', [source('results'), 'جدول:مقایسه-صدنمونه'], 'در صورت نیاز، حدود ۶۰ ثانیه');
 }
 
 // Exporter language defaults do not encode Persian paragraph direction. Normalize
@@ -501,11 +622,14 @@ async function main() {
     pythonExecutable: python,
     integrityValidatorPath: path.join(opts.skillDir, 'container_tools/inspect_presentation_package_integrity.py'),
     layoutValidatorPath: path.join(opts.skillDir, 'container_tools/inspect_presentation_layout_geometry.py'),
-    layoutArgs: ['--expected-slide-size-emu', '12192000,6858000', '--validate-bullet-geometry', '--validate-heading-fit', '--require-native-table-slide', '3', '--require-native-table-slide', '4', '--require-native-table-slide', '20'],
+    layoutArgs: ['--expected-slide-size-emu', '12192000,6858000', '--validate-bullet-geometry', '--validate-heading-fit', ...[3, 4, 20, 24, 25, 26, 27, 28].flatMap(n => ['--require-native-table-slide', String(n)])],
     explicitTotalSlideCount: totalSlides,
-    requiredNativeChartOwnerSlides: [10, 14, 15, 19], requiredNativeTableOwnerSlides: [3, 4, 20],
+    requiredNativeChartOwnerSlides: [10, 14, 15, 19], requiredNativeTableOwnerSlides: [3, 4, 20, 24, 25, 26, 27, 28],
     materializeLiteralChartWorkbooks: true,
-    fontPolicy: { basis: 'design', families: [F] }, verifyArtifactToolImport: true,
+    // The established deck style is encoded above and fonts are bundled locally.
+    // Rebuilding must not depend on keeping superseded presentation binaries.
+    fontPolicy: { basis: 'design', families: [F] },
+    verifyArtifactToolImport: true,
     receiptPath: path.join(staging, 'validation.json') });
   await fs.copyFile(final, pptxDestination);
   if (opts.pdf) {

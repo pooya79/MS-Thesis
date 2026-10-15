@@ -1,7 +1,8 @@
 # Persian thesis defense presentation
 
 `Thesis/presentation/build_persian_deck.mjs` creates a separate, editable,
-22-slide Persian defense deck and a PDF with the same slides. It preserves the
+28-slide Persian defense deck and a PDF with the same slides: the 22-slide main
+talk followed by a title and five appendix slides. It preserves the
 English presentations and original thesis figures.
 
 The content follows `robust_persian_asr_thesis_defense_updated.pptx` and the current
@@ -68,9 +69,45 @@ the methods without a thesis-question column or a statement of the presenter's
 research focus. Allow about 2½ minutes for both slides.
 
 The original 20 slides retain their content and move forward two positions after
-slide 2. The current revision is delivered as
-`persian/robust_persian_asr_thesis_defense_fa_literature_methods.{pptx,pdf}` with a
-matching font ZIP. Existing decks remain available.
+slide 2. Both review slides are included in the current appendix revision.
+
+## Research appendix
+
+The current revision is
+`persian/robust_persian_asr_thesis_defense_fa_appendix.{pptx,pdf}` with its font ZIP.
+Superseded Persian PPTX, PDF and font ZIP files have been removed. The builder
+uses the established style and bundled fonts without requiring an older Persian
+deck. English source presentations and original research figures remain available.
+The main talk ends at slide 22, **جمع‌بندی**. Slides 23–28 form a visible appendix
+for questions after the talk. The first 22 slides retain their content, with page
+totals updated to 28. This requested appendix supersedes the older English slide
+plan's instruction to keep supplementary tables out of the presentation.
+
+- **23 — مطالب تکمیلی:** section title, introducing supporting research details.
+- **24 — اندازه پیکره‌ها و تنظیمات خط مبنا:** training/validation record counts
+  for Common Voice 25, limited FarsSpon and FLEURS, single-stream Whisper training
+  settings, and AGFarsdat speaker count, hours and source audio format. Base counts
+  exclude long/degraded variants and IranSeda.
+- **25 — نرخ خطای واژه به تفکیک مجموعه:** the full eight-system, five-dataset
+  WER matrix from `جدول:نتایج-مجموعه`. Column minima are emphasized. CER remains
+  in the thesis. PersianSpeech's 24 examples and varying Persian Speech Corpus
+  eligibility are qualified on the slide.
+- **26 — آموزش چندشرایطی در فست کانفورمر:** ordinary and multi-condition
+  WER/CER for all five test sets and the aggregate. The interpretation remains
+  within Fast Conformer, without attributing its difference from Whisper solely
+  to architecture.
+- **27 — آزمایش کامل مؤلفه‌ها در ویسپر بسیار کوچک:** all nine configurations
+  from the Tiny study, including residual attention, bridge PQ-only, enhanced-only
+  and PQ+RI controls. Inference-only removal of a stream and unequal training
+  budgets/capacity remain explicit.
+- **28 — مقایسه مدل‌ها روی زیرمجموعه مشترک:** all nine models from the thesis's
+  fixed 100-example benchmark, displaying pooled WER/CER and real-call WER.
+  Each dataset contributes 20 samples. These recorded results apply to that
+  subset and are not a current general ranking of external models.
+
+The five data slides use editable native tables and Persian speaker notes with
+chapter paths and stable thesis table labels. The appendix has no required
+speaking time and follows the closing slide rather than extending the main talk.
 
 ## Dependencies and command
 
@@ -96,7 +133,7 @@ Existing outputs are never overwritten. Use a new basename for a revision:
 
 ```bash
 node Thesis/presentation/build_persian_deck.mjs \
-  --basename robust_persian_asr_thesis_defense_fa_literature_methods
+  --basename robust_persian_asr_thesis_defense_fa_appendix
 ```
 
 `--no-pdf` skips PDF conversion and PNG previews. `--runtime-dir` and
@@ -144,7 +181,7 @@ asset directly with the recorded source ZIP member.
 
 ## Validation and review
 
-The builder validates the 16:9 dimensions, 22-slide count, package structure,
+The builder validates the 16:9 dimensions, 28-slide count, package structure,
 fonts, required native chart/table locations and chart data. Literal chart data
 are materialized in embedded workbooks for portability. The private build
 directory contains `staging/validation.json`, original drafts and, when exporting
@@ -162,8 +199,11 @@ CLI help coverage:
 node --test Thesis/presentation/tests/build_persian_deck.test.mjs
 ```
 
-The tests also inspect the delivered literature revision for both review slides'
-citations, editable table and Persian text direction, and compare all retained
-slide text against the earlier revised deck, excluding updated page numbers.
+The tests inspect both review slides' citations, editable tables and Persian text
+direction, and compare main-slide text against the small approved snapshot in
+`Thesis/presentation/tests/fixtures/persian-main-slides.json`, excluding updated
+page numbers. They also check the appendix order and table rows, preserve
+all 22 main slides, and compare appendix numbers directly with the current thesis
+tables, including all nine Tiny variants and all nine external-benchmark models.
 After rebuilding, review the new deliverables before replacing that regression
 fixture; the builder itself refuses to overwrite existing outputs.
