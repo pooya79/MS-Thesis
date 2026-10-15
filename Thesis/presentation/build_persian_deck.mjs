@@ -9,8 +9,9 @@ import { execFileSync } from 'node:child_process';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(here, '../..');
 const runtime = '/home/pouya/.cache/codex-runtimes/codex-primary-runtime/dependencies';
-const defaultSkill = '/home/pouya/.codex/plugins/cache/openai-primary-runtime/presentations/26.1011.11113/skills/presentations';
-const help = `Build the 20-slide Persian thesis defense as editable PowerPoint and PDF.
+const defaultSkill = '/home/pouya/.codex/plugins/cache/openai-primary-runtime/presentations/26.1013.11914/skills/presentations';
+const totalSlides = 22;
+const help = `Build the ${totalSlides}-slide Persian thesis defense as editable PowerPoint and PDF.
 
 Usage: node Thesis/presentation/build_persian_deck.mjs [options]
 
@@ -19,7 +20,7 @@ Options:
   --build-dir PATH    Private staging directory (default: a new directory under /tmp).
   --basename NAME     Output stem (default: robust_persian_asr_thesis_defense_fa).
   --runtime-dir PATH  Bundled dependency directory (default: Codex primary runtime).
-  --skill-dir PATH    Presentation skill directory (default: installed 26.1011.11113).
+  --skill-dir PATH    Presentation skill directory (default: installed 26.1013.11914).
   --no-pdf           Export PPTX only (default: export PPTX and PDF).
   -h, --help         Show this help and exit without loading authoring dependencies.
 
@@ -28,7 +29,8 @@ Text uses the bundled Vazirmatn Regular and Bold fonts. PDF embeds the rendered 
 Implementation figures reuse the exact English-deck image crops without translation.
 A font installation ZIP accompanies the output for PowerPoint on other computers.
 Private staging retains the validation receipt and numbered slide previews.
-Sources: the updated English deck and current thesis work/results/conclusions.
+Includes two literature-review slides surveying recent methods before the experiment overview.
+Sources: the updated English deck and current thesis literature/work/results/conclusions.
 `;
 const argv = process.argv.slice(2);
 if (argv.includes('--help') || argv.includes('-h')) { process.stdout.write(help); process.exit(0); }
@@ -74,12 +76,28 @@ function base(title, section, { dark = false } = {}) {
   txt(s, section, 440, 30, 768, 32, 18, { color: dark ? '#b8d8db' : C.accent, bold: true });
   txt(s, title, 72, 75, 1136, 88, 42, { bold: true, color, font: T });
   rule(s, 72, 674, 1136, dark ? '#436268' : C.rule);
-  txt(s, `${fa(presentation.slides.items.length)} از ۲۰`, 72, 681, 100, 25, 16, { align: 'left', color: dark ? '#b8d8db' : C.soft });
+  txt(s, `${fa(presentation.slides.items.length)} از ${fa(totalSlides)}`, 72, 681, 100, 25, 16, { align: 'left', color: dark ? '#b8d8db' : C.soft });
   return s;
 }
 function caption(s, text, y = 620, h = 44) { txt(s, text, 72, y, 1136, h, 20, { color: C.muted }); }
 function notes(s, text, refs, time) {
   s.speakerNotes.text = `${text}\n\nزمان پیشنهادی: ${time}\n\nمنابع:\n${refs.join('\n')}`;
+}
+function reviewTable(s, rows, rowHeight) {
+  const values = [['نمونه پژوهش‌ها', 'ایده اصلی', 'خانواده روش'], ...rows];
+  const table = s.tables.add({ rows: values.length, columns: 3, left: 72, top: 196,
+    width: 1136, height: 50 + rows.length * rowHeight, columnWidths: [420, 432, 284], values });
+  table.rows[0].height = 50;
+  for (let r = 1; r < values.length; r++) table.rows[r].height = rowHeight;
+  table.borders.assign({ fill: C.rule, width: .8, style: 'solid' });
+  for (let r = 0; r < values.length; r++) for (let c = 0; c < 3; c++) {
+    const cell = table.getCell(r, c);
+    cell.fill = r === 0 ? C.deep : C.paper;
+    cell.text.style = { typeface: F, fontSize: r === 0 ? 24 : c === 0 ? 21 : 23,
+      color: r === 0 ? C.paper : c === 2 ? C.deep : C.ink, bold: r === 0 || c === 2,
+      alignment: c === 0 && r > 0 ? 'left' : 'right', verticalAlignment: 'middle',
+      insets: 12, autoFit: 'none' };
+  }
 }
 async function image(s, filename, x, y, w, h, alt) {
   const bytes = await fs.readFile(filename);
@@ -125,7 +143,58 @@ async function build() {
   caption(s, 'گردآوری تماس رونویسی‌شده پرهزینه و حساس به حریم خصوصی است', 632, 30);
   notes(s, 'داده‌های فارسی سبک‌های مختلف گفتار و ضبط را پوشش می‌دهند، اما نماینده کامل کانال مخابراتی نیستند. در تماس واقعی چند تخریب می‌توانند هم‌زمان رخ دهند. داده تلفنی رونویسی‌شده نیز به‌سادگی در دسترس نیست. بنابراین از داده برچسب‌خورده عمومی و صوت بدون برچسب کمک می‌گیریم. معیار موفقیت، انتقال به تماس واقعی خارج از شبیه‌ساز است.', [source('introduction'), source('preliminaries')], '۴۵ ثانیه');
 
-  // 03 — Editable scientific comparison graph, read from right to left.
+  // 03 — General landscape of training, adaptation, unlabeled data and LLM methods.
+  s = base('آموزش، سازگارسازی و اصلاح خروجی', 'مرور روش‌های نوین بازشناسی گفتار');
+  reviewTable(s, [
+    ['pMCT (2022)\nAcoustic-aware Aug. (2025*)', 'آموزش با نویز و تخریب کانال،\nهمراه با تنوع آکوستیکی هدفمند', 'آموزش چندشرایطی\nو داده‌افزایی'],
+    ['MCAT–LoRA (2025) / SPS (2026)\nNeyshekar (2026*)', 'ریزتنظیم کامل یا کم‌پارامتر،\nبا داده متناسب با زبان و دامنه', 'انطباق مدل‌های پایه'],
+    ['Bhogale et al. (2024)\nCross-lingual (2025) / DASH (2026)', 'پیش‌آموزش با صوت بی‌برچسب،\nخودتقطیر و پالایش شبه‌برچسب‌ها', 'یادگیری خودنظارتی\nو نیمه‌نظارتی'],
+    ['ClozeGER / Listen Again (2024)\nConservative Filtering (2024)', 'اصلاح فرضیه‌های بازشناس با\nمدل زبانی و شواهد صوتی', 'اصلاح با مدل زبانی']
+  ], 88);
+  txt(s, 'ارزیابی‌های جدید', 946, 610, 262, 32, 21, { bold: true, color: C.deep });
+  txt(s, 'Speech Robust Bench (2025)   URGENT (2025)   PSRB (2025*)', 72, 610, 850, 32, 20, { align: 'left', color: C.muted });
+  caption(s, 'ستاره: پیش‌چاپ، با وضعیت انتشار بررسی‌شده تا ۱۵ اکتبر ۲۰۲۶', 647, 25);
+  notes(s, 'روش‌های جدید را می‌توان بر اساس محل مداخله در سامانه دسته‌بندی کرد. در مسیر آموزش، داده‌افزایی و آموزش چندشرایطی مدل را با اختلال‌های متنوع روبه‌رو می‌کنند. pMCT بخش‌های پاک و تخریب‌شده را درون یک گفته ترکیب می‌کند. داده‌افزایی آکوستیکی هدفمند بر تنوع شرایط صوتی تمرکز دارد. انطباق مدل پایه می‌تواند با ریزتنظیم کامل یا روش‌های کم‌پارامتر مانند LoRA انجام شود. MCAT آموزش خصمانه برای ناوردایی کانال را به انطباق کم‌پارامتر اضافه می‌کند. SPS داده بداهه فارسی را برای ریزتنظیم ویسپر بررسی می‌کند. نیشکر یک پیکره خوانده‌شده فارسی و مطالعه ریزتنظیم است، نه یک معماری جدید. برای صوت بدون برچسب، مسیرهای متفاوتی وجود دارد: بهوگاله از شبه‌برچسب و انتخاب نمونه استفاده می‌کند، پژوهش چندزبانه به پیش‌آموزش پیوسته با صوت فارسی، عربی و اردو می‌پردازد، و DASH با خودتقطیر بازنمایی‌های چندلایه، سازگاری نماهای پاک و نویزی را می‌آموزد. این سه روش را نباید یک الگوریتم واحد دانست. در مرحله خروجی، ClozeGER از مدل زبانی چندوجهی و صوت برای اصلاح فرضیه‌ها استفاده می‌کند و پالایش محافظه‌کارانه احتمال اصلاح ناموجه را کاهش می‌دهد. Speech Robust Bench و URGENT انواع تخریب را پوشش می‌دهند و PSRB ارزیابی فارسی را گسترش می‌دهد. نام‌های دارای ستاره در این مرور به نسخه‌های پیش‌چاپ ارجاع دارند. این دسته‌ها می‌توانند مکمل یکدیگر باشند و رتبه‌بندی عددی مشترکی میان آزمایش‌های متفاوت مقاله‌ها ارائه نمی‌شود.', [
+    source('literature'), 'Thesis/bibs/refs.bib',
+    '[pesoparada2022pmct] Peso Parada et al. (2022). pMCT: Patched Multi-Condition Training for Robust Speech Recognition. Interspeech. https://doi.org/10.21437/Interspeech.2022-117',
+    '[liu2025acoustic] Liu et al. (2025). Towards Pretraining Robust ASR Foundation Model with Acoustic-Aware Data Augmentation. Preprint. https://arxiv.org/abs/2505.20606',
+    '[niu2025mcat] Niu et al. (2025). Parameter-Efficient Adaptation with Multi-Channel Adversarial Training for Far-Field Speech Recognition. EURASIP JASMP. https://doi.org/10.1186/s13636-025-00406-5',
+    '[namdarzadeh2026sps] Namdarzadeh & Ballier (2026). Fine-tuning Whisper with Spontaneous Persian Speech (SPS). SIGUL, 263–269. https://aclanthology.org/2026.sigul-1.26/',
+    '[amirivojdan2026neyshekar] Amirivojdan, Nadiri, Alizadeh & Yaraghi (2026). Neyshekar: An Open Persian Read-Speech Corpus for Automatic Speech Recognition. Preprint, 13 September 2026. https://arxiv.org/abs/2609.14542',
+    '[bhogale2024pseudolabel] Bhogale et al. (2024). Empowering Low-Resource Language ASR via Large-Scale Pseudo Labeling. Interspeech. https://www.isca-archive.org/interspeech_2024/bhogale24_interspeech.html',
+    '[bandarupalli2025efficient] Bandarupalli et al. (2025). Efficient ASR for Low-Resource Languages: Leveraging Cross-Lingual Unlabeled Data. Findings of IJCNLP-AACL. https://aclanthology.org/2025.findings-ijcnlp.99/',
+    '[baik2026dash] Baik et al. (2026). DASH: Dual-View Self-Distillation with Multi-Layer Hidden Representations for Robust Speech Recognition. Interspeech, 3116–3121. https://www.isca-archive.org/interspeech_2026/baik26_interspeech.html',
+    '[hu2024listen] Hu et al. (2024). Listen Again and Choose the Right Answer: A New Paradigm for Automatic Speech Recognition with Large Language Models. Findings of ACL. https://aclanthology.org/2024.findings-acl.37/',
+    '[udagawa2024conservative] Udagawa et al. (2024). Robust ASR Error Correction with Conservative Data Filtering. EMNLP Industry. https://aclanthology.org/2024.emnlp-industry.20/',
+    '[shah2025srb] Shah et al. (2025). Speech Robust Bench: A Robustness Benchmark for Speech Recognition. ICLR. https://proceedings.iclr.cc/paper_files/paper/2025/hash/605e02ae04cba1ebf6a08206299e76b9-Abstract-Conference.html',
+    '[saijo2025urgent] Saijo et al. (2025). Interspeech 2025 URGENT Speech Enhancement Challenge. https://doi.org/10.21437/Interspeech.2025-1363',
+    '[sedghiyeh2025psrb] Sedghiyeh et al. (2025). PSRB: A Comprehensive Benchmark for Evaluating Persian ASR Systems. Preprint. https://arxiv.org/abs/2505.21230'
+  ], '۷۵ ثانیه');
+
+  // 04 — Enhancement and fusion are surveyed generally, without thesis positioning.
+  s = base('بهسازی گفتار و ادغام نماها', 'مرور روش‌های نوین بازشناسی گفتار');
+  reviewTable(s, [
+    ['Schrödinger Bridge (2025)\nDecoupled SE–ASR (2026)', 'بازسازی گفتار با بهساز\nپیش‌بینی‌گر یا مولد پیش از بازشناسی', 'بهسازی پیش از\nبازشناسی'],
+    ['Dissen et al. (2025)\nSSL-MSE / Sato et al. (2025)', 'آموزش بهساز با زیان بازشناسی\nیا بازنمایی‌های خودنظارتی', 'بهسازی وظیفه‌محور'],
+    ['FAT-HuBERT (2023)\nWav2code (2024)', 'تعامل و ترکیب ویژگی‌های\nنمای اصلی و بهسازی‌شده', 'همجوشی در\nفضای بازنمایی'],
+    ['Adaptive Bridge (2024, 2025)\nConf-OA / Rethink-and-Refine (2026)', 'آمیختن تطبیقی دو موج با پل،\nاطمینان بازشناس یا پالایش قطعه‌ای', 'ترکیب در\nسطح موج']
+  ], 96);
+  caption(s, 'افزایش کیفیت شنیداری الزاماً به کاهش خطای بازشناسی منجر نمی‌شود', 642, 25);
+  notes(s, 'در بهسازی پیش از بازشناسی، یک مدل پیش‌بینی‌گر یا مولد تلاش می‌کند گفتار مناسب‌تری به بازشناس بدهد. پل شرودینگر در مقاله نصرالدینوف یک بهساز مولد است و با پل تطبیقی ترکیب دو موج تفاوت دارد. یانگ و همکاران جداسازی بهساز از بازشناس را با بهسازهای قوی و بازشناس آموزش‌دیده بر گفتار پاک بررسی می‌کنند. در روش‌های وظیفه‌محور، معیار آموزش از صرف شباهت سیگنال فراتر می‌رود. دیسن یک شبکه جلویی را با زیان بهسازی و بازشناسی در برابر بازشناس ثابت آموزش می‌دهد. SSL-MSE ساتو فاصله بازنمایی‌های خودنظارتی گفتار پاک و بهسازی‌شده را کم می‌کند و الزاماً به ریزتنظیم خود بازشناس نیاز ندارد. در فضای بازنمایی، FAT-HuBERT ویژگی‌های نماهای نویزی و بهسازی‌شده را ادغام می‌کند و Wav2code بازنمایی پاک را با واژه‌نامه بازسازی و با نمای نویزی ترکیب می‌کند. در سطح موج، وانگ و کویی ضریب ترکیب گفتار اصلی و بهسازی‌شده را با ماژول پل می‌آموزند. Conf-OA در اینترسپیچ ۲۰۲۶ وزن را از برآورد فهم‌پذیری یا اطمینان بازشناس، بدون آموزش پیش‌بین تازه، به دست می‌آورد. روش Rethink-and-Refine در MLSP ۲۰۲۶ با هم‌ترازی واژه یا واج، قطعه‌های دچار حذف بیش از حد را شناسایی و همان بخش‌ها را با موج اصلی بازترکیب می‌کند. بنابراین محل ادغام، معیار انتخاب وزن و نیاز به آموزش، تفاوت‌های اصلی این خانواده‌ها هستند. بهترشدن کیفیت صوت به‌تنهایی موفقیت در بازشناسی را تضمین نمی‌کند.', [
+    source('literature'), 'Thesis/bibs/refs.bib',
+    '[nasretdinov2025schrodinger] Nasretdinov, Korostik & Jukić (2025). Robust Speech Recognition with Schrödinger Bridge-Based Speech Enhancement. ICASSP. https://doi.org/10.1109/ICASSP49660.2025.10890638 ; https://arxiv.org/abs/2505.04237',
+    '[yang2026decoupling] Yang, Pandey & Wang (2026). Towards Decoupling Frontend Enhancement and Backend Recognition in Monaural Robust ASR. Computer Speech & Language 95, 101821. https://doi.org/10.1016/j.csl.2025.101821 ; https://arxiv.org/abs/2403.06387',
+    '[dissen2025frontend] Dissen et al. (2025). A Front-End Adaptation Network for Improving Speech Recognition Performance in Packet Loss and Noisy Environments. IEEE TASLPRO 33, 2175–2188. https://doi.org/10.1109/TASLPRO.2025.3574840 ; https://keshet.technion.ac.il/a-front-end-adaptation-network-for-improving-speech-recognition-performance-in-packet-loss-and-noisy-environments/',
+    '[sato2025generic] Sato et al. (2025). Generic Speech Enhancement with Self-Supervised Representation Space Loss. Frontiers in Signal Processing. https://doi.org/10.3389/frsip.2025.1587969',
+    '[yang2023fathubert] Yang, Wang & Qian (2023). FAT-HuBERT: Front-End Adaptive Training of Hidden-Unit BERT for Distortion-Invariant Robust Speech Recognition. ASRU. https://doi.org/10.1109/ASRU57964.2023.10389685 ; https://arxiv.org/abs/2311.17790',
+    '[hu2024wav2code] Hu et al. (2024). Wav2code: Restore Clean Speech Representations via Codebook Lookup for Noise-Robust ASR. IEEE/ACM TASLP 32, 1145–1156. https://doi.org/10.1109/TASLP.2023.3332545',
+    '[wang2024bridge] Wang et al. (2024). Bridging the Gap: Integrating Pre-Trained Speech Enhancement and Recognition Models for Robust Speech Recognition. EUSIPCO. https://doi.org/10.23919/EUSIPCO63174.2024.10715447',
+    '[cui2025realbridge] Cui et al. (2025). Reducing the Gap Between Pretrained Speech Enhancement and Recognition Models Using a Real Speech-Trained Bridging Module. ICASSP. https://doi.org/10.1109/ICASSP49660.2025.10889737 ; https://arxiv.org/abs/2501.02452',
+    '[li2026oa] Li et al. (2026). Training-Free Intelligibility-Guided Observation Addition for Noisy ASR. Interspeech, 3138–3143. https://www.isca-archive.org/interspeech_2026/li26s_interspeech.html ; https://doi.org/10.21437/Interspeech.2026-1096',
+    '[qu2026rethink] Qu, Chen & Hirschberg (2026). Mitigating Over-Suppression in Speech Enhancement via Inference-Time Rethink-and-Refine Correction Module. IEEE MLSP 2026. https://arxiv.org/abs/2608.07781 ; publication confirmed at https://www.cs.columbia.edu/speech/papers'
+  ], '۹۰ ثانیه');
+
+  // 05 — Editable scientific comparison graph, read from right to left.
   s = base('ساختار آزمایش‌ها و خط مبنا', 'طرح پژوهش');
   const ordinary = node(s, 'ویسپر کوچک معمولی\nگفتار پایه و نمونه‌های بلند', 958, 335, 250, 120, false, 23);
   const mct = node(s, 'ویسپر کوچک\nچندشرایطی', 595, 335, 285, 120, true, 29);
@@ -137,7 +206,7 @@ async function build() {
   caption(s, 'همجوشی و ایران‌صدا دو مسیر مستقل‌اند. سامانه ترکیبی آن‌ها ارزیابی نشده است');
   notes(s, 'مدل معمولی، نمونه‌های بلند ساخته‌شده را از ابتدا دارد. افزودن داده تخریب‌شده، مدل چندشرایطی را می‌سازد و همین مدل مرجع آزمایش‌های بعدی است. یک مسیر معماری بهسازی و همجوشی را می‌افزاید و مسیر دیگر داده ایران‌صدا را. پل تطبیقی، مقایسه‌ای برای مسیر همجوشی است. هیچ نتیجه‌ای برای همجوشی همراه با ایران‌صدا در این پایان‌نامه گزارش نشده است.', [source('work')], '۵۰ ثانیه');
 
-  // 04 — Data source names are retained as identifiers.
+  // 06 — Data source names are retained as identifiers.
   s = base('داده‌های آموزش', 'داده و ارزیابی');
   txt(s, 'گفتار پایه فارسی', 690, 205, 518, 55, 32, { bold: true, color: C.deep });
   txt(s, 'Common Voice Persian 25\nFarsSpon  (زیرمجموعه محدود)\nFLEURS Persian', 690, 294, 518, 205, 28);
@@ -147,7 +216,7 @@ async function build() {
   caption(s, 'صوت تک‌کاناله ۱۶ کیلوهرتزی و نرمال‌سازی مشترک متن فارسی');
   notes(s, 'ترکیب پایه از کامن‌وویس فارسی نسخه ۲۵، زیرمجموعه محدود فارس‌اسپان و فلورز فارسی تشکیل می‌شود. برای کاهش محدودیت ناشی از کوتاهی قطعه‌ها، دو تا چهار قطعه از یک بخش داده به هم متصل می‌شوند. نمونه نهایی بیش از پنج و حداکثر بیست ثانیه است. این نمونه‌های بلند به مدل معمولی نیز داده شده‌اند. آموزش چندشرایطی، داده تخریب‌شده را به همین بنیاد اضافه می‌کند.', [source('work')], '۴۰ ثانیه');
 
-  // 05 — Real calls are the central evaluation target.
+  // 07 — Real calls are the central evaluation target.
   s = base('ارزیابی روی تماس واقعی و گفتار عمومی', 'داده و ارزیابی');
   txt(s, '۱۰٬۰۴۴', 670, 192, 538, 140, 88, { bold: true, color: C.accent });
   txt(s, 'نمونه تماس واقعی در AGFarsdat', 670, 340, 538, 60, 29, { bold: true, color: C.deep });
@@ -161,7 +230,7 @@ async function build() {
   caption(s, 'رمزگشایی حریصانه مشترک است. PersianSpeech فقط ۲۴ نمونه دارد و واجدشرایط‌بودن کمی تغییر می‌کند', 641, 25);
   notes(s, 'AGFarsdat شامل ده هزار و چهل و چهار نمونه تماس واقعی است و در آموزش یا انتخاب مدل حضور ندارد. چهار مجموعه دیگر، تعمیم به گفتار عمومی را می‌سنجند. در WER، جانشینی و حذف و درج بر تعداد واژه‌های مرجع تقسیم می‌شوند. CER همین مفهوم را در سطح نویسه می‌سنجد. نتیجه تجمیعی میانگین درصدهای مجموعه‌ها نیست، بلکه از جمع خطاها و واحدهای مرجع محاسبه می‌شود. مقایسه‌های تک‌جریانه روی ۲۱٬۸۴۸ نمونه واجد شرایط مشترک‌اند، اما تعداد نمونه‌های Persian Speech Corpus بین بعضی سامانه‌ها متفاوت است.', [source('work'), source('results')], '۵۵ ثانیه');
 
-  // 06 — Reuse the exact English preparation crop, with Persian narration around it.
+  // 08 — Reuse the exact English preparation crop, with Persian narration around it.
   s = base('داده‌افزایی مخابراتیِ بازتولیدپذیر', 'مقاوم‌سازی با داده');
   txt(s, 'ساخت جفت‌های پاک و تخریب‌شده با رونویسی مشترک', 72, 174, 1136, 60, 28, { color: C.muted });
   await image(s, path.join(cropDir, 'degradation-preparation.png'), 72, 244, 1136, 227.2, 'Original English preparation and channel-conditioning crop');
@@ -172,14 +241,14 @@ async function build() {
   caption(s, 'وزن نمایه‌ها یک توزیع طراحی‌شده است و از آمار اپراتور به دست نیامده است');
   notes(s, 'برای هر نمونه، یک نمایه مخابراتی انتخاب می‌شود و نویز، بهره و پهنای‌باند تغییر می‌کنند. نویز DEMAND با نسبت سیگنال به نویز منفی پنج تا پانزده دسی‌بل و تغییر بهره تا شش دسی‌بل به کار می‌رود. پردازش واقعی کدک و شبکه در مرحله بعد است. ورودی تخریب‌شده و هدف پاک هم‌تراز می‌مانند. هدف بهساز پهنای‌باند مشترک با ورودی دارد تا شبکه برای بازسازی فرکانس‌های حذف‌شده جریمه نشود. بذر و تنظیمات هر جفت ثبت می‌شوند. وزن نمایه‌ها پوشش طراحی‌شده شرایط است، نه برآورد توزیع یک اپراتور.', [source('work'), 'Thesis/figs/degradation-pipeline-architecture.png', 'configs/speech_enhancement/degradation.yaml'], '۶۰ ثانیه');
 
-  // 07 — Two distinct codec/network implementations, with no equivalence implied.
+  // 09 — Two distinct codec/network implementations, with no equivalence implied.
   s = base('مسیرهای کدک و جفت‌های هم‌تراز', 'مقاوم‌سازی با داده');
   await image(s, path.join(cropDir, 'degradation-codecs.png'), 122, 166, 1035, 450.15, 'Original English codec paths, alignment and peak-safe training-pair crop');
   caption(s, 'G.711، GSM، AMR-NB، AMR-WB و Opus. هدف پاک، پهنای‌باند متناظر با کانال را حفظ می‌کند', 622, 25);
   caption(s, 'Opus بومی افت بسته و پنهان‌سازی خطا را مدل می‌کند. در مسیرهای دیگر، حذف موج یک تقریب است', 648, 23);
   notes(s, 'دو مسیر پیاده‌سازی باید از هم تفکیک شوند. در Opus بومی، افت بسته و پنهان‌سازی خطای رمزگشا در مسیر واقعی کدک مدل می‌شوند. برای کدک‌های دیگر، رفت‌وبرگشت رمزگذاری و رمزگشایی با FFmpeg اجرا می‌شود و اختلال شبکه می‌تواند با حذف بخش‌هایی از موج تقریب زده شود. این تقریب معادل رفتار واقعی همه شبکه‌ها نیست. کدک‌های بررسی‌شده شامل جی هفتصد و یازده، جی‌اس‌ام، ای‌ام‌آر باریک‌باند، ای‌ام‌آر پهن‌باند و اپوس هستند. خروجی‌ها از نظر طول هم‌تراز و از نظر پهنای‌باند هدف سازگارند.', [source('work'), 'Thesis/figs/degradation-pipeline-architecture.png'], '۴۵ ثانیه');
 
-  // 08 — Main robustness finding. All bars use a zero baseline.
+  // 10 — Main robustness finding. All bars use a zero baseline.
   s = base('انتقال بهبود به تماس‌های واقعی', 'نتیجه داده‌افزایی مخابراتی');
   txt(s, 'نرخ خطای واژه در AGFarsdat', 450, 174, 758, 55, 27, { bold: true, color: C.deep });
   bars(s, ['معمولی', 'فقط نویز', 'pMCT', 'چندشرایطی\nمخابراتی'], [35.63, 32.67, 30.01, 25.80], 440, 240, 768, 340, { max: 42, labels: 23, gap: 100 });
@@ -190,14 +259,14 @@ async function build() {
   caption(s, 'اثر جداگانه کدک و اختلال شبکه در آزمایش حذفی سنجیده نشده است', 643, 25);
   notes(s, 'نویز به‌تنهایی و pMCT هر دو نسبت به آموزش معمولی بهترند. مجموعه کامل تخریب‌های مخابراتی، کمترین خطای تماس واقعی را بین این چهار روش دارد. کاهش از ۳۵٫۶۳ به ۲۵٫۸۰ درصد برابر با ۹٫۸۳ واحد درصد یا حدود ۲۷٫۶ درصد کاهش نسبی است. این نتیجه روی تماس‌های واقعی مستقل از شبیه‌ساز به دست آمده و از انتقال یادگیری از تخریب مصنوعی به کانال واقعی پشتیبانی می‌کند. با این حال، چون هر اثر کدک یا شبکه جداگانه حذف نشده، نمی‌توان سهم مستقل هر تخریب را از این آزمایش تعیین کرد.', [source('results')], '۸۰ ثانیه');
 
-  // 09 — Preserve the original implementation architecture crop in English.
+  // 11 — Preserve the original implementation architecture crop in English.
   s = base('معماری بهسازی و همجوشی دوجریانه', 'بهسازی و همجوشی');
   txt(s, 'حفظ نمای اصلی در کنار نمای بهسازی‌شده', 72, 169, 1136, 55, 28, { color: C.muted });
   await image(s, path.join(cropDir, 'fusion-architecture.png'), 72, 211, 1136, 399.7, 'Original English dual-stream enhancement and fusion architecture crop');
   caption(s, 'شروع از ویسپر کوچک چندشرایطی است. بهساز در حوزه لاگ‌مل کار می‌کند و موج صوتی بازسازی نمی‌کند');
   notes(s, 'بهسازی ممکن است بخشی از اطلاعات مفید گفتار را نیز تضعیف کند، بنابراین نمای اصلی را نگه می‌داریم. یک U-Net باقیمانده، لاگ‌مل هشتادباندی را اصلاح می‌کند. دو نما با یک رمزگذار ویسپر و وزن‌های مشترک، در دو گذر پردازش می‌شوند. یک لایه توجه متقاطع دوسویه با چهار سر، اطلاعات را میان دو جریان مبادله می‌کند. سپس دروازه‌ای برای هر زمان و ویژگی، بازنمایی‌ها را ترکیب و به رمزگشا می‌دهد. این بهساز موج بازسازی نمی‌کند و مدل از نقطه وارسی چندشرایطی آغاز می‌شود. فرمول ترکیب: H_f = g × H_e′ + (1−g) × H_n′.', [source('work'), 'Thesis/figs/fusion-model-architecture-left-to-right.png'], '۸۰ ثانیه');
 
-  // 10 — Preserve the English training crop with Persian context around it.
+  // 12 — Preserve the English training crop with Persian context around it.
   s = base('آموزش سه‌مرحله‌ای همجوشی', 'بهسازی و همجوشی');
   await image(s, path.join(cropDir, 'fusion-training.png'), 72, 220, 1136, 172.87, 'Original English three-stage fusion training crop');
   txt(s, 'مرحله سوم: آموزش همه اجزا، شامل ویسپر', 72, 415, 1136, 55, 29, { bold: true, color: C.accent });
@@ -208,7 +277,7 @@ async function build() {
   caption(s, 'این آزمایش هم معماری و هم برنامه آموزش بازشناس را تغییر می‌دهد', 635, 30);
   notes(s, 'در مرحله اول، تنها بهساز با ترکیبی برابر از زیان بازسازی و تطبیق ویژگی آموزش می‌بیند. در مرحله دوم، بهساز و همجوشی با هدف بازشناسی و وزن ۰٫۳ برای بهسازی، در برابر ویسپر ثابت آموزش می‌بینند. در مرحله نهایی همه اجزا آزاد می‌شوند و وزن زیان بهسازی به ۰٫۱ می‌رسد. هر مرحله یک دوره است. نرخ یادگیری ماژول‌های تازه ده به توان منفی چهار و ویسپر پنج ضرب در ده به توان منفی شش است. مرحله آخر گفتار تخریب‌شده و بلند و بیست و پنج درصد نمونه‌های پاک را دارد. این آزمایش هم معماری و هم میزان آموزش بازشناس را تغییر می‌دهد.', [source('work'), 'Thesis/figs/fusion-model-architecture-left-to-right.png'], '۶۰ ثانیه');
 
-  // 11 — Preserve the licensed prior-work figure unmodified.
+  // 13 — Preserve the licensed prior-work figure unmodified.
   s = base('پل تطبیقی پیش از بازشناسی', 'روش مقایسه‌ای');
   await image(s, path.join(here, 'assets/cui2025-bridge-figure1.png'), 72, 222, 786, 363, 'شکل ۱ مقاله کویی و همکاران: سامانه و پیش‌بینی ضریب پل');
   txt(s, 'پیاده‌سازی این پایان‌نامه', 908, 208, 300, 65, 27, { bold: true, color: C.deep });
@@ -218,7 +287,7 @@ async function build() {
   caption(s, 'اجرای مستقل فارسی است. تفاوت بهساز و برنامه آموزش، انتساب اثر به محل ادغام را محدود می‌کند', 635, 29);
   notes(s, 'این شکل اصلی مقاله کویی و همکاران است و روش مرجع را نشان می‌دهد. پل، موج اصلی و موج بهسازی‌شده را پیش از بازشناسی ترکیب می‌کند. در پیاده‌سازی مستقل این پایان‌نامه، FRCRN و ویسپر کوچک چندشرایطی ثابت‌اند و تنها پل آموزش می‌بیند. از دو نما یک ضریب برای هر گفتار پیش‌بینی می‌شود. هدف آموزش از کیفیت ادراکی و اطلاعات بازشناسی ازپیش‌محاسبه‌شده استفاده می‌کند. این اجرا بازتولید تأییدشده کد نویسندگان نیست. امتیازهای اسلاید بعد، نتایج فارسی همین پایان‌نامه‌اند و به نتایج CHiME-4 مقاله تعلق ندارند.', [source('work'), 'Thesis/presentation/assets/cui2025-bridge-figure1.source.md', 'https://doi.org/10.1109/ICASSP49660.2025.10889737', 'https://arxiv.org/html/2501.02452v1#S1.F1'], '۷۰ ثانیه');
 
-  // 12 — Matching chart order and zero baselines keep small effects honest.
+  // 14 — Matching chart order and zero baselines keep small effects honest.
   s = base('سود افزوده همجوشی و پل تطبیقی', 'نتایج بهسازی و همجوشی');
   txt(s, 'نرخ خطای واژه تجمیعی', 72, 177, 530, 60, 29, { bold: true, color: C.deep, align: 'center' });
   txt(s, 'نرخ خطای واژه تماس واقعی', 678, 177, 530, 60, 29, { bold: true, color: C.deep, align: 'center' });
@@ -230,7 +299,7 @@ async function build() {
   caption(s, 'CER تجمیعی به همین ترتیب: ۷٫۹۳٪، ۸٫۰۰٪ و ۷٫۸۵٪. اختلاف‌ها فاصله اطمینان ندارند', 631, 30);
   notes(s, 'همجوشی نرخ خطای واژه تجمیعی را از ۱۷٫۸۳ به ۱۷٫۶۴ و خطای تماس واقعی را از ۲۵٫۸۰ به ۲۵٫۳۷ درصد رسانده است. پل تطبیقی از نظر WER تجمیعی کمی بهتر از مرجع است، اما CER آن بیشتر می‌شود و خطای تماس واقعی تقریباً در سطح مرجع می‌ماند. اختلاف‌های همجوشی کوچک‌اند و بدون اجرای چندبذری و فاصله اطمینان گزارش می‌شوند. این مقایسه مربوط به دو سامانه کامل با بهساز و برنامه آموزش متفاوت است. میانگین دروازه نمای بهسازی‌شده ۰٫۶۷۸۵ و میانه ۰٫۶۹۳۰ است، اما به‌علت مبادله اطلاعات پیش از دروازه، این آمار سهم علّی مستقل هر نما را نشان نمی‌دهد.', [source('results'), source('work')], '۷۵ ثانیه');
 
-  // 13 — The scale and inference-only controls are explicit.
+  // 15 — The scale and inference-only controls are explicit.
   s = base('آزمایش حذفیِ دو نما و توجه متقاطع', 'مطالعه مؤلفه‌های همجوشی');
   txt(s, 'آزمایش مستقل\nویسپر بسیار کوچک', 72, 213, 295, 120, 30, { bold: true, color: C.deep });
   txt(s, 'آموزش فقط با کامن‌وویس', 72, 346, 295, 88, 24, { color: C.muted });
@@ -242,7 +311,7 @@ async function build() {
   caption(s, 'بودجه آموزش و تعداد پارامترهای نابرابر، تعیین سهم مستقل مؤلفه‌ها را محدود می‌کند', 646, 24);
   notes(s, 'این آزمایش مستقل روی ویسپر بسیار کوچک و با آموزش فقط بر کامن‌وویس انجام شده است. همجوشی دوسویه در بین این پیکربندی‌ها، روی هر دو آزمون کمترین خطا را دارد. حذف توجه و استفاده از دروازه تنها، خطا را بالا می‌برد. استفاده از نمای اصلی یا بهسازی‌شده به‌تنهایی نیز ضعیف‌تر است. دو حالت تک‌نما در زمان استنتاج از نقطه وارسی همجوشی ساخته شده‌اند و کنترل تک‌جریانه مستقلِ آموزش‌دیده نیستند. بنابراین شواهد از استفاده هم‌زمان دو نما پشتیبانی می‌کنند، اما اثر آموزش اضافی و تفاوت ظرفیت را کاملاً جدا نمی‌کنند.', [source('results'), 'report/cv25-tiny-official/final-tests/summary.json'], '۶۵ ثانیه');
 
-  // 14 — Acquired, selected and accepted hours are never conflated.
+  // 16 — Acquired, selected and accepted hours are never conflated.
   s = base('گردآوری و قطعه‌بندی ایران‌صدا', 'افزایش داده فارسی');
   await image(s, path.join(cropDir, 'iranseda-source-segmentation.png'), 72, 181, 370, 436.69, 'Original English IranSeda source validation and VAD segmentation crop');
   txt(s, '۳٬۷۷۷ کتاب صوتی', 520, 210, 688, 80, 44, { bold: true, color: C.deep });
@@ -252,7 +321,7 @@ async function build() {
   caption(s, 'مجموعه گردآوری‌شده از زیرمجموعه انتخاب‌شده برای آموزش بزرگ‌تر است');
   notes(s, 'مجموع دریافت‌شده شامل ۳۷۷۷ کتاب صوتی و حدود ۶۳۰۰ ساعت صوت خام است. به‌دلیل محدودیت محاسبات، ۲۵۰ ساعت برای پردازش نهایی انتخاب شد. این مقدار هنوز حجم پیکره پذیرفته‌شده نیست. منبع و درهم‌سازی و قابلیت رمزگشایی بررسی می‌شوند و صوت خام باقی می‌ماند. پس از تبدیل به صوت تک‌کاناله شانزده کیلوهرتزی، Silero VAD مرز قطعه‌ها را تا حد ممکن روی سکوت یا افت انرژی قرار می‌دهد. طول هدف بیست ثانیه، بازه ترجیحی پانزده تا بیست و پنج ثانیه و سقف سخت بیست و هشت ثانیه است. قطعه‌ها هم‌پوشان نیستند و شناسه پایدار دارند.', [source('work'), 'Thesis/figs/long-audio-data-creation-pipeline.png'], '۶۰ ثانیه');
 
-  // 15 — The teacher and text refiner have distinct roles.
+  // 17 — The teacher and text refiner have distinct roles.
   s = base('رونویسی معلم، پالایش و آموزش', 'افزایش داده فارسی');
   const steps = [
     ['iranseda-teacher.png', '۱. رونویسی معلم', 72, 180],
@@ -268,7 +337,7 @@ async function build() {
   caption(s, 'معماری ویسپر کوچک، تنظیمات اصلی و تعداد گام‌های آموزش ثابت‌اند', 646, 24);
   notes(s, 'ویسپر متوسط سازگارشده با فارسی، متن معلم را تولید می‌کند. متن خام نگهداری و سپس با نرمال‌ساز مشترک فارسی پردازش می‌شود. Qwen فقط اصلاح محدود متن را با استفاده از بافت انجام می‌دهد و مرحله پالایش، قطعه‌های نامعتبر را حذف می‌کند. همه نمونه‌های پذیرفته‌شده، بدون حذف اجزای خط مبنا به ترکیب اصلی، بلند و تخریب‌شده افزوده می‌شوند. مدل کوچک جدید، تعداد گام‌ها، نرخ یادگیری و تنظیمات اصلی مشابه مرجع چندشرایطی دارد. ویسپر متوسط هم معلم شبه‌برچسب و هم مرجع زمینه‌ای با ظرفیت بیشتر است.', [source('work'), 'Thesis/figs/long-audio-data-creation-pipeline.png'], '۵۰ ثانیه');
 
-  // 16 — A genuine translated prompt rule, not an invented transcript example.
+  // 18 — A genuine translated prompt rule, not an invented transcript example.
   s = base('داده پذیرفته‌شده و ملاحظات برچسب', 'افزایش داده فارسی');
   txt(s, '۳۹٬۴۵۴', 760, 193, 448, 126, 78, { bold: true, color: C.accent });
   txt(s, 'قطعه پذیرفته‌شده', 760, 321, 448, 55, 29, { bold: true, color: C.deep });
@@ -280,7 +349,7 @@ async function build() {
   caption(s, 'ممیزی انسانی کمّی برای دقت رونویسی انجام نشده است. ۴۰ شکست عملیاتی جداگانه ثبت شده‌اند', 632, 29);
   notes(s, 'از ۴۴۸۲۰ قطعه بررسی‌شده، ۳۹۴۵۴ قطعه پذیرفته و ۵۳۶۶ قطعه رد شده‌اند. صوت پذیرفته‌شده از ۱۳۶ فایل منبع و در مجموع ۲۱۸٫۵۶۴ ساعت است. چهل شکست عملیاتی جدا ثبت شده‌اند. دستور نمایش‌داده‌شده، ترجمه یک قاعده واقعی در پرامپت پایان‌نامه است. اعداد باید دقیقاً حفظ شوند. اصلاح واژه فقط در صورت پشتیبانی قوی متن و بافت مجاز است. Qwen به صوت دسترسی ندارد. تغییرات بیش از حد و عدم قطعیت باعث رد می‌شوند. تقسیم در سطح کتاب انجام می‌شود تا قطعه‌های نزدیک در آموزش و اعتبارسنجی پخش نشوند. این تدابیر جای ممیزی انسانی کیفیت را نمی‌گیرند.', [source('work'), source('conclusions')], '۶۰ ثانیه');
 
-  // 17 — Signed native values and an explicit zero make the domain trade-off visible.
+  // 19 — Signed native values and an explicit zero make the domain trade-off visible.
   s = base('اثر ایران‌صدا به دامنه گفتار وابسته است', 'نتیجه افزایش داده');
   txt(s, 'تغییر WER نسبت به مدل چندشرایطی، بر حسب واحد درصد', 72, 170, 1136, 60, 26, { color: C.deep });
   bars(s, ['AGFarsdat', 'Common Voice', 'FLEURS', 'PersianSpeech¹', 'Persian Speech\nCorpus'], [0.86, 0.35, -6.04, -8.39, -5.03], 72, 239, 1136, 337, { max: 2, min: -10, points: true, colors: ['#7b8794', '#aab6bb', C.accent, C.accent, C.accent], labels: 21, axis: true, gap: 120 });
@@ -289,7 +358,7 @@ async function build() {
   caption(s, '¹ فقط ۲۴ نمونه. اثر سبک، کانال، کیفیت برچسب و نسبت نمونه‌برداری از هم جدا نشده است', 650, 23);
   notes(s, 'افزودن ایران‌صدا خطای تجمیعی را کاهش می‌دهد، اما اثر یکنواختی ندارد. در فلورز و پیکره گفتار فارسی بهبود قابل توجه است. تغییر بزرگ PersianSpeech با توجه به تنها بیست و چهار نمونه، مقدماتی است. در مقابل، خطای AGFarsdat به اندازه ۰٫۸۶ واحد درصد و کامن‌وویس ۰٫۳۵ واحد درصد بیشتر می‌شود. CER همین دو مجموعه نیز به‌ترتیب ۰٫۳۴ و ۰٫۰۷ واحد درصد افزایش دارد. WER تجمیعی از ۱۷٫۸۳ به ۱۷٫۲۲ درصد، یعنی ۰٫۶۱ واحد درصد بهبود یافته است. آزمایش فعلی مشخص نمی‌کند سبک، کانال، برچسب یا نسبت اختلاط کدام‌یک این الگو را ایجاد کرده است.', [source('results')], '۷۵ ثانیه');
 
-  // 18 — The only results table, native and editable, with two different minima.
+  // 20 — The only results table, native and editable, with two different minima.
   s = base('نتیجه آزمایش‌های اصلی ویسپر کوچک', 'جمع‌بندی شواهد');
   const vals = [
     ['WER تماس واقعی', 'WER تجمیعی', 'سامانه ویسپر کوچک'],
@@ -311,7 +380,7 @@ async function build() {
   caption(s, 'ویسپر متوسط: ۱۴٫۳۶٪ تجمیعی و ۲۱٫۹۹٪ تماس واقعی، با ظرفیت و آموزش متفاوت', 637, 28);
   notes(s, 'بزرگ‌ترین بهبود کنترل‌شده مقاومت مخابراتی با آموزش چندشرایطی به دست می‌آید. همجوشی نسبت به این مرجع، سود عددی کوچکی اضافه می‌کند. ایران‌صدا کمترین خطای تجمیعی را بین مدل‌های کوچک دارد، در حالی که همجوشی کمترین خطای تماس واقعی را ثبت می‌کند. بنابراین معیار انتخاب به دامنه هدف بستگی دارد. ویسپر متوسط ۱۴٫۳۶ درصد WER تجمیعی و ۲۱٫۹۹ درصد خطای تماس دارد، اما چون ظرفیت و برنامه آموزش آن متفاوت است، این مقایسه اثر خالص داده را نشان نمی‌دهد. پل در بخش قبل بررسی شد و اینجا دوباره وارد جدول نشده است.', [source('results'), source('conclusions')], '۶۰ ثانیه');
 
-  // 19 — Actionable scientific limits, without a dashboard of cards.
+  // 21 — Actionable scientific limits, without a dashboard of cards.
   s = base('محدودیت‌ها و آزمایش‌های بعدی', 'بحث و ادامه پژوهش');
   const rows = [
     [231, 'اعتمادپذیری نتایج', 'اجرای چندبذری و نمونه‌های مشترک دقیق\nبرآورد فاصله اطمینان برای اختلاف‌های کوچک'],
@@ -328,7 +397,7 @@ async function build() {
   caption(s, 'پوشش محدود شبیه‌ساز و خصوصی‌بودن آزمون تماس واقعی نیز دامنه شواهد را محدود می‌کنند', 635, 28);
   notes(s, 'برای اختلاف‌های کوچک باید چند بذر اجرا شود و با نمونه‌های دقیقاً مشترک، فاصله اطمینان به دست آید. برای همجوشی، کنترل تک‌جریانه با آموزش اضافی برابر، آزمایش حذفی در مقیاس مدل کوچک و سنجش هزینه زمان و حافظه لازم است. کیفیت متن معلم و تغییرات Qwen باید جداگانه با نمونه رونویسی انسانی ممیزی شوند. برای ایران‌صدا نیز نسبت‌های مختلف اختلاط و داده نزدیک‌تر به تماس باید آزموده شوند. پوشش شبیه‌ساز کامل نیست و خصوصی‌بودن AGFarsdat، بازبینی مستقل بیرونی را محدود می‌کند.', [source('results'), source('conclusions')], '۵۰ ثانیه');
 
-  // 20 — Keep the answer and the central numbers visible during questions.
+  // 22 — Keep the answer and the central numbers visible during questions.
   s = base('جمع‌بندی', 'پایان ارائه', { dark: true });
   txt(s, 'بیشترین بهبود با آموزش متناسب با کانال', 72, 167, 1136, 70, 35, { bold: true, color: C.paper });
   txt(s, '۳۵٫۶۳٪', 829, 259, 379, 126, 74, { bold: true, color: '#b8d8db' });
@@ -432,9 +501,9 @@ async function main() {
     pythonExecutable: python,
     integrityValidatorPath: path.join(opts.skillDir, 'container_tools/inspect_presentation_package_integrity.py'),
     layoutValidatorPath: path.join(opts.skillDir, 'container_tools/inspect_presentation_layout_geometry.py'),
-    layoutArgs: ['--expected-slide-size-emu', '12192000,6858000', '--validate-bullet-geometry', '--validate-heading-fit', '--require-native-table-slide', '18'],
-    explicitTotalSlideCount: 20,
-    requiredNativeChartOwnerSlides: [8, 12, 13, 17], requiredNativeTableOwnerSlides: [18],
+    layoutArgs: ['--expected-slide-size-emu', '12192000,6858000', '--validate-bullet-geometry', '--validate-heading-fit', '--require-native-table-slide', '3', '--require-native-table-slide', '4', '--require-native-table-slide', '20'],
+    explicitTotalSlideCount: totalSlides,
+    requiredNativeChartOwnerSlides: [10, 14, 15, 19], requiredNativeTableOwnerSlides: [3, 4, 20],
     materializeLiteralChartWorkbooks: true,
     fontPolicy: { basis: 'design', families: [F] }, verifyArtifactToolImport: true,
     receiptPath: path.join(staging, 'validation.json') });
