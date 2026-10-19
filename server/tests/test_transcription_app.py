@@ -108,9 +108,15 @@ def test_models_endpoint_returns_safe_public_metadata() -> None:
 
     assert response.status_code == 200
     assert [item["id"] for item in response.json()["models"]] == [
-        "whisper-small", "whisper-medium", "fusion", "fastconformer"
+        "whisper-small", "whisper-small-deg-v2", "whisper-small-iranseda",
+        "fusion", "fusion-compact", "fastconformer", "fastconformer-normal",
+        "fastconformer-deg-v2",
     ]
-    assert "checkpoint" not in response.text
+    assert all(
+        set(item) == {"id", "label", "description", "backend"}
+        for item in response.json()["models"]
+    )
+    assert "models/asr/" not in response.text
 
 
 def test_transcription_endpoint_returns_result(monkeypatch) -> None:
