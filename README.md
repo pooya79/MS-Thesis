@@ -143,9 +143,10 @@ requires the system `libopus` shared library. See the
 [degradation guide](docs/script-guides/speech-degradation.md) for the workflow;
 changing the codec distribution changes the experiment recipe.
 
-[`.env.example`](.env.example) lists the basic environment variables. The server
-reads exported variables and does **not** automatically load `.env`; use the
-exports below. The Common Voice downloader also supports reading its API key
+[`.env.example`](.env.example) lists the basic environment variables. `make run`
+loads the repository-root `.env` through `uv --env-file`; set `APP_PASSWORD`
+there before starting the server. Already exported variables take precedence.
+The Common Voice downloader also supports reading its API key
 from `.env`. Other services have their own credentials, described in their guides.
 
 ## Run the playground
@@ -155,17 +156,38 @@ preview it, and copy the transcript. It also shows duration and inference time.
 
 1. Install the environment and FFmpeg as above.
 2. Edit [`configs/server.yaml`](configs/server.yaml). Point each model you want
-   to use at an available checkpoint. The checked-in config lists Whisper Small,
-   Whisper Medium, Fusion, and FastConformer; their local weights are **not bundled**.
+   to use at an available checkpoint. The checked-in config uses the repository's
+   `models/` directory: Whisper Small (Normal, Degraded v2, IranSeda),
+   Fusion (Run 004 and Run 005 Compact), and FastConformer (Pretrained, Normal,
+   Degraded v2). Fine-tuned entries use `best` / `best.pt` validation checkpoints;
+   Fusion entries use the joint-stage checkpoints. Processors, tokenizers, and
+   Fusion backbones also use local paths, so no Hub download is required.
+   The weights are **not bundled**. On this machine, inference files were copied
+   from `/home/pouya/models` into the same relative layout under `models/`;
+   training-only files such as Whisper optimizer state were omitted. Copies were
+   verified with SHA-256, recorded in the ignored `models/demo-copy-manifest.json`.
+   Run the server from the repository root so these relative paths resolve.
    For a basic Whisper trial, a `whisper` entry can use
    `checkpoint: openai/whisper-small` and `processor: openai/whisper-small`;
    this downloads the upstream model on first use.
-3. Export a shared password and start the development server:
+3. Set a shared password in the repository-root `.env` (create it from
+   `.env.example` if needed):
+
+   ```dotenv
+   APP_PASSWORD=replace-this-with-a-long-random-password
+   ```
+
+   Start the development server:
 
    ```bash
-   export APP_PASSWORD='replace-this-with-a-long-random-password'
    make run
    ```
+
+`make run` loads `.env` and uses the installed environment with
+`uv run --no-sync --env-file .env`, so starting
+the UI does not trigger package downloads. Run `uv sync --locked` explicitly
+when installing or updating dependencies. See the
+[playground guide](docs/script-guides/asr-playground.md) for startup troubleshooting.
 
 Open [http://localhost:8001](http://localhost:8001) and enter that password.
 A configured model can appear in the UI before its weights are available:
